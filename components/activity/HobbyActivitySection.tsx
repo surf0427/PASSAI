@@ -2,11 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { HobbyActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
 
-const inputClass = 'w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400';
-const inputErrorClass = 'w-full border border-red-400 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400';
-const textareaClass = `${inputClass} resize-none min-h-[80px]`;
-const labelClass = 'block text-sm font-medium text-gray-700 mb-1';
-const fieldClass = 'mb-3';
+import { inputClass, inputErrorClass, textareaClass, labelClass, fieldClass } from './inputStyles';
 const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
 const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
 

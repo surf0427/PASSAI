@@ -24,3 +24,10 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* フォーム要素はダークモードでもライトテーマで描画する。
+   iOS Safari がシステムのダークモード設定をフォーム要素の文字色に
+   自動適用するのを防ぎ、Tailwind の text-slate-900 を確実に効かせる。 */
+input, textarea, select {
+  color-scheme: light;
+}

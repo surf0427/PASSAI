@@ -186,7 +186,7 @@ export default function Page() {
   // ── 一覧画面 ────────────────────────────────────────────────────
   if (!selectedId) {
     return (
-      <div className="max-w-4xl mx-auto px-6 py-12">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
         <div className="flex items-center justify-between mb-10">
           <h1 className="text-3xl font-bold text-gray-800">自己PR添削</h1>
           <div className="flex items-center gap-3">
@@ -290,7 +290,7 @@ export default function Page() {
 
   // ── 編集画面 ────────────────────────────────────────────────────
   return (
-    <div className="max-w-4xl mx-auto px-6 py-12">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
       <div className="flex items-center gap-3 mb-10">
         <button
           type="button"
@@ -323,7 +323,7 @@ export default function Page() {
             setTitle(e.target.value);
             updateCurrentPR({ title: e.target.value });
           }}
-          className="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
           placeholder="例：テニス部での経験・志望理由　など"
         />
       </section>
@@ -337,7 +337,7 @@ export default function Page() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={12}
-          className="w-full border border-gray-300 rounded-lg px-4 py-3 text-base leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-base leading-relaxed bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
           placeholder={`例：\n私は3年間、テニス部で副部長を務めました。\n最初は練習への参加率が低く、チームの雰囲気が課題でした。\nそこで私は〇〇という工夫を行い、その結果〇〇が改善されました。\nこの経験から〇〇を学びました。\n（200〜400字程度でOK）`}
         />
         <button
@@ -380,7 +380,7 @@ export default function Page() {
               value={followupText}
               onChange={(e) => setFollowupText(e.target.value)}
               rows={8}
-              className="w-full border border-gray-200 rounded-lg px-4 py-3 text-base leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y bg-gray-50"
+              className="w-full border border-slate-300 rounded-lg px-4 py-3 text-base leading-relaxed bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
               placeholder="例: ① 自分から声かけを増やした　② 週1でミーティングを提案した　③ 最終的に全員が発言できる雰囲気になった"
             />
             <button

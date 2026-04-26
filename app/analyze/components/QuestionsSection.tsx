@@ -24,7 +24,7 @@ export function QuestionsSection({ questions, answers, onChange, onSubmit, onRea
               value={answers[i] ?? ''}
               onChange={(e) => onChange(i, e.target.value)}
               rows={3}
-              className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y bg-gray-50"
+              className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm leading-relaxed bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
               placeholder="短くてもOKです"
             />
           </div>

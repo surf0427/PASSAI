@@ -136,7 +136,7 @@ export default function BasicInfoPage() {
                 name="name"
                 value={formData.name}
                 onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 placeholder="例：山田 太郎"
               />
               {errors.name && (
@@ -153,7 +153,7 @@ export default function BasicInfoPage() {
                 name="highSchool"
                 value={formData.highSchool}
                 onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 placeholder="例：〇〇高等学校"
               />
               {errors.highSchool && (
@@ -169,7 +169,7 @@ export default function BasicInfoPage() {
                 name="grade"
                 value={formData.grade}
                 onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
                 <option value="">選択してください</option>
                 <option value="高校1年">高校1年</option>
@@ -276,7 +276,7 @@ export default function BasicInfoPage() {
                         onChange={(e) =>
                           handlePreferenceChange(index, 'university', e.target.value)
                         }
-                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                        className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                         placeholder="例：〇〇大学"
                       />
                       {index === 0 && errors.firstPreferenceUniversity && (
@@ -293,7 +293,7 @@ export default function BasicInfoPage() {
                         onChange={(e) =>
                           handlePreferenceChange(index, 'faculty', e.target.value)
                         }
-                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                        className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                         placeholder="例：〇〇学部"
                       />
                       {index === 0 && errors.firstPreferenceFaculty && (

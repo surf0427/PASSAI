@@ -29,29 +29,30 @@ export function Header() {
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm">
-      <div className="max-w-5xl mx-auto px-4 h-14 flex items-center gap-6">
+      <div className="px-4 h-14 flex items-center gap-2 sm:gap-6 w-full">
 
-        {/* アプリ名 */}
-        <span className="text-sm font-bold text-gray-800 shrink-0">
+        {/* アプリ名：shrink-0 で常に左端に表示 */}
+        <span className="text-sm font-bold text-gray-800 shrink-0 whitespace-nowrap">
           AO受験サポート
         </span>
 
-        {/* ナビゲーション */}
-        {/* overflow-x-auto でスマホ時は横スクロール可能にする */}
-        <nav className="flex items-center gap-1 overflow-x-auto">
-          {NAV_ITEMS.map(({ label, href }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                isActive(href, pathname)
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              {label}
-            </Link>
-          ))}
+        {/* ナビゲーション：overflow-x-auto + min-w-max ラッパーでスマホ横スクロールを確実に動かす */}
+        <nav className="overflow-x-auto flex-1 min-w-0">
+          <div className="flex items-center gap-1 min-w-max">
+            {NAV_ITEMS.map(({ label, href }) => (
+              <Link
+                key={href}
+                href={href}
+                className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                  isActive(href, pathname)
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
         </nav>
       </div>
     </header>
