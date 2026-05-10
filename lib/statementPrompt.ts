@@ -2,6 +2,7 @@ import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
+import { buildStatementUniversityContext } from '@/lib/buildStatementUniversityContext';
 
 // ── 添削プロンプトのオプション ─────────────────────────────────
 // university / faculty / department / essay は今回の添削対象。
@@ -68,6 +69,11 @@ export function buildStatementReviewPrompt(opts: StatementReviewPromptOptions): 
   const { university, faculty, department, essay, basicInfo, activityData, wallHittingResult } = opts;
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
+  const universityDbSection = buildStatementUniversityContext({
+    university,
+    faculty,
+    department,
+  });
   const activitySection = buildActivityContext(activityData);
   const wallHittingSection = buildWallHittingContext(wallHittingResult);
   const examTypeGuidance = buildExamTypeStatementGuidance(basicInfo?.examTypes);
@@ -90,7 +96,7 @@ ${basicInfoSection}
 志望大学：${university || '（未入力）'}
 志望学部：${faculty || '（未入力）'}${departmentLine}
 
-${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}【志望理由書本文】
+${universityDbSection ? `${universityDbSection}\n\n` : ''}${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}【志望理由書本文】
 ${essay}
 ---
 
