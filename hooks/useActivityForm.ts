@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveActivityData, loadActivityData, clearActivityData } from '@/lib/activityStorage';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
@@ -42,6 +42,16 @@ const initialActivityData: ActivityData = {
   hobbyActivities: [],
 };
 
+// マウント前 false / マウント後 true を返す flag。
+// loadBasicInfo() は localStorage 依存のため SSR では null を返したい一方、
+// useEffect 内 setState で初期化すると react-hooks/set-state-in-effect になる。
+// useSyncExternalStore の getServerSnapshot/getSnapshot を使うと、
+// この semantics を setState なしで表現できる。
+// （f46eb35 PartTimeJobActivitySection と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
+
 export function useActivityForm() {
   const router = useRouter();
   const [activityData, setActivityData] = useState<ActivityData>(
@@ -51,10 +61,18 @@ export function useActivityForm() {
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
-  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
-  useEffect(() => {
-    setBasicInfo(loadBasicInfo());
-  }, []);
+
+  // マウント前は null、マウント後に loadBasicInfo() の値（保存値 or null）を返す。
+  // useMemo([isMounted]) により、マウント後は1度だけ JSON.parse して以降は同一参照を返す。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const basicInfo = useMemo<BasicInfo | null>(
+    () => (isMounted ? loadBasicInfo() : null),
+    [isMounted],
+  );
 
   // 変更検知: 入力のたびに自動保存
   // 初回レンダー時はスキップ（復元前の空データで上書きするのを防ぐ）
