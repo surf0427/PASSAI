@@ -45,7 +45,6 @@ import { Textarea } from '@/components/ui/Textarea';
 import { Input } from '@/components/ui/Input';
 import { AlertBox } from '@/components/ui/AlertBox';
 import { Label } from '@/components/ui/Label';
-import Link from 'next/link';
 
 // ── APIレスポンス型 ───────────────────────────────────────────────
 

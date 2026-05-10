@@ -18,7 +18,6 @@ import {
   saveAiMatchAdviceCache,
   type AiMatchAdviceCache,
 } from '@/lib/admissionMatchingStorage';
-import { loadActivityData } from '@/lib/activityStorage';
 import { loadSelfPRs } from '@/lib/selfPRStorage';
 import { deriveStudentAnalysis } from '@/lib/matching/deriveStudentAnalysis';
 import { buildUniversityContextsFromBasicInfo } from '@/lib/matching/buildUniversityContextsFromBasicInfo';
