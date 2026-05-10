@@ -49,6 +49,8 @@ export default function PartTimeJobActivitySection({ activities, errors, onAdd, 
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
+          aria-expanded={isOpen}
+          aria-controls="part-time-job-activity-section-content"
           className="flex items-center gap-2 flex-1 min-w-0 text-left"
         >
           <span className="text-sm font-semibold text-gray-700">アルバイト</span>
@@ -75,7 +77,7 @@ export default function PartTimeJobActivitySection({ activities, errors, onAdd, 
       </div>
 
       {isOpen && (
-        <div className="border-t border-gray-100 px-4 pt-3 pb-4">
+        <div id="part-time-job-activity-section-content" className="border-t border-gray-100 px-4 pt-3 pb-4">
           {errors && errors.length > 0 && (
             <AlertBox variant="error" className="mb-3">
               <ul className="space-y-1">

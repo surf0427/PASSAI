@@ -46,6 +46,8 @@ export default function ClubActivitySection({ activities, errors, onAdd, onRemov
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
+          aria-expanded={isOpen}
+          aria-controls="club-activity-section-content"
           className="flex items-center gap-2 flex-1 min-w-0 text-left"
         >
           <span className="text-sm font-semibold text-gray-700">部活動</span>
@@ -73,7 +75,7 @@ export default function ClubActivitySection({ activities, errors, onAdd, onRemov
 
       {/* コンテンツ（折りたたみ） */}
       {isOpen && (
-        <div className="border-t border-gray-100 px-4 pt-3 pb-4">
+        <div id="club-activity-section-content" className="border-t border-gray-100 px-4 pt-3 pb-4">
           {errors && errors.length > 0 && (
             <AlertBox variant="error" className="mb-3">
               <ul className="space-y-1">
