@@ -1,3 +1,13 @@
+// ── スコアリング層 (Scoring Layer) ───────────────────────────────
+// 生徒の basicInfo / StudentAnalysis から、deterministic に
+// MatchingResult[] を組み立てる。AI には依存しない。
+// （ここで生成される reason / strengthPoints 等はテンプレートベース。
+//   AI による narrative は文章生成層 /app/api/matching/route.ts で上書きされる）
+//
+// TODO: 大学DBが整備されたら、ローカルの data/universities.ts を
+//   Supabase テーブル / 大学 API に置き換える（universities 配列の取得元を切り替えるだけで済むよう、
+//   ここでは universities を引数化していく方向で拡張する）。
+//
 import type {
   BasicInfo,
   StudentAnalysis,
@@ -62,12 +72,19 @@ function evaluateStudentChoices(
   const results: MatchingResult[] = [];
 
   for (const choice of basicInfo.choices) {
-    const found = allUniversities.find(
-      (u) => u.name === choice.university || u.faculty === choice.faculty,
-    );
+    // 大学名のみでDBレコードを検索する（学部名はユーザー入力を優先するため条件に含めない）
+    const found = allUniversities.find((u) => u.name === choice.university);
     if (!found) continue;
 
-    const result = buildSingleResult(found, analysis, '自分の志望校');
+    // スコア計算はDBのプロフィールを使いつつ、表示名はユーザー入力値で上書きする
+    // 将来DBを入れた場合も、'自分の志望校'エントリはここで入力値を優先する構造を維持する
+    const universityForDisplay: University = {
+      ...found,
+      name: choice.university,
+      faculty: choice.faculty,
+    };
+
+    const result = buildSingleResult(universityForDisplay, analysis, '自分の志望校');
     if (result) results.push(result);
   }
 

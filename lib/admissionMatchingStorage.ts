@@ -11,6 +11,7 @@ import { loadBasicInfo } from './basicInfoStorage';
 import { loadActivityData } from './activityStorage';
 import { loadSelfPRs } from './selfPRStorage';
 import { loadWallHittingResult } from './wallHittingStorage';
+import { safeGetStorage, safeSetStorage } from '@/lib/storage/safeStorage';
 
 const STORAGE_KEY = 'admissionMatchingInput';
 
@@ -23,20 +24,28 @@ export function collectAndSaveMatchingInput(): AdmissionMatchingInput {
     wallHittingResult: loadWallHittingResult(),
     savedAt: new Date().toISOString(),
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(input));
+  safeSetStorage(STORAGE_KEY, input);
   return input;
 }
 
 // 保存済みの入力データを読み込む
 export function loadMatchingInput(): AdmissionMatchingInput | null {
-  if (typeof window === 'undefined') return null;
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return null;
-  try {
-    return JSON.parse(stored) as AdmissionMatchingInput;
-  } catch {
-    return null;
-  }
+  return safeGetStorage<AdmissionMatchingInput | null>(STORAGE_KEY, null);
+}
+
+// ── マッチング完了フラグ ──────────────────────────────────────────
+// 【保存先】localStorage
+// 【用途】/admission-matching でマッチング結果が表示されたことを記録する
+// 【ライフサイクル】結果計算後にセット → Home の進捗判定で参照
+
+const MATCHING_RESULT_KEY = 'admissionMatchingResult';
+
+export function markMatchingCompleted(): void {
+  safeSetStorage(MATCHING_RESULT_KEY, { completed: true });
+}
+
+export function loadMatchingResult(): { completed: boolean } | null {
+  return safeGetStorage<{ completed: boolean } | null>(MATCHING_RESULT_KEY, null);
 }
 
 // 不足しているデータ項目名を返す（マッチングページでの警告表示に使う）

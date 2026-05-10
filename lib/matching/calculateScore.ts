@@ -1,3 +1,16 @@
+// ── スコアリング層 (Scoring Layer) ───────────────────────────────
+// このファイルは AI に依存しない deterministic な適合度計算を行う。
+// 大学プロフィール × 生徒プロフィール → ScoreBreakdown を返す純関数のみ。
+//
+// 文章生成層（Claude を呼ぶ /app/api/matching/route.ts）とは責務を分けているので、
+// このレイヤーは Edge / バックグラウンドジョブ / Supabase RPC など、
+// AI を呼ばない場所からも独立して呼べる構造になっている。
+//
+// TODO: 将来 偏差値 / 評定 / 活動量 / 学科適性 を組み込んだ deterministic 判定を強化する場合、
+//   1. 入力プロフィール型に新しいフィールドを追加
+//   2. 重み (AO_WEIGHTS / RECOMMENDATION_WEIGHTS) を学科ごとに分岐
+//   3. /api/matching/score として独立 API 化することを検討（クライアントから呼べるよう）
+//
 import type {
   AoScoreProfile,
   RecommendationScoreProfile,

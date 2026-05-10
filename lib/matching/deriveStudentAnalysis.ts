@@ -1,7 +1,7 @@
 // 活動整理・基本情報・自己分析添削データから StudentAnalysis を導出する。
 // wallHittingResult（AI壁打ち結果）があればそれを優先して使う。
 
-import type { BasicFormData } from '@/types/basicInfo';
+import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { SelfPR } from '@/types/selfPR';
 import type { WallHittingResult } from '@/types/analysis';
@@ -27,7 +27,7 @@ function applyWeaknessAdjustments(
 }
 
 export function deriveStudentAnalysis(
-  basicInfo: BasicFormData | null,
+  basicInfo: BasicInfo | null,
   activityData: ActivityData | null,
   selfPRs: SelfPR[],
   wallHittingResult?: WallHittingResult | null,
