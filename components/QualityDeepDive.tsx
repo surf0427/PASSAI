@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getConfig, TOTAL_QUESTIONS } from '@/lib/qualityDeepDive';
 import type { QualityType, QualityMessage } from '@/lib/qualityDeepDive';
+import { Button } from '@/components/ui/Button';
 
 type Props = {
   qualityType: QualityType;
@@ -155,14 +156,14 @@ export function QualityDeepDive({ qualityType, onInsert, onClose }: Props) {
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
           />
           <div className="flex justify-end mt-2">
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleSubmit}
               disabled={!input.trim()}
-              className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-4 py-1.5 transition-colors"
             >
               送信
-            </button>
+            </Button>
           </div>
         </div>
       )}
