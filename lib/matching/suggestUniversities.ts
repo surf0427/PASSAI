@@ -9,7 +9,7 @@
 //   ここでは universities を引数化していく方向で拡張する）。
 //
 import type {
-  BasicInfo,
+  MatchingBasicInfo,
   StudentAnalysis,
   University,
   MatchingResult,
@@ -65,7 +65,7 @@ function buildSingleResult(
  * DB に載っていない大学はスキップする。
  */
 function evaluateStudentChoices(
-  basicInfo: BasicInfo,
+  basicInfo: MatchingBasicInfo,
   analysis: StudentAnalysis,
   allUniversities: University[],
 ): MatchingResult[] {
@@ -97,7 +97,7 @@ function evaluateStudentChoices(
  * 志望校の類似校・タグ・学部から関連大学を提案する。
  */
 export function suggestStraightMatchUniversities(
-  basicInfo: BasicInfo,
+  basicInfo: MatchingBasicInfo,
   allUniversities: University[],
 ): University[] {
   const choiceNames = basicInfo.choices.map((c) => c.university);
@@ -163,7 +163,7 @@ export function suggestPotentialMatchUniversities(
  * page.tsx からはこの関数だけ呼べばOK。
  */
 export function buildMatchingResults(
-  basicInfo: BasicInfo,
+  basicInfo: MatchingBasicInfo,
   analysis: StudentAnalysis,
 ): MatchingResult[] {
   // ① 自分の志望校

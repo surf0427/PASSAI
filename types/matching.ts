@@ -5,7 +5,7 @@ export type StudentChoice = {
   faculty: string;
 };
 
-export type BasicInfo = {
+export type MatchingBasicInfo = {
   name: string;
   highSchool: string;
   grade: string;

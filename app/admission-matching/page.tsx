@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { BasicInfo as UserBasicInfo } from '@/types/basicInfo';
-import type { BasicInfo, MatchingResult } from '@/types/matching';
+import type { BasicInfo } from '@/types/basicInfo';
+import type { MatchingBasicInfo, MatchingResult } from '@/types/matching';
 import type { WallHittingResult } from '@/types/analysis';
 import type { ActivityData } from '@/types/activity';
 import type { SelfPR } from '@/types/selfPR';
@@ -32,7 +32,7 @@ import {
 
 // ── 変換ヘルパー ─────────────────────────────────────────────────
 
-function toBasicInfo(formData: UserBasicInfo): BasicInfo {
+function toBasicInfo(formData: BasicInfo): MatchingBasicInfo {
   return {
     name: formData.name,
     highSchool: '',
@@ -49,7 +49,7 @@ function toBasicInfo(formData: UserBasicInfo): BasicInfo {
 export default function AdmissionMatchingPage() {
   const [hasRunMatching, setHasRunMatching] = useState(false);
   const [matchingLevel, setMatchingLevel] = useState<'basic' | 'full' | null>(null);
-  const [basicFormData, setBasicFormData] = useState<UserBasicInfo | null>(null);
+  const [basicFormData, setBasicFormData] = useState<BasicInfo | null>(null);
   const [activityData, setActivityData] = useState<ActivityData | null>(null);
   const [selfPRs, setSelfPRs] = useState<SelfPR[]>([]);
   const [wallHitting, setWallHitting] = useState<WallHittingResult | null>(null);
