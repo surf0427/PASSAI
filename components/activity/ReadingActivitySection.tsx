@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ReadingActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { FormField } from '@/components/ui/FormField';
 
-import { inputClass, inputErrorClass, textareaClass, labelClass, fieldClass } from './inputStyles';
-const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
+const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
+const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
 type Props = {
   activities: ReadingActivity[];
@@ -94,30 +97,42 @@ export default function ReadingActivitySection({ activities, errors, onAdd, onRe
                   onDone={() => setEditingIndex(null)}
                   onRemove={() => confirmRemove(index)}
                 >
-                  <div className="mb-3">
-                    <label className={labelClass}>本のジャンル</label>
-                    <input type="text" className={inputClass} value={activity.genre}
+                  <FormField label="本のジャンル">
+                    <Input
+                      type="text"
+                      value={activity.genre}
                       onChange={(e) => onUpdate(index, 'genre', e.target.value)}
-                      placeholder="例：歴史、科学、小説" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>印象に残った本 <span className="text-red-500">*</span></label>
-                    <input type="text" className={hasError ? inputErrorClass : inputClass} value={activity.favoriteBook}
+                      placeholder="例：歴史、科学、小説"
+                    />
+                  </FormField>
+                  <FormField label="印象に残った本" required>
+                    <Input
+                      type="text"
+                      value={activity.favoriteBook}
                       onChange={(e) => onUpdate(index, 'favoriteBook', e.target.value)}
-                      placeholder="書名と著者名" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>印象に残っていること</label>
-                    <textarea className={textareaClass} value={activity.mindChange}
+                      placeholder="書名と著者名"
+                      className={hasError ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField
+                    label="印象に残っていること"
+                    hint="短くても大丈夫です。一言からでもOK。"
+                  >
+                    <Textarea
+                      value={activity.mindChange}
                       onChange={(e) => onUpdate(index, 'mindChange', e.target.value)}
-                      placeholder="読んで印象に残っていること・考え方の変化など" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>うまくいったこと</label>
-                    <textarea className={textareaClass} value={activity.reflection}
+                      placeholder="読んで印象に残っていること・考え方の変化など"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="うまくいったこと">
+                    <Textarea
+                      value={activity.reflection}
                       onChange={(e) => onUpdate(index, 'reflection', e.target.value)}
-                      placeholder="読書を通じて得たこと・よかったことなど" />
-                  </div>
+                      placeholder="読書を通じて得たこと・よかったことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
                 </ActivityCard>
               );
             })}

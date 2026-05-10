@@ -2,7 +2,7 @@
 
 import { useActivityForm } from '@/hooks/useActivityForm';
 import ActivityFormHint from '@/components/activity/ActivityFormHint';
-import BasicInfoCard from '@/components/activity/BasicInfoCard';
+import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import ActivitySubmitSuccess from '@/components/activity/ActivitySubmitSuccess';
 import ActivityFormActions from '@/components/activity/ActivityFormActions';
 import ClubActivitySection from '@/components/activity/ClubActivitySection';
@@ -45,7 +45,7 @@ export default function ActivityPage() {
     <div className="max-w-2xl mx-auto px-4 py-12">
       <h1 className="text-2xl font-bold text-gray-800 mb-4">活動整理入力</h1>
 
-      <BasicInfoCard basicInfo={basicInfo} />
+      <BasicInfoSummary basicInfo={basicInfo} />
 
       <ActivityFormHint />
 

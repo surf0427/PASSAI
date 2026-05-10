@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import type { CertificationActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { FormField } from '@/components/ui/FormField';
 
-import { inputClass, inputErrorClass, textareaClass, textareaErrorClass, labelClass, fieldClass } from './inputStyles';
-const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
+const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
+const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
 type Props = {
   activities: CertificationActivity[];
@@ -83,6 +86,8 @@ export default function CertificationActivitySection({ activities, errors, onAdd
           )}
           <div className="space-y-4">
             {activities.map((activity, index) => {
+              // この section だけ per-field error フラグを持つ（資格名 / レベル / 取得目的）。
+              // それぞれのフィールドの input/textarea に !border-red-400 を被せて UX を維持する。
               const p = `資格${index + 1}: `;
               const nameErr = errors?.some(e => e.startsWith(p + '資格名')) ?? false;
               const levelErr = errors?.some(e => e.startsWith(p + 'レベル')) ?? false;
@@ -97,42 +102,59 @@ export default function CertificationActivitySection({ activities, errors, onAdd
                   onDone={() => setEditingIndex(null)}
                   onRemove={() => confirmRemove(index)}
                 >
-                  <div className={fieldClass}>
-                    <label className={labelClass}>資格名 <span className="text-red-500">*</span></label>
-                    <input type="text" className={nameErr ? inputErrorClass : inputClass} value={activity.certificationName}
+                  <FormField label="資格名" required>
+                    <Input
+                      type="text"
+                      value={activity.certificationName}
                       onChange={(e) => onUpdate(index, 'certificationName', e.target.value)}
-                      placeholder="例：英検、TOEIC" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>レベル/スコア <span className="text-red-500">*</span></label>
-                    <input type="text" className={levelErr ? inputErrorClass : inputClass} value={activity.level}
+                      placeholder="例：英検、TOEIC"
+                      className={nameErr ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField label="レベル/スコア" required>
+                    <Input
+                      type="text"
+                      value={activity.level}
                       onChange={(e) => onUpdate(index, 'level', e.target.value)}
-                      placeholder="例：2級、750点" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>取得時期</label>
-                    <input type="text" className={inputClass} value={activity.acquiredDate}
+                      placeholder="例：2級、750点"
+                      className={levelErr ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField label="取得時期">
+                    <Input
+                      type="text"
+                      value={activity.acquiredDate}
                       onChange={(e) => onUpdate(index, 'acquiredDate', e.target.value)}
-                      placeholder="例：2024年1月" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>取得目的 <span className="text-red-500">*</span></label>
-                    <textarea className={purposeErr ? textareaErrorClass : textareaClass} value={activity.purpose}
+                      placeholder="例：2024年1月"
+                    />
+                  </FormField>
+                  <FormField label="取得目的" required>
+                    <Textarea
+                      value={activity.purpose}
                       onChange={(e) => onUpdate(index, 'purpose', e.target.value)}
-                      placeholder="なぜこの資格を取ろうと思ったか" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>うまくいったこと</label>
-                    <textarea className={textareaClass} value={activity.reflection}
+                      placeholder="なぜこの資格を取ろうと思ったか"
+                      className={`${TEXTAREA_CLASS} ${purposeErr ? ERROR_INPUT_CLASS : ''}`}
+                    />
+                  </FormField>
+                  <FormField
+                    label="うまくいったこと"
+                    hint="短くても大丈夫です。一言からでもOK。"
+                  >
+                    <Textarea
+                      value={activity.reflection}
                       onChange={(e) => onUpdate(index, 'reflection', e.target.value)}
-                      placeholder="うまくいったこと・よかったことなど" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>失敗・苦労したこと</label>
-                    <textarea className={textareaClass} value={activity.difficulty}
+                      placeholder="うまくいったこと・よかったことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="失敗・苦労したこと">
+                    <Textarea
+                      value={activity.difficulty}
                       onChange={(e) => onUpdate(index, 'difficulty', e.target.value)}
-                      placeholder="困ったこと・苦労したことなど" />
-                  </div>
+                      placeholder="困ったこと・苦労したことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
                 </ActivityCard>
               );
             })}

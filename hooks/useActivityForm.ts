@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { saveActivityData, loadActivityData, clearActivityData } from '@/lib/activityStorage';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { validateActivityForm } from '@/lib/activityValidator';
-import type { BasicFormData } from '@/types/basicInfo';
+import type { BasicInfo } from '@/types/basicInfo';
 import type {
   ActivityData,
   ClubActivity,
@@ -42,24 +43,17 @@ const initialActivityData: ActivityData = {
 };
 
 export function useActivityForm() {
-  // SSR/CSR 両方で同じ初期値を使う（hydration を壊さないため）
-  // localStorage からの復元は useEffect（クライアントのみ）で行う
-  const [activityData, setActivityData] = useState<ActivityData>(initialActivityData);
+  const router = useRouter();
+  const [activityData, setActivityData] = useState<ActivityData>(
+    () => loadActivityData() ?? initialActivityData,
+  );
   const [errors, setErrors] = useState<string[]>([]);
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
-  const [basicInfo, setBasicInfo] = useState<BasicFormData | null>(null);
-
-  // マウント後に localStorage から復元する（クライアントのみ実行）
+  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
   useEffect(() => {
-    try {
-      const saved = loadActivityData();
-      if (saved) setActivityData(saved);
-      setBasicInfo(loadBasicInfo());
-    } catch (e) {
-      console.error('useActivityForm: load failed', e);
-    }
+    setBasicInfo(loadBasicInfo());
   }, []);
 
   // 変更検知: 入力のたびに自動保存
@@ -265,7 +259,9 @@ export function useActivityForm() {
     setIsLoading(true);
     await new Promise(resolve => setTimeout(resolve, 600));
     try {
-      // 【sessionStorage】AI分析ページへの一時的なデータ受け渡し
+      // 【sessionStorage】AI分析ページへの一時的なデータ受け渡し。
+      // SSRガードは不要（ユーザー操作時のみ実行される）。
+      // safeStorage は localStorage 専用のため使用しない。
       sessionStorage.setItem('activityData', JSON.stringify(activityData));
     } catch (e) {
       console.error('useActivityForm: sessionStorage save failed', e);
@@ -276,7 +272,7 @@ export function useActivityForm() {
     setIsLoading(false);
     setIsSuccess(true);
     await new Promise(resolve => setTimeout(resolve, 800));
-    setIsSubmitted(true);
+    router.push('/home');
   }
 
   function handleBack() {

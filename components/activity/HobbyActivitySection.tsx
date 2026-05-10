@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import type { HobbyActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { FormField } from '@/components/ui/FormField';
 
-import { inputClass, inputErrorClass, textareaClass, labelClass, fieldClass } from './inputStyles';
 const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
-const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
+
+const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
+const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
 type Props = {
   activities: HobbyActivity[];
@@ -88,36 +92,50 @@ export default function HobbyActivitySection({ activities, errors, onAdd, onRemo
                   onDone={() => setEditingIndex(null)}
                   onRemove={() => confirmRemove(index)}
                 >
-                  <div className={fieldClass}>
-                    <label className={labelClass}>内容 <span className="text-red-500">*</span></label>
-                    <input type="text" className={hasError ? inputErrorClass : inputClass} value={activity.hobbyContent}
+                  <FormField label="内容" required>
+                    <Input
+                      type="text"
+                      value={activity.hobbyContent}
                       onChange={(e) => onUpdate(index, 'hobbyContent', e.target.value)}
-                      placeholder="例：写真撮影、料理" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>頻度</label>
-                    <input type="text" className={inputClass} value={activity.frequency}
+                      placeholder="例：写真撮影、料理"
+                      className={hasError ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField label="頻度">
+                    <Input
+                      type="text"
+                      value={activity.frequency}
                       onChange={(e) => onUpdate(index, 'frequency', e.target.value)}
-                      placeholder="例：週3回" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>印象に残っていること</label>
-                    <textarea className={textareaClass} value={activity.reason}
+                      placeholder="例：週3回"
+                    />
+                  </FormField>
+                  <FormField
+                    label="印象に残っていること"
+                    hint="短くても大丈夫です。一言からでもOK。"
+                  >
+                    <Textarea
+                      value={activity.reason}
                       onChange={(e) => onUpdate(index, 'reason', e.target.value)}
-                      placeholder="趣味を通じて印象に残っていることを書いてください" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>うまくいったこと</label>
-                    <textarea className={textareaClass} value={activity.acquiredSkills}
+                      placeholder="趣味を通じて印象に残っていることを書いてください"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="うまくいったこと">
+                    <Textarea
+                      value={activity.acquiredSkills}
                       onChange={(e) => onUpdate(index, 'acquiredSkills', e.target.value)}
-                      placeholder="うまくいったこと・身についたことなど" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>失敗・苦労したこと</label>
-                    <textarea className={textareaClass} value={activity.innovation}
+                      placeholder="うまくいったこと・身についたことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="失敗・苦労したこと">
+                    <Textarea
+                      value={activity.innovation}
                       onChange={(e) => onUpdate(index, 'innovation', e.target.value)}
-                      placeholder="困ったこと・苦労したことなど" />
-                  </div>
+                      placeholder="困ったこと・苦労したことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
                 </ActivityCard>
               );
             })}

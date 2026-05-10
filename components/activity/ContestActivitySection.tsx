@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ContestActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { FormField } from '@/components/ui/FormField';
 
-import { inputClass, inputErrorClass, textareaClass, labelClass, fieldClass } from './inputStyles';
-const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
+const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
+const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
 type Props = {
   activities: ContestActivity[];
@@ -94,36 +97,50 @@ export default function ContestActivitySection({ activities, errors, onAdd, onRe
                   onDone={() => setEditingIndex(null)}
                   onRemove={() => confirmRemove(index)}
                 >
-                  <div className={fieldClass}>
-                    <label className={labelClass}>コンテスト名 <span className="text-red-500">*</span></label>
-                    <input type="text" className={hasError ? inputErrorClass : inputClass} value={activity.contestName}
+                  <FormField label="コンテスト名" required>
+                    <Input
+                      type="text"
+                      value={activity.contestName}
                       onChange={(e) => onUpdate(index, 'contestName', e.target.value)}
-                      placeholder="例：〇〇プログラミングコンテスト" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>分野</label>
-                    <input type="text" className={inputClass} value={activity.field}
+                      placeholder="例：〇〇プログラミングコンテスト"
+                      className={hasError ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField label="分野">
+                    <Input
+                      type="text"
+                      value={activity.field}
                       onChange={(e) => onUpdate(index, 'field', e.target.value)}
-                      placeholder="例：理科、数学、プログラミング" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>印象に残っていること</label>
-                    <textarea className={textareaClass} value={activity.description}
+                      placeholder="例：理科、数学、プログラミング"
+                    />
+                  </FormField>
+                  <FormField
+                    label="印象に残っていること"
+                    hint="短くても大丈夫です。一言からでもOK。"
+                  >
+                    <Textarea
+                      value={activity.description}
                       onChange={(e) => onUpdate(index, 'description', e.target.value)}
-                      placeholder="コンテストを通じて印象に残っていることを書いてください" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>うまくいったこと</label>
-                    <textarea className={textareaClass} value={activity.achievement}
+                      placeholder="コンテストを通じて印象に残っていることを書いてください"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="うまくいったこと">
+                    <Textarea
+                      value={activity.achievement}
                       onChange={(e) => onUpdate(index, 'achievement', e.target.value)}
-                      placeholder="うまくいったこと・成果など" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>失敗・苦労したこと</label>
-                    <textarea className={textareaClass} value={activity.challenge}
+                      placeholder="うまくいったこと・成果など"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="失敗・苦労したこと">
+                    <Textarea
+                      value={activity.challenge}
                       onChange={(e) => onUpdate(index, 'challenge', e.target.value)}
-                      placeholder="困ったこと・苦労したことなど" />
-                  </div>
+                      placeholder="困ったこと・苦労したことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
                 </ActivityCard>
               );
             })}

@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import type { PartTimeJobActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { FormField } from '@/components/ui/FormField';
 
-import { inputClass, inputErrorClass, textareaClass, labelClass, fieldClass } from './inputStyles';
 const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
-const deleteBtnClass = 'text-xs text-red-500 border border-red-300 rounded px-2 py-1 hover:bg-red-50';
+
+const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
+const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
 type Props = {
   activities: PartTimeJobActivity[];
@@ -16,9 +20,13 @@ type Props = {
 };
 
 export default function PartTimeJobActivitySection({ activities, errors, onAdd, onRemove, onUpdate, onUpdatePeriod }: Props) {
+  const [isMounted, setIsMounted] = useState(false);
   const [isOpen, setIsOpen] = useState(activities.length > 0);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const prevLen = useRef(activities.length);
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
   useEffect(() => {
     if (activities.length > prevLen.current) setEditingIndex(activities.length - 1);
     prevLen.current = activities.length;
@@ -44,7 +52,7 @@ export default function PartTimeJobActivitySection({ activities, errors, onAdd, 
           className="flex items-center gap-2 flex-1 min-w-0 text-left"
         >
           <span className="text-sm font-semibold text-gray-700">アルバイト</span>
-          {activities.length > 0 && (
+          {isMounted && activities.length > 0 && (
             <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full shrink-0">
               {activities.length}件
             </span>
@@ -89,54 +97,76 @@ export default function PartTimeJobActivitySection({ activities, errors, onAdd, 
                   onDone={() => setEditingIndex(null)}
                   onRemove={() => confirmRemove(index)}
                 >
-                  <div className={fieldClass}>
-                    <label className={labelClass}>業種 <span className="text-red-500">*</span></label>
-                    <input type="text" className={hasError ? inputErrorClass : inputClass} value={activity.industry}
+                  <FormField label="業種" required>
+                    <Input
+                      type="text"
+                      value={activity.industry}
                       onChange={(e) => onUpdate(index, 'industry', e.target.value)}
-                      placeholder="例：飲食、小売" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>業務内容</label>
-                    <input type="text" className={inputClass} value={activity.jobContent}
+                      placeholder="例：飲食、小売"
+                      className={hasError ? ERROR_INPUT_CLASS : ''}
+                    />
+                  </FormField>
+                  <FormField label="業務内容">
+                    <Input
+                      type="text"
+                      value={activity.jobContent}
                       onChange={(e) => onUpdate(index, 'jobContent', e.target.value)}
-                      placeholder="具体的な業務内容" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>勤務頻度</label>
-                    <input type="text" className={inputClass} value={activity.workFrequency}
+                      placeholder="具体的な業務内容"
+                    />
+                  </FormField>
+                  <FormField label="勤務頻度">
+                    <Input
+                      type="text"
+                      value={activity.workFrequency}
                       onChange={(e) => onUpdate(index, 'workFrequency', e.target.value)}
-                      placeholder="例：週2回" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>期間</label>
+                      placeholder="例：週2回"
+                    />
+                  </FormField>
+                  <div className="space-y-2">
+                    <p className="block text-sm font-semibold text-slate-800">期間</p>
                     <div className="flex gap-2 items-center">
-                      <input type="text" className={inputClass} value={activity.period.from}
+                      <Input
+                        type="text"
+                        value={activity.period.from}
                         onChange={(e) => onUpdatePeriod(index, 'from', e.target.value)}
-                        placeholder="例：2024年4月" />
+                        placeholder="例：2024年4月"
+                      />
                       <span className="text-gray-400 shrink-0">〜</span>
-                      <input type="text" className={inputClass} value={activity.period.to}
+                      <Input
+                        type="text"
+                        value={activity.period.to}
                         onChange={(e) => onUpdatePeriod(index, 'to', e.target.value)}
-                        placeholder="例：現在" />
+                        placeholder="例：現在"
+                      />
                     </div>
                   </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>印象に残っていること</label>
-                    <textarea className={textareaClass} value={activity.description}
+                  <FormField
+                    label="印象に残っていること"
+                    hint="短くても大丈夫です。一言からでもOK。"
+                  >
+                    <Textarea
+                      value={activity.description}
                       onChange={(e) => onUpdate(index, 'description', e.target.value)}
-                      placeholder="アルバイトを通じて印象に残っていることを書いてください" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>うまくいったこと</label>
-                    <textarea className={textareaClass} value={activity.achievement}
+                      placeholder="アルバイトを通じて印象に残っていることを書いてください"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="うまくいったこと">
+                    <Textarea
+                      value={activity.achievement}
                       onChange={(e) => onUpdate(index, 'achievement', e.target.value)}
-                      placeholder="うまくいったこと・成果など" />
-                  </div>
-                  <div className={fieldClass}>
-                    <label className={labelClass}>失敗・苦労したこと</label>
-                    <textarea className={textareaClass} value={activity.challenge}
+                      placeholder="うまくいったこと・成果など"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
+                  <FormField label="失敗・苦労したこと">
+                    <Textarea
+                      value={activity.challenge}
                       onChange={(e) => onUpdate(index, 'challenge', e.target.value)}
-                      placeholder="困ったこと・苦労したことなど" />
-                  </div>
+                      placeholder="困ったこと・苦労したことなど"
+                      className={TEXTAREA_CLASS}
+                    />
+                  </FormField>
                 </ActivityCard>
               );
             })}
