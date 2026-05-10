@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { BasicInfo } from '@/types/basicInfo';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewMenuCard } from './components/InterviewMenuCard';
 
 const MENU_ITEMS = [
@@ -36,12 +37,10 @@ export default function InterviewPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-3">面接練習</h1>
-        <p className="text-gray-600 text-sm leading-relaxed">
-          AIが予想質問の作成や、対人練習後の振り返りをサポートします。
-        </p>
-      </div>
+      <PageHeader
+        title="面接練習"
+        description="AIが予想質問の作成や、対人練習後の振り返りをサポートします。"
+      />
 
       <BasicInfoSummary basicInfo={basicInfo} />
 

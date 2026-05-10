@@ -1,5 +1,6 @@
 import { Card } from '@/components/ui/Card';
 import { LinkButton } from '@/components/ui/LinkButton';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // STEP 35: 「添削ツール」ではなく「0 から完成まで導く伴走型ツール」が伝わる構成へ。
 // 動的データを持たないので Server Component のまま。
@@ -29,14 +30,11 @@ const USAGE_STEPS: { title: string; body: string }[] = [
 export default function StatementEntryPage() {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-12">
-      <header className="mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-3">
-          志望理由書を仕上げる
-        </h1>
-        <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-          何から書けばいいかわからなくても大丈夫です。AI があなたの経験・興味・将来像を整理しながら、志望理由書を完成までサポートします。
-        </p>
-      </header>
+      <PageHeader
+        title="志望理由書を仕上げる"
+        description="何から書けばいいかわからなくても大丈夫です。AI があなたの経験・興味・将来像を整理しながら、志望理由書を完成までサポートします。"
+        className="sm:mb-8"
+      />
 
       {/* ── 使い方ガイド ─────────────────────────────────── */}
       <section className="mb-6 sm:mb-8">
