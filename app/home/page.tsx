@@ -1,0 +1,316 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { LinkButton } from '@/components/ui/LinkButton';
+import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { loadActivityData } from '@/lib/activityStorage';
+import { loadWallHittingResult } from '@/lib/wallHittingStorage';
+import { loadAnalyzeState, saveAnalyzeState } from '@/lib/analyzeStorage';
+import { loadMatchingInput, loadMatchingResult } from '@/lib/admissionMatchingStorage';
+import { loadEssayProgress } from '@/lib/essayPracticeStorage';
+import { loadDraft, loadReviewHistory } from '@/lib/statementStorage';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
+import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
+import type { BasicInfo } from '@/types/basicInfo';
+
+// ── 進捗ステータスの型 ─────────────────────────────────────────────
+
+type ProgressStatus = 'not_started' | 'in_progress' | 'completed';
+
+const PROGRESS_LABELS: Record<ProgressStatus, string> = {
+  not_started: '未開始',
+  in_progress: '途中',
+  completed: '完了',
+};
+
+const PROGRESS_BADGE_STYLES: Record<ProgressStatus, string> = {
+  not_started: 'bg-gray-100 text-gray-500',
+  in_progress: 'bg-amber-100 text-amber-700',
+  completed: 'bg-green-100 text-green-700',
+};
+
+function getButtonLabel(status: ProgressStatus): string {
+  if (status === 'completed') return '編集する';
+  if (status === 'in_progress') return '続きから';
+  return 'はじめる';
+}
+
+// ── 進捗判定（機能ごと） ──────────────────────────────────────────
+// ストレージキーの根拠は各 *Storage.ts ファイルを参照
+
+function checkActivityStatus(): ProgressStatus {
+  const data = loadActivityData(); // key: 'activityFormData'
+  if (!data) return 'not_started';
+  const hasAnyActivity =
+    data.clubActivities.length > 0 ||
+    data.volunteerActivities.length > 0 ||
+    data.studyAbroadActivities.length > 0 ||
+    data.researchActivities.length > 0 ||
+    data.partTimeJobActivities.length > 0 ||
+    data.certificationActivities.length > 0 ||
+    data.contestActivities.length > 0 ||
+    data.readingActivities.length > 0 ||
+    data.hobbyActivities.length > 0;
+  if (!hasAnyActivity) return 'not_started';
+  const wallHitting = loadWallHittingResult(); // key: 'wallHittingResult'
+  return wallHitting ? 'completed' : 'in_progress';
+}
+
+function checkSelfAnalysisStatus(): ProgressStatus {
+  const state = loadAnalyzeState(); // key: 'analyzeState'
+  if (!state) return 'not_started';
+  if (state.summary !== null) return 'completed';
+  return 'in_progress';
+}
+
+function checkMatchingStatus(): ProgressStatus {
+  const result = loadMatchingResult(); // key: 'admissionMatchingResult'
+  if (result?.completed) return 'completed';
+  const input = loadMatchingInput(); // key: 'admissionMatchingInput'
+  return input ? 'in_progress' : 'not_started';
+}
+
+function checkEssayStatus(): ProgressStatus {
+  const data = loadEssayProgress(); // key: 'essayPracticeData'
+  if (!data) return 'not_started';
+  if (data.hasReview) return 'completed';
+  return 'in_progress';
+}
+
+function checkStatementStatus(): ProgressStatus {
+  const history = loadReviewHistory(); // key: 'statementReviewHistory'
+  if (history.length > 0) return 'completed';
+  const draft = loadDraft(); // key: 'statementDraft'
+  if (draft && draft.statementText.trim()) return 'in_progress';
+  return 'not_started';
+}
+
+function checkInterviewStatus(): ProgressStatus {
+  const records = getInterviewRecords(); // key: 'interview_records'
+  if (records.length === 0) return 'not_started';
+  const hasFeedback = records.some((r) => r.feedbackJson);
+  return hasFeedback ? 'completed' : 'in_progress';
+}
+
+// ── 機能カードの定義 ──────────────────────────────────────────────
+
+const FEATURES = [
+  {
+    title: '活動整理',
+    description: '部活・ボランティア・資格など、これまでの活動を整理します。',
+    href: '/input/activity',
+  },
+  {
+    title: '自己分析',
+    description: 'AIとの壁打ちを通じて、自分の強みや価値観を深掘りします。',
+    href: '/self-analysis',
+  },
+  {
+    title: '志望校マッチング',
+    description: 'あなたのプロフィールに合った志望校を見つけます。',
+    href: '/admission-matching',
+  },
+  {
+    title: '志望理由書作成',
+    description: 'AIのサポートで志望理由書を書き上げます。',
+    href: '/statement',
+  },
+  {
+    title: '小論文練習',
+    description: 'テーマに沿って小論文を書き、AIからフィードバックをもらいます。',
+    href: '/essay',
+  },
+  {
+    title: '面接練習',
+    description: '予想質問の作成や、練習結果の記録・振り返りをします。',
+    href: '/interview',
+  },
+] as const;
+
+// ── 今日やるべきこと ──────────────────────────────────────────────
+
+const FEATURE_HINTS: Record<string, string> = {
+  '/input/activity':     'あなたの経験を整理すると、自己分析や志望理由書が作りやすくなります。',
+  '/self-analysis':      '自分の強みや価値観を言語化することで、志望理由書の核心が見えてきます。',
+  '/admission-matching': 'あなたのプロフィールに合った志望校を確認しましょう。',
+  '/statement':          '志望理由書の下書きを作って、AIのフィードバックを受けましょう。',
+  '/essay':              '小論文の構成練習を通じて、論理的な表現力を鍛えましょう。',
+  '/interview':          '予想質問を作って、面接本番に備えましょう。',
+};
+
+// completedでない最初の機能を返す。全完了の場合はnullを返す
+function getNextFeature(statuses: Record<string, ProgressStatus>) {
+  return FEATURES.find((feature) => statuses[feature.href] !== 'completed') ?? null;
+}
+
+// statusesからhrefに対応するステータスを取得する。未登録の場合はnot_startedを返す
+function getStatus(statuses: Record<string, ProgressStatus>, href: string): ProgressStatus {
+  return statuses[href] ?? 'not_started';
+}
+
+// ── ページ本体 ───────────────────────────────────────────────────
+
+export default function HomePage() {
+  const router = useRouter();
+
+  // Home → 自己分析は必ず①活動確認(confirm)から始める
+  function handleGoToSelfAnalysis() {
+    const savedState = loadAnalyzeState();
+    if (savedState) {
+      saveAnalyzeState({ ...savedState, step: 'confirm' });
+    }
+    router.push('/self-analysis');
+  }
+
+  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [statuses, setStatuses] = useState<Record<string, ProgressStatus>>({});
+
+  useEffect(() => {
+    const info = loadBasicInfo();
+    if (!info) {
+      router.replace('/input/basic');
+      return;
+    }
+    setBasicInfo(info);
+    setStatuses({
+      '/input/activity':     checkActivityStatus(),
+      '/self-analysis':      checkSelfAnalysisStatus(),
+      '/admission-matching': checkMatchingStatus(),
+      '/statement':          checkStatementStatus(),
+      '/essay':              checkEssayStatus(),
+      '/interview':          checkInterviewStatus(),
+    });
+    setIsLoading(false);
+  }, [router]);
+
+  if (isLoading) return null;
+  if (!basicInfo) return null; // TypeScriptの型絞り込み用。実際にはisLoading後に必ず設定済み
+
+  const firstPreference = basicInfo.preferences[0];
+  const nextFeature = getNextFeature(statuses);
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+
+      {/* ユーザー情報 */}
+      <div className="mb-10">
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">
+          こんにちは、{basicInfo.name}さん
+        </h1>
+        {firstPreference && (
+          <p className="text-gray-500 text-sm mb-4">
+            第一志望：{firstPreference.university}　{firstPreference.faculty}
+          </p>
+        )}
+        <p className="text-gray-600 text-sm leading-relaxed mb-4">
+          総合型選抜（AO・推薦）の対策をAIがサポートします。<br />
+          活動整理から志望理由書・面接対策まで、一歩ずつ進めましょう。
+        </p>
+        <Link
+          href="/input/basic"
+          className="inline-block border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+        >
+          基本情報を編集
+        </Link>
+      </div>
+
+      {/* 診断タイプ（ある場合）／無ければ診断への誘導 */}
+      <DiagnosisTypeCard />
+
+      {/* 今日やるべきこと
+          active 時は <Card variant="soft"> で「やさしい案内」感を出す。
+          完了時は緑系の達成色を残すため raw <div> を維持（Card primitive に
+          green variant は無く、デザインシステム的にも完了表現の色は別途議論）。 */}
+      {nextFeature ? (
+        <Card variant="soft" padding="md" className="mb-8">
+          <p className="text-xs font-semibold text-brand-600 mb-2">今日やるべきこと</p>
+          <p className="text-base font-bold text-gray-800 mb-1">
+            まずは「{nextFeature.title}」から始めましょう。
+          </p>
+          <p className="text-sm text-gray-600 mb-4">
+            {FEATURE_HINTS[nextFeature.href]}
+          </p>
+          <LinkButton
+            href={nextFeature.href}
+            variant="primary"
+            size="md"
+          >
+            {getButtonLabel(getStatus(statuses, nextFeature.href))}
+          </LinkButton>
+        </Card>
+      ) : (
+        <div className="mb-8 bg-green-50 border border-green-200 rounded-xl p-6">
+          <p className="text-xs font-semibold text-green-600 mb-2">今日やるべきこと</p>
+          <p className="text-base font-bold text-gray-800 mb-1">
+            すべての機能が完了しています！おつかれさまでした。
+          </p>
+          <p className="text-sm text-gray-600 mb-4">
+            内容を見直したい場合は、各機能から編集できます。
+          </p>
+          <Link
+            href="/input/activity"
+            className="inline-block border border-green-600 text-green-700 hover:bg-green-100 font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors"
+          >
+            活動整理を見直す
+          </Link>
+        </div>
+      )}
+
+      {/* 機能カード一覧 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {FEATURES.map((feature) => {
+          const status = getStatus(statuses, feature.href);
+          return (
+            <Card
+              key={feature.href}
+              variant="default"
+              padding="md"
+              className="flex flex-col gap-3"
+            >
+              <div>
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <h2 className="text-base font-bold text-gray-800">
+                    {feature.title}
+                  </h2>
+                  <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${PROGRESS_BADGE_STYLES[status]}`}>
+                    {PROGRESS_LABELS[status]}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  {feature.description}
+                </p>
+              </div>
+              <div className="mt-auto pt-1">
+                {/* self-analysis は Home で onClick ハンドラ経由なので Button、
+                    他は遷移のみなので LinkButton。両者は同じスタイル系列。 */}
+                {feature.href === '/self-analysis' ? (
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={handleGoToSelfAnalysis}
+                  >
+                    {getButtonLabel(status)}
+                  </Button>
+                ) : (
+                  <LinkButton
+                    href={feature.href}
+                    variant="primary"
+                    size="md"
+                  >
+                    {getButtonLabel(status)}
+                  </LinkButton>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+    </div>
+  );
+}

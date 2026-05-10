@@ -2,59 +2,91 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { ReactNode } from 'react';
+import { Logo } from '@/app/components/Logo';
 
-// ── ナビゲーション項目の定義 ─────────────────────────────────────
-// 順番・ラベル・リンク先をここだけ変えれば全体に反映される
+// ── Header ────────────────────────────────────────────────────────
+// 上部ナビは「Home」と「基本情報」だけに限定する。
+// 各機能（活動整理 / 自己分析 / 添削 / マッチング / 面接練習 など）への遷移は
+// Home 画面内のカードから行う設計（「次にやるべきこと」をガイドする UX）。
+// 機能を増やしてもここは増やさない前提のため、配列＋map ではなく直書きにする。
+//
+// LP（pathname === '/'）だけは別仕様：
+//   - PC：Logo（左）/ アンカーナビ 5 本（中央）/「有料サイトへ」ボタン（右）
+//   - スマホ：アンカーナビは隠して、Logo +「有料サイトへ」だけ表示（圧迫回避）
+// アンカーリンクは <a href="#..."> でページ内移動。スムーズスクロールと
+// 固定ヘッダ分のオフセットは layout.tsx の <html> に
+// `scroll-smooth scroll-pt-14` を付けて実現している。
 
-const NAV_ITEMS = [
-  { label: '基本情報',         href: '/input/basic' },
-  { label: '活動整理',         href: '/input/activity' },
-  { label: 'AI壁打ち',         href: '/analyze' },
-  { label: '自己PR添削',       href: '/' },
-  { label: '志望校マッチング', href: '/matching' },
+const LP_NAV_LINKS = [
+  { href: '#recommend', label: 'おすすめ' },
+  { href: '#features', label: '機能' },
+  { href: '#pricing', label: '料金' },
+  { href: '#compare', label: '比較' },
+  { href: '#faq', label: 'FAQ' },
 ] as const;
-
-// ── アクティブ判定 ────────────────────────────────────────────────
-// href === '/' のときは完全一致にする（'/' はすべてのパスの前方一致になるため）
-
-function isActive(href: string, pathname: string): boolean {
-  if (href === '/') return pathname === '/';
-  return pathname === href || pathname.startsWith(href + '/');
-}
-
-// ── Header コンポーネント ────────────────────────────────────────
 
 export function Header() {
   const pathname = usePathname();
+  const isLanding = pathname === '/';
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm">
-      <div className="px-4 h-14 flex items-center gap-2 sm:gap-6 w-full">
+      <div className="px-4 h-14 flex items-center gap-2 sm:gap-6">
+        <Logo />
 
-        {/* アプリ名：shrink-0 で常に左端に表示 */}
-        <span className="text-sm font-bold text-gray-800 shrink-0 whitespace-nowrap">
-          AO受験サポート
-        </span>
+        {isLanding ? (
+          <>
+            {/* LP 内アンカーナビ：PC のみ表示 */}
+            <nav className="hidden sm:flex flex-1 justify-center items-center gap-4 lg:gap-6 text-sm">
+              {LP_NAV_LINKS.map((link) => (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="font-medium text-slate-600 hover:text-brand-600 transition-colors"
+                >
+                  {link.label}
+                </a>
+              ))}
+            </nav>
 
-        {/* ナビゲーション：overflow-x-auto + min-w-max ラッパーでスマホ横スクロールを確実に動かす */}
-        <nav className="overflow-x-auto flex-1 min-w-0">
-          <div className="flex items-center gap-1 min-w-max">
-            {NAV_ITEMS.map(({ label, href }) => (
-              <Link
-                key={href}
-                href={href}
-                className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                  isActive(href, pathname)
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                {label}
-              </Link>
-            ))}
-          </div>
-        </nav>
+            {/* 「有料サイトへ」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
+            <Link
+              href="/home"
+              className="ml-auto sm:ml-0 px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"
+            >
+              有料サイトへ
+            </Link>
+          </>
+        ) : (
+          <nav className="flex items-center gap-1">
+            <NavLink href="/home" pathname={pathname}>Home</NavLink>
+            <NavLink href="/input/basic" pathname={pathname}>基本情報</NavLink>
+          </nav>
+        )}
       </div>
     </header>
+  );
+}
+
+function NavLink({
+  href,
+  pathname,
+  children,
+}: {
+  href: string;
+  pathname: string;
+  children: ReactNode;
+}) {
+  const active = pathname === href || pathname.startsWith(href + '/');
+  return (
+    <Link
+      href={href}
+      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+        active ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+      }`}
+    >
+      {children}
+    </Link>
   );
 }

@@ -1,0 +1,46 @@
+import { BRAND_NAME } from '@/lib/brand';
+
+type Props = {
+  className?: string;
+};
+
+// PASSAI のテキストロゴ（Notion / Linear / Vercel 系の "文字ベースで洗練されたプロダクト感"）。
+//
+// 構成：
+//   - 左：slate-900 角丸スクエアに白い右矢印 SVG（「pass through」のメタファ、AI ノード感）
+//   - 右：font-extrabold + tracking-tight の 2 トーン文字（PASS = slate-900、AI = blue-600）
+//
+// プレーン文字列が必要な場所（metadata.title, OG タグ, alt 等）は @/lib/brand の
+// BRAND_NAME を直接 import する。ビジュアルの変更はこのファイル内で完結する設計。
+
+export function Logo({ className = '' }: Props) {
+  return (
+    <span
+      className={`inline-flex items-center gap-2 shrink-0 ${className}`}
+      aria-label={BRAND_NAME}
+    >
+      <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-slate-900 text-white shrink-0">
+        <svg
+          viewBox="0 0 24 24"
+          className="w-3.5 h-3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M5 12h14" />
+          <path d="M13 6l6 6-6 6" />
+        </svg>
+      </span>
+      <span
+        className="text-base font-extrabold tracking-tight whitespace-nowrap leading-none"
+        aria-hidden="true"
+      >
+        <span className="text-slate-900">PASS</span>
+        <span className="text-blue-600">AI</span>
+      </span>
+    </span>
+  );
+}
