@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { DeepDiveSession, CompletedDeepDive } from '@/hooks/useDeepDive';
 import { getSummaryForPhrase } from '@/lib/deepDiveQuestions';
 import { StructureMapping } from '@/components/StructureMapping';
+import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Textarea';
 
 // ── セッション進行中パネル ─────────────────────────────────────────
@@ -100,14 +101,14 @@ function QuestionView({
         </p>
 
         <div className="flex items-center gap-3">
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="md"
             onClick={handleNext}
             disabled={!text.trim()}
-            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-5 py-2 rounded-lg text-sm transition-colors"
           >
             {currentIndex + 1 < total ? '次へ' : '完了'}
-          </button>
+          </Button>
           {currentIndex > 0 && (
             <button
               type="button"
@@ -217,14 +218,15 @@ function CompletionView({
 
         {/* 書き直しCTA */}
         <div className="border-t border-gray-100 pt-5">
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="md"
             onClick={onRewrite}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+            className="w-full gap-2"
           >
             <span>▶</span>
             <span>この内容をもとに書き直す</span>
-          </button>
+          </Button>
           <p className="text-xs text-gray-400 text-center mt-2">
             入力欄へ移動し、書き直しガイドを表示します
           </p>
