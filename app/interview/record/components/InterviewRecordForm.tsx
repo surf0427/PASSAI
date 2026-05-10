@@ -11,6 +11,7 @@ import { addInterviewRecord, getInterviewRecords } from '@/lib/interviewRecordSt
 import type { NewInterviewRecord } from '@/lib/interviewRecordStorage';
 import { loadInterviewDraft, saveInterviewDraft, clearInterviewDraft } from '@/lib/interviewDraftStorage';
 import { generateInterviewFeedback } from '@/lib/generateInterviewFeedback';
+import { AlertBox } from '@/components/ui/AlertBox';
 
 const INITIAL_FORM_DATA: InterviewRecordFormData = {
   practiceDate: '',
@@ -160,9 +161,9 @@ export function InterviewRecordForm() {
   return (
     <div>
       {/* 補助文言 */}
-      <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6 leading-relaxed">
-        完璧に書く必要はありません。覚えている範囲で大丈夫です。あとでAIが改善点を整理します。
-      </p>
+      <AlertBox variant="info" className="mb-6">
+        <p>完璧に書く必要はありません。覚えている範囲で大丈夫です。あとでAIが改善点を整理します。</p>
+      </AlertBox>
 
       {/* 基本情報 */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
@@ -304,7 +305,7 @@ export function InterviewRecordForm() {
       </button>
 
       {savedMessage && (
-        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-4 mb-8">
+        <AlertBox variant="success" className="mb-8">
           <p className="text-sm text-green-700 mb-3">{savedMessage}</p>
           <Link
             href="/interview/history"
@@ -312,7 +313,7 @@ export function InterviewRecordForm() {
           >
             過去の練習記録を見る
           </Link>
-        </div>
+        </AlertBox>
       )}
 
     </div>
