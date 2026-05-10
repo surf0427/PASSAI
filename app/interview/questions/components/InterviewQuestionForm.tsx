@@ -5,6 +5,7 @@ import type { InterviewQuestionFormData } from '../types';
 import type { BasicInfo } from '@/types/basicInfo';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { EXAM_TYPE_OPTIONS } from '@/app/interview/constants';
+import { Button } from '@/components/ui/Button';
 import { InterviewQuestionPreview } from './InterviewQuestionPreview';
 import { loadInterviewQuestionInitialData } from '../utils/loadInterviewQuestionInitialData';
 import { generateInterviewQuestions } from '../utils/generateInterviewQuestions';
@@ -156,13 +157,9 @@ export function InterviewQuestionForm() {
         </div>
 
         {/* 送信ボタン */}
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
-        >
+        <Button variant="primary" size="lg" onClick={handleSubmit}>
           予想質問を作成する
-        </button>
+        </Button>
       </section>
 
       {questions.length > 0 && (
