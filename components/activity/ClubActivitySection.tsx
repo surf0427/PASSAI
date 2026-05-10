@@ -4,6 +4,7 @@ import { ActivityCard } from './ActivityCard';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
+import { AlertBox } from '@/components/ui/AlertBox';
 
 const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
 
@@ -75,9 +76,11 @@ export default function ClubActivitySection({ activities, errors, onAdd, onRemov
       {isOpen && (
         <div className="border-t border-gray-100 px-4 pt-3 pb-4">
           {errors && errors.length > 0 && (
-            <ul className="mb-3 p-3 bg-red-50 border border-red-200 rounded-md space-y-1">
-              {errors.map((e, i) => <li key={i} className="text-sm text-red-600">{e}</li>)}
-            </ul>
+            <AlertBox variant="error" className="mb-3">
+              <ul className="space-y-1">
+                {errors.map((e, i) => <li key={i} className="text-sm text-red-600">{e}</li>)}
+              </ul>
+            </AlertBox>
           )}
           {activities.length === 0 && (
             <p className="text-sm text-gray-400 py-2">＋追加ボタンで入力欄を追加できます</p>
