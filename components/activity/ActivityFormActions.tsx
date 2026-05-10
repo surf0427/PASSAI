@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/Button';
+
 type Props = {
   onReset: () => void;
   isLoading?: boolean;
@@ -20,14 +22,16 @@ export default function ActivityFormActions({ onReset, isLoading, isSuccess }: P
         {submitLabel}
       </button>
 
-      <button
+      <Button
+        variant="danger"
+        size="md"
         type="button"
         onClick={onReset}
         disabled={isLoading}
-        className="mt-3 w-full text-sm text-red-500 border border-red-200 rounded-md py-2 px-6 hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        className="mt-3 w-full"
       >
         入力内容をリセットする
-      </button>
+      </Button>
     </>
   );
 }
