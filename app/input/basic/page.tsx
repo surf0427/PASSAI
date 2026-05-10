@@ -2,63 +2,78 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import type { BasicFormData, SchoolPreference, ExamType } from '@/types/basicInfo';
+import type { BasicInfo, SchoolPreference } from '@/types/basicInfo';
 import { saveBasicInfo, loadBasicInfo } from '@/lib/basicInfoStorage';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { FormField } from '@/components/ui/FormField';
 
 type FormErrors = {
   name?: string;
-  highSchool?: string;
   grade?: string;
-  stream?: string;
-  examType?: string;
+  track?: string;
+  examTypes?: string;
   firstPreferenceUniversity?: string;
   firstPreferenceFaculty?: string;
 };
 
-const EXAM_TYPE_OPTIONS: { value: ExamType; label: string }[] = [
-  { value: 'AO',                          label: '総合型選抜' },
-  { value: 'RECOMMENDATION',              label: '学校推薦型選抜' },
-  { value: 'BOTH',                        label: '両方検討中' },
-  { value: 'GENERAL_WITH_RECOMMENDATION', label: '一般受験メイン（推薦も併用）' },
-];
-
 const PREFERENCE_LABELS = ['第一志望', '第二志望', '第三志望', '第四志望', '第五志望'];
 
-const initialFormData: BasicFormData = {
+const EXAM_TYPE_OPTIONS = [
+  '総合型選抜（AO入試）',
+  '学校推薦型選抜（公募・指定校）',
+  '一般選抜',
+  '共通テスト利用',
+  '海外大学受験',
+  'まだ決まっていない',
+] as const;
+
+const emptyPreference: SchoolPreference = { university: '', faculty: '', department: '' };
+
+const initialFormData: BasicInfo = {
   name: '',
-  highSchool: '',
   grade: '',
-  stream: '',
-  examType: '',
+  track: '',
+  overallGpa: '',
+  examTypes: [],
   preferences: [
-    { university: '', faculty: '' },
-    { university: '', faculty: '' },
-    { university: '', faculty: '' },
-    { university: '', faculty: '' },
-    { university: '', faculty: '' },
+    { ...emptyPreference },
+    { ...emptyPreference },
+    { ...emptyPreference },
+    { ...emptyPreference },
+    { ...emptyPreference },
   ],
 };
 
 export default function BasicInfoPage() {
   const router = useRouter();
-  const [formData, setFormData] = useState<BasicFormData>(initialFormData);
+  const [formData, setFormData] = useState<BasicInfo>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
     const saved = loadBasicInfo();
     if (saved) setFormData(saved);
+    setIsMounted(true);
   }, []);
-
-  useEffect(() => {
-    saveBasicInfo(formData);
-  }, [formData]);
 
   function handleChange(
     event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) {
     const { name, value } = event.target;
-    setFormData((prev) => ({ ...prev, [name]: value } as BasicFormData));
+    setFormData((prev) => ({ ...prev, [name]: value } as BasicInfo));
     setErrors((prev) => ({ ...prev, [name]: undefined } as FormErrors));
+  }
+
+  function toggleExamType(option: string) {
+    setFormData((prev) => {
+      const current = prev.examTypes ?? [];
+      const next = current.includes(option)
+        ? current.filter((v) => v !== option)
+        : [...current, option];
+      return { ...prev, examTypes: next };
+    });
+    setErrors((prev) => ({ ...prev, examTypes: undefined }));
   }
 
   function handlePreferenceChange(
@@ -81,30 +96,27 @@ export default function BasicInfoPage() {
   function validateForm(): FormErrors {
     const newErrors: FormErrors = {};
     if (!formData.name.trim()) {
-      newErrors.name = '名前を入力してください';
-    }
-    if (!formData.highSchool.trim()) {
-      newErrors.highSchool = '高校名を入力してください';
+      newErrors.name = 'ユーザー名を入力してください';
     }
     if (!formData.grade) {
-      newErrors.grade = '学年を選んでください';
+      newErrors.grade = '学年を選択してください';
     }
-    if (!formData.stream) {
-      newErrors.stream = '文系か理系を選んでください';
+    if (!formData.track) {
+      newErrors.track = '文系/理系/未定を選択してください';
     }
-    if (!formData.examType) {
-      newErrors.examType = '受験方式を選んでください';
+    if (!formData.examTypes || formData.examTypes.length === 0) {
+      newErrors.examTypes = '受験予定の方式を1つ以上選択してください';
     }
-    if (!formData.preferences[0].university.trim()) {
+    if (!formData.preferences[0]?.university.trim()) {
       newErrors.firstPreferenceUniversity = '第一志望の大学名を入力してください';
     }
-    if (!formData.preferences[0].faculty.trim()) {
+    if (!formData.preferences[0]?.faculty.trim()) {
       newErrors.firstPreferenceFaculty = '第一志望の学部名を入力してください';
     }
     return newErrors;
   }
 
-  function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const newErrors = validateForm();
     if (Object.keys(newErrors).length > 0) {
@@ -112,8 +124,10 @@ export default function BasicInfoPage() {
       return;
     }
     saveBasicInfo(formData);
-    router.push('/input/activity');
+    router.push('/home');
   }
+
+  if (!isMounted) return null;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">
@@ -127,118 +141,116 @@ export default function BasicInfoPage() {
           </h2>
           <div className="space-y-5">
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                名前 <span className="text-red-500">*</span>
-              </label>
-              <input
+            {/* ユーザー名 */}
+            <FormField
+              label="ユーザー名"
+              required
+              hint="ニックネームでも大丈夫です。あとから変更できます。"
+              error={errors.name}
+            >
+              <Input
                 type="text"
                 name="name"
                 value={formData.name}
                 onChange={handleChange}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                placeholder="例：山田 太郎"
+                placeholder="例：たろう"
               />
-              {errors.name && (
-                <p className="text-red-500 text-xs mt-1">{errors.name}</p>
-              )}
-            </div>
+            </FormField>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                高校名 <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                name="highSchool"
-                value={formData.highSchool}
-                onChange={handleChange}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                placeholder="例：〇〇高等学校"
-              />
-              {errors.highSchool && (
-                <p className="text-red-500 text-xs mt-1">{errors.highSchool}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                学年 <span className="text-red-500">*</span>
-              </label>
+            {/* 学年
+                Select primitive 未整備のため <select> は raw 維持。
+                FormField で label / 必須印 / error 構造だけ統一しておく。 */}
+            <FormField
+              label="学年"
+              required
+              error={errors.grade}
+            >
               <select
                 name="grade"
                 value={formData.grade}
                 onChange={handleChange}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
                 <option value="">選択してください</option>
-                <option value="高校1年">高校1年</option>
-                <option value="高校2年">高校2年</option>
-                <option value="高校3年">高校3年</option>
+                <option value="高1">高1</option>
+                <option value="高2">高2</option>
+                <option value="高3">高3</option>
+                <option value="既卒">既卒</option>
+                <option value="その他">その他</option>
               </select>
-              {errors.grade && (
-                <p className="text-red-500 text-xs mt-1">{errors.grade}</p>
-              )}
-            </div>
+            </FormField>
 
+            {/* 文系・理系・未定 */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                文系・理系 <span className="text-red-500">*</span>
+                文系 / 理系 / 未定 <span className="text-red-500">*</span>
               </label>
               <div className="flex gap-6">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="stream"
-                    value="文系"
-                    checked={formData.stream === '文系'}
-                    onChange={handleChange}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-700">文系</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="stream"
-                    value="理系"
-                    checked={formData.stream === '理系'}
-                    onChange={handleChange}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-700">理系</span>
-                </label>
-              </div>
-              {errors.stream && (
-                <p className="text-red-500 text-xs mt-1">{errors.stream}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                受験方式 <span className="text-red-500">*</span>
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                {EXAM_TYPE_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-center gap-2 cursor-pointer">
+                {(['文系', '理系', '未定'] as const).map((value) => (
+                  <label key={value} className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="radio"
-                      name="examType"
-                      value={option.value}
-                      checked={formData.examType === option.value}
+                      name="track"
+                      value={value}
+                      checked={formData.track === value}
                       onChange={handleChange}
-                      className="w-4 h-4 shrink-0"
+                      className="w-4 h-4"
                     />
-                    <span className="text-sm text-gray-700">{option.label}</span>
+                    <span className="text-sm text-gray-700">{value}</span>
                   </label>
                 ))}
               </div>
-              {errors.examType && (
-                <p className="text-red-500 text-xs mt-1">{errors.examType}</p>
+              {errors.track && (
+                <p className="text-red-500 text-xs mt-1">{errors.track}</p>
               )}
             </div>
 
+            {/* 評定平均 */}
+            <FormField
+              label="評定平均"
+              hint="通知表の「全体の学習成績の状況」を入力。まだ確認できていなければ空欄でも大丈夫です。"
+            >
+              <Input
+                type="text"
+                name="overallGpa"
+                inputMode="decimal"
+                value={formData.overallGpa ?? ''}
+                onChange={handleChange}
+                placeholder="例：4.3"
+              />
+            </FormField>
+
           </div>
+        </section>
+
+        {/* 受験予定の方式 */}
+        <section className="mb-10">
+          <h2 className="text-base font-semibold text-gray-700 mb-2 pb-2 border-b border-gray-200">
+            受験予定の方式 <span className="text-red-500">*</span>
+          </h2>
+          <p className="text-xs text-gray-500 mb-4">複数選択可</p>
+          <div className="space-y-2">
+            {EXAM_TYPE_OPTIONS.map((option) => {
+              const checked = (formData.examTypes ?? []).includes(option);
+              return (
+                <label
+                  key={option}
+                  className="flex items-center gap-3 px-4 py-3 rounded-md border border-slate-200 bg-white cursor-pointer hover:bg-slate-50 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleExamType(option)}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <span className="text-sm text-gray-700">{option}</span>
+                </label>
+              );
+            })}
+          </div>
+          {errors.examTypes && (
+            <p className="text-red-500 text-xs mt-2">{errors.examTypes}</p>
+          )}
         </section>
 
         {/* 志望校 */}
@@ -268,40 +280,48 @@ export default function BasicInfoPage() {
                     )}
                   </p>
                   <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">大学名</label>
-                      <input
+                    <FormField
+                      label="大学名"
+                      hint={isRequired ? undefined : 'まだ決まっていなければ空欄でも大丈夫です。'}
+                      error={
+                        index === 0 ? errors.firstPreferenceUniversity : undefined
+                      }
+                    >
+                      <Input
                         type="text"
                         value={pref.university}
                         onChange={(e) =>
                           handlePreferenceChange(index, 'university', e.target.value)
                         }
-                        className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                         placeholder="例：〇〇大学"
                       />
-                      {index === 0 && errors.firstPreferenceUniversity && (
-                        <p className="text-red-500 text-xs mt-1">
-                          {errors.firstPreferenceUniversity}
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">学部名</label>
-                      <input
+                    </FormField>
+                    <FormField
+                      label="学部名"
+                      error={index === 0 ? errors.firstPreferenceFaculty : undefined}
+                    >
+                      <Input
                         type="text"
                         value={pref.faculty}
                         onChange={(e) =>
                           handlePreferenceChange(index, 'faculty', e.target.value)
                         }
-                        className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400 dark:bg-white dark:text-slate-900 dark:placeholder:text-slate-400 dark:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
                         placeholder="例：〇〇学部"
                       />
-                      {index === 0 && errors.firstPreferenceFaculty && (
-                        <p className="text-red-500 text-xs mt-1">
-                          {errors.firstPreferenceFaculty}
-                        </p>
-                      )}
-                    </div>
+                    </FormField>
+                    <FormField
+                      label="学科名（任意）"
+                      hint="まだ決まっていない場合は空欄でも大丈夫です。"
+                    >
+                      <Input
+                        type="text"
+                        value={pref.department ?? ''}
+                        onChange={(e) =>
+                          handlePreferenceChange(index, 'department', e.target.value)
+                        }
+                        placeholder="例：〇〇学科"
+                      />
+                    </FormField>
                   </div>
                 </div>
               );
@@ -309,12 +329,14 @@ export default function BasicInfoPage() {
           </div>
         </section>
 
-        <button
+        <Button
           type="submit"
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-md transition-colors"
+          variant="primary"
+          size="lg"
+          className="w-full"
         >
-          保存して活動整理フォームへ進む →
-        </button>
+          保存してHomeへ進む
+        </Button>
 
       </form>
     </div>

@@ -1,28 +1,14 @@
 export type SchoolPreference = {
   university: string;
   faculty: string;
+  department?: string; // 学科名。任意項目（既存データでは未保存の可能性あり）
 };
 
-export type ExamType =
-  | 'AO'
-  | 'RECOMMENDATION'
-  | 'BOTH'
-  | 'GENERAL_WITH_RECOMMENDATION';
-
-export type BasicFormData = {
+export type BasicInfo = {
   name: string;
-  highSchool: string;
   grade: string;
-  stream: '文系' | '理系' | '';
-  examType: ExamType | '';
+  track: '文系' | '理系' | '未定' | ''; // '' は未選択状態。バリデーションで弾く
   preferences: SchoolPreference[];
-};
-
-// 受験方式コードを日本語ラベルに変換する定数。
-// 複数ページで使うためここに一元管理している。
-export const EXAM_TYPE_LABELS: Record<ExamType, string> = {
-  AO:                          '総合型選抜',
-  RECOMMENDATION:              '学校推薦型選抜',
-  BOTH:                        '両方検討中',
-  GENERAL_WITH_RECOMMENDATION: '一般受験メイン（推薦も併用）',
+  overallGpa?: string; // 通知表「全体の学習成績の状況」。任意。未入力は ''。
+  examTypes: string[]; // 受験予定の方式（複数選択可）。未入力は []。
 };

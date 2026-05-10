@@ -30,4 +30,5 @@ export type PersistedAnalyzeState = {
   answers: string[];
   analysis: WallHittingResult | null;
   summary: SummaryResult | null;
+  displayedQuestions?: string[]; // 表示中の質問（初期5問 + 追加分）
 };

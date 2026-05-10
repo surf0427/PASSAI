@@ -45,7 +45,11 @@ export function QuestionsSection({ questions, answers, onChange, onSubmit, onRea
           disabled={loading || remainingCount <= 0}
           className="bg-blue-50 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed text-blue-700 font-semibold border border-blue-200 px-6 py-3 rounded-lg text-base transition-colors"
         >
-          {loading ? '分析中...' : `再び深掘る（残り${remainingCount}回）`}
+          {loading
+            ? '分析中...'
+            : remainingCount <= 0
+              ? '再び深掘る（本日の上限に達しました）'
+              : `再び深掘る（残り${remainingCount}回）`}
         </button>
       </div>
     </div>

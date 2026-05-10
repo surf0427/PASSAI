@@ -3,8 +3,12 @@
 import { useState } from 'react';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
+import type { BasicInfo } from '@/types/basicInfo';
 
-export function useWallHitting(activityData: ActivityData | null) {
+export function useWallHitting(
+  activityData: ActivityData | null,
+  basicInfo: BasicInfo | null = null,
+) {
   const [result, setResult] = useState<WallHittingResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -17,7 +21,9 @@ export function useWallHitting(activityData: ActivityData | null) {
       const res = await fetch('/api/analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activityData }),
+        // basicInfo を一緒に送る。API 側で UniversityContext に変換される。
+        // TODO: 将来は client 側で大学DB検索済みの universityContext を直接送るオプションも追加できる。
+        body: JSON.stringify({ activityData, basicInfo }),
       });
       const data = await res.json();
       if (!res.ok) {

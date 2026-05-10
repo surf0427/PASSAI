@@ -1,20 +1,17 @@
 import type { ActivityData } from '@/types/activity';
-import type { WallHittingResult } from '@/types/analysis';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { UniversityContext } from '@/types/universityContext';
 import { formatActivityData } from '@/lib/formatActivity';
-import { buildWallHittingPrompt } from '@/lib/prompts';
+import { buildAdditionalQuestionsPrompt } from '@/lib/prompts';
 import { anthropic, extractJson } from '@/lib/ai';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 
 export async function POST(req: Request) {
   const body = await req.json();
   const activityData: ActivityData | undefined = body.activityData;
-  // basicInfo は任意。null フォールバックで安全に扱う。
+  const existingQuestions: string[] = body.existingQuestions ?? [];
   const basicInfo: BasicInfo | null = body.basicInfo ?? null;
-  // universityContext は client から直接送られることもあれば、basicInfo から派生させることもある。
-  // TODO: 将来は basicInfo.preferences[*].university から大学DBを引いて
-  //       enrich された UniversityContext を生成する処理をここに挟む。
+  // TODO: 将来は basicInfo から大学DB検索を経由して UniversityContext を enrich する。
   const universityContext: UniversityContext | null =
     body.universityContext ?? buildUniversityContextFromBasicInfo(basicInfo);
 
@@ -23,28 +20,33 @@ export async function POST(req: Request) {
   }
 
   const activityText = formatActivityData(activityData);
-  if (!activityText.trim()) {
-    return Response.json({ error: 'activity data is empty' }, { status: 400 });
-  }
 
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+      max_tokens: 500,
       messages: [
         {
           role: 'user',
-          content: buildWallHittingPrompt({ activityText, basicInfo, universityContext }),
+          content: buildAdditionalQuestionsPrompt({
+            activityText,
+            existingQuestions,
+            basicInfo,
+            universityContext,
+          }),
         },
       ],
     });
 
     const raw = message.content[0].type === 'text' ? message.content[0].text : '';
-    const result: WallHittingResult = JSON.parse(extractJson(raw));
-    return Response.json({ result });
+    const result = JSON.parse(extractJson(raw));
+    return Response.json({ questions: result.questions as string[] });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error('Analysis API error:', msg);
-    return Response.json({ error: 'AI analysis failed', detail: msg }, { status: 500 });
+    console.error('Additional questions API error:', msg);
+    return Response.json(
+      { error: '質問の追加生成に失敗しました', detail: msg },
+      { status: 500 },
+    );
   }
 }

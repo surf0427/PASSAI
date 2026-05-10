@@ -1,23 +1,12 @@
 import type { SelfPR } from '@/types/selfPR';
+import { safeGetStorage, safeSetStorage } from '@/lib/storage/safeStorage';
 
 const STORAGE_KEY = 'selfPRs';
 
 export function loadSelfPRs(): SelfPR[] {
-  if (typeof window === 'undefined') return [];
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return [];
-  try {
-    return JSON.parse(stored) as SelfPR[];
-  } catch {
-    return [];
-  }
+  return safeGetStorage<SelfPR[]>(STORAGE_KEY, []);
 }
 
 export function saveSelfPRs(entries: SelfPR[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-  } catch (e) {
-    console.error('selfPRStorage: save failed', e);
-  }
+  safeSetStorage(STORAGE_KEY, entries);
 }
