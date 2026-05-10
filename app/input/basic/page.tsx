@@ -7,6 +7,7 @@ import { saveBasicInfo, loadBasicInfo } from '@/lib/basicInfoStorage';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { FormField } from '@/components/ui/FormField';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type FormErrors = {
   name?: string;
@@ -131,7 +132,7 @@ export default function BasicInfoPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">
-      <h1 className="text-2xl font-bold text-gray-800 mb-8">基本情報入力</h1>
+      <PageHeader title="基本情報入力" className="mb-8" />
       <form onSubmit={handleSubmit} noValidate>
 
         {/* 基本情報 */}

@@ -14,6 +14,7 @@ import CertificationActivitySection from '@/components/activity/CertificationAct
 import ContestActivitySection from '@/components/activity/ContestActivitySection';
 import ReadingActivitySection from '@/components/activity/ReadingActivitySection';
 import HobbyActivitySection from '@/components/activity/HobbyActivitySection';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 export default function ActivityPage() {
   const {
@@ -43,7 +44,7 @@ export default function ActivityPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">
-      <h1 className="text-2xl font-bold text-gray-800 mb-4">活動整理入力</h1>
+      <PageHeader title="活動整理入力" />
 
       <BasicInfoSummary basicInfo={basicInfo} />
 
