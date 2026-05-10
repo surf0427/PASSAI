@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { getSummaryForPhrase } from '@/lib/deepDiveQuestions';
 import type { StructureElement } from '@/lib/deepDiveQuestions';
+import { Button } from '@/components/ui/Button';
 
 type Props = {
   phrase: string;
@@ -43,13 +44,14 @@ export function RewriteGuide({ phrase, answers, onClose }: Props) {
             「{phrase}」の書き直し用メモ（コピペOK）
           </h3>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onClose}
-          className="shrink-0 text-xs text-blue-400 hover:text-blue-600 border border-blue-200 rounded px-2 py-1"
+          className="shrink-0"
         >
           閉じる
-        </button>
+        </Button>
       </div>
 
       <div className="space-y-5">
