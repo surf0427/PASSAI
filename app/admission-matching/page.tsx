@@ -9,7 +9,15 @@ import type { SelfPR } from '@/types/selfPR';
 import type { AiMatchAdvice } from '@/app/api/matching/route';
 import Link from 'next/link';
 import { buildMatchingResults } from '@/lib/matching/suggestUniversities';
-import { collectAndSaveMatchingInput, getMissingItems, markMatchingCompleted } from '@/lib/admissionMatchingStorage';
+import {
+  collectAndSaveMatchingInput,
+  getMissingItems,
+  markMatchingCompleted,
+  loadAiMatchAdviceCache,
+  loadAiMatchAdviceTimestamp,
+  saveAiMatchAdviceCache,
+  type AiMatchAdviceCache,
+} from '@/lib/admissionMatchingStorage';
 import { loadActivityData } from '@/lib/activityStorage';
 import { loadSelfPRs } from '@/lib/selfPRStorage';
 import { deriveStudentAnalysis } from '@/lib/matching/deriveStudentAnalysis';
@@ -21,17 +29,6 @@ import {
   StrengthWeaknessGrid,
   ImprovementList,
 } from '@/components/shared/result';
-
-// ── キャッシュキー ───────────────────────────────────────────────
-
-const CACHE_KEY = 'matchingResult';
-const CACHE_TS_KEY = 'matchingTimestamp';
-
-type CachedResult = {
-  results: MatchingResult[];
-  aiAdvices: AiMatchAdvice[];
-  matchingLevel: 'basic' | 'full';
-};
 
 // ── 変換ヘルパー ─────────────────────────────────────────────────
 
@@ -103,14 +100,11 @@ export default function AdmissionMatchingPage() {
     }
 
     // キャッシュ済み結果があれば「以前の診断結果を見る」ボタンを有効化
-    try {
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (cached) {
-        setHasCachedResult(true);
-        const ts = localStorage.getItem(CACHE_TS_KEY);
-        if (ts) setCachedTimestamp(ts);
-      }
-    } catch {}
+    if (loadAiMatchAdviceCache()) {
+      setHasCachedResult(true);
+      const ts = loadAiMatchAdviceTimestamp();
+      if (ts) setCachedTimestamp(ts);
+    }
 
     setLoading(false);
   }, []);
@@ -170,14 +164,10 @@ export default function AdmissionMatchingPage() {
     try {
       const advices = await handleAiEnhance();
       // キャッシュ保存（API成功時のみ）
-      try {
-        const ts = new Date().toISOString();
-        const cache: CachedResult = { results, aiAdvices: advices, matchingLevel: level };
-        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-        localStorage.setItem(CACHE_TS_KEY, ts);
-        setHasCachedResult(true);
-        setCachedTimestamp(null); // live結果なので表示タイムスタンプはクリア
-      } catch {}
+      const cache: AiMatchAdviceCache = { results, aiAdvices: advices, matchingLevel: level };
+      saveAiMatchAdviceCache(cache, new Date().toISOString());
+      setHasCachedResult(true);
+      setCachedTimestamp(null); // live結果なので表示タイムスタンプはクリア
       markMatchingCompleted();
       setHasRunMatching(true);
     } catch (error) {
@@ -189,19 +179,17 @@ export default function AdmissionMatchingPage() {
   };
 
   function handleShowCached() {
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      const ts  = localStorage.getItem(CACHE_TS_KEY);
-      if (!raw) return;
-      const cached = JSON.parse(raw) as CachedResult;
-      setResults(cached.results);
-      setAiAdvices(cached.aiAdvices);
-      setMatchingLevel(cached.matchingLevel);
-      setCachedTimestamp(ts);
-      setHasRunMatching(true);
-    } catch {
+    const cached = loadAiMatchAdviceCache();
+    if (!cached) {
+      // hasCachedResult が true だったのに読めない = データ破損などの異常系
       alert('保存済みの結果を読み込めませんでした。');
+      return;
     }
+    setResults(cached.results);
+    setAiAdvices(cached.aiAdvices);
+    setMatchingLevel(cached.matchingLevel);
+    setCachedTimestamp(loadAiMatchAdviceTimestamp());
+    setHasRunMatching(true);
   }
 
   function handleReset() {
@@ -210,12 +198,7 @@ export default function AdmissionMatchingPage() {
     setAiAdvices([]);
     setAiError('');
     // 確認ページに戻った後もキャッシュ日時を表示するため localStorage から再読み込み
-    try {
-      const ts = localStorage.getItem(CACHE_TS_KEY);
-      setCachedTimestamp(ts);
-    } catch {
-      setCachedTimestamp(null);
-    }
+    setCachedTimestamp(loadAiMatchAdviceTimestamp());
   }
 
   // ── ローディング ────────────────────────────────────────────────

@@ -7,6 +7,8 @@
 // 【ライフサイクル】「AI志望校マッチングへ進む」ボタン押下時に保存 → /matching で読み込む
 
 import type { AdmissionMatchingInput } from '@/types/admissionMatchingInput';
+import type { MatchingResult } from '@/types/matching';
+import type { AiMatchAdvice } from '@/app/api/matching/route';
 import { loadBasicInfo } from './basicInfoStorage';
 import { loadActivityData } from './activityStorage';
 import { loadSelfPRs } from './selfPRStorage';
@@ -46,6 +48,46 @@ export function markMatchingCompleted(): void {
 
 export function loadMatchingResult(): { completed: boolean } | null {
   return safeGetStorage<{ completed: boolean } | null>(MATCHING_RESULT_KEY, null);
+}
+
+// ── AI マッチング結果キャッシュ ──────────────────────────────────
+// 【保存先】localStorage
+// 【用途】/admission-matching の「以前の診断結果を見る」ボタン
+// 【ライフサイクル】API 成功時に保存 → 再訪問時 / handleShowCached で読み込み
+//
+// 注: timestamp（CACHE_TS_KEY）は既存ユーザーの保存データ互換のため raw ISO 文字列のまま扱う。
+//     selfPR_draft と同様の legacy raw string 例外。新規 storage で raw string は使わない。
+
+const CACHE_KEY = 'matchingResult';
+const CACHE_TS_KEY = 'matchingTimestamp';
+
+export type AiMatchAdviceCache = {
+  results: MatchingResult[];
+  aiAdvices: AiMatchAdvice[];
+  matchingLevel: 'basic' | 'full';
+};
+
+export function loadAiMatchAdviceCache(): AiMatchAdviceCache | null {
+  return safeGetStorage<AiMatchAdviceCache | null>(CACHE_KEY, null);
+}
+
+export function loadAiMatchAdviceTimestamp(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(CACHE_TS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveAiMatchAdviceCache(cache: AiMatchAdviceCache, timestamp: string): void {
+  safeSetStorage(CACHE_KEY, cache);
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(CACHE_TS_KEY, timestamp);
+  } catch {
+    // 保存失敗時もアプリは落とさない
+  }
 }
 
 // 不足しているデータ項目名を返す（マッチングページでの警告表示に使う）
