@@ -313,13 +313,13 @@ export function NgWordCheck({ issues, onStartRewrite, onInsertStarterHint }: Pro
                           </button>
                         )}
                         {isDone && !isSessionActive && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => handleReview(issue.phrase)}
-                            className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 hover:border-gray-300 rounded-lg px-3 py-1.5 transition-colors"
                           >
                             {isReviewing ? '回答を閉じる' : '回答を確認する'}
-                          </button>
+                          </Button>
                         )}
                       </div>
                     </div>
