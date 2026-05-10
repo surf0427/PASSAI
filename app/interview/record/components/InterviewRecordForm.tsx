@@ -12,6 +12,7 @@ import type { NewInterviewRecord } from '@/lib/interviewRecordStorage';
 import { loadInterviewDraft, saveInterviewDraft, clearInterviewDraft } from '@/lib/interviewDraftStorage';
 import { generateInterviewFeedback } from '@/lib/generateInterviewFeedback';
 import { AlertBox } from '@/components/ui/AlertBox';
+import { Button } from '@/components/ui/Button';
 
 const INITIAL_FORM_DATA: InterviewRecordFormData = {
   practiceDate: '',
@@ -246,13 +247,14 @@ export function InterviewRecordForm() {
         ))}
 
         {/* 質問追加ボタン */}
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="md"
           onClick={handleAddQA}
-          className="w-full border border-dashed border-blue-300 text-blue-500 hover:bg-blue-50 text-sm font-semibold py-2.5 rounded-lg transition-colors mb-5"
+          className="w-full border-dashed mb-5"
         >
           ＋ 質問を追加する
-        </button>
+        </Button>
 
         <div className="mb-5">
           <label className="block text-sm font-semibold text-gray-700 mb-1">
