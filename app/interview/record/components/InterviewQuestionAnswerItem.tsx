@@ -1,4 +1,4 @@
-import type { QuestionAnswerItem } from '../types';
+import type { QuestionAnswerItem } from '@/types/interview';
 
 const TEXTAREA_CLASS =
   'w-full border border-slate-300 rounded-lg px-4 py-3 text-sm leading-relaxed bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y';

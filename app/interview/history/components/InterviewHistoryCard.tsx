@@ -1,4 +1,4 @@
-import type { InterviewRecord } from '../types';
+import type { InterviewRecord } from '@/types/interview';
 
 type Props = {
   record: InterviewRecord;

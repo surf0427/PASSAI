@@ -1,4 +1,4 @@
-import type { QuestionAnswerItem } from '@/app/interview/record/types';
+import type { QuestionAnswerItem } from '@/types/interview';
 import { safeGetStorage, safeSetStorage, safeRemoveStorage } from '@/lib/storage/safeStorage';
 
 // 面接練習フォーム（質問・回答セット）の入力途中下書き。

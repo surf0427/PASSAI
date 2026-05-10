@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import type { InterviewRecordFormData, QuestionAnswerItem } from '../types';
+import type { InterviewRecordFormData } from '../types';
+import type { QuestionAnswerItem } from '@/types/interview';
 import type { BasicInfo } from '@/types/basicInfo';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { EXAM_TYPE_OPTIONS } from '@/app/interview/constants';

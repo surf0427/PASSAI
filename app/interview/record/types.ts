@@ -2,6 +2,9 @@
 // questionsAsked / myAnswers は UI の QuestionAnswerItem[] から生成される旧形式文字列。
 // 新規コードでは QuestionAnswerItem[] を直接扱い、
 // 送信直前にのみこの型へ変換すること。
+//
+// QuestionAnswerItem は中立レイヤー（types/interview.ts）に移管済み。
+// 当ファイルは record 機能のフォーム固有型のみを置く。
 export type InterviewRecordFormData = {
   // 基本情報
   practiceDate: string;
@@ -16,11 +19,4 @@ export type InterviewRecordFormData = {
   whatWentWrong: string;
   feedbackReceived: string;
   selfNoted: string;
-};
-
-// UIの入力単位（新形式）。送信時に questionsAsked / myAnswers へ変換される。
-export type QuestionAnswerItem = {
-  id: string;
-  question: string;
-  answer: string;
 };

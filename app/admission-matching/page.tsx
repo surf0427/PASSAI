@@ -2,11 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import type { BasicInfo } from '@/types/basicInfo';
-import type { MatchingBasicInfo, MatchingResult } from '@/types/matching';
+import type { MatchingBasicInfo, MatchingResult, AiMatchAdvice } from '@/types/matching';
 import type { WallHittingResult } from '@/types/analysis';
 import type { ActivityData } from '@/types/activity';
 import type { SelfPR } from '@/types/selfPR';
-import type { AiMatchAdvice } from '@/app/api/matching/route';
 import Link from 'next/link';
 import { buildMatchingResults } from '@/lib/matching/suggestUniversities';
 import {

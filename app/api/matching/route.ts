@@ -13,7 +13,7 @@
 //   3. 学科適性（学部より細かい deterministic 判定）を score breakdown に追加
 //
 import type { WallHittingResult } from '@/types/analysis';
-import type { MatchingResult } from '@/types/matching';
+import type { MatchingResult, AiMatchAdvice } from '@/types/matching';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { UniversityContext } from '@/types/universityContext';
@@ -27,16 +27,6 @@ import {
   buildUniversityContextsFromBasicInfo,
   findUniversityContextByName,
 } from '@/lib/matching/buildUniversityContextsFromBasicInfo';
-
-// AI が生成する各大学への強化アドバイス
-export type AiMatchAdvice = {
-  universityId: string;
-  reason: string;
-  strengthPoints: string[];
-  weaknesses: string[];
-  actionItems: string[];
-  nextStep?: string;
-};
 
 // JSON.parse を安全に行う
 function safeParseJson<T>(text: string): T {

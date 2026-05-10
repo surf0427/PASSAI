@@ -1,4 +1,4 @@
-import type { InterviewRecord } from '../types';
+import type { InterviewRecord } from '@/types/interview';
 import { InterviewHistoryCard } from './InterviewHistoryCard';
 import { InterviewHistoryEmpty } from './InterviewHistoryEmpty';
 

@@ -7,8 +7,7 @@
 // 【ライフサイクル】「AI志望校マッチングへ進む」ボタン押下時に保存 → /matching で読み込む
 
 import type { AdmissionMatchingInput } from '@/types/admissionMatchingInput';
-import type { MatchingResult } from '@/types/matching';
-import type { AiMatchAdvice } from '@/app/api/matching/route';
+import type { MatchingResult, AiMatchAdvice } from '@/types/matching';
 import { loadBasicInfo } from './basicInfoStorage';
 import { loadActivityData } from './activityStorage';
 import { loadSelfPRs } from './selfPRStorage';

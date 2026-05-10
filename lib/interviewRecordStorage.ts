@@ -1,4 +1,4 @@
-import type { InterviewRecord } from '@/app/interview/history/types';
+import type { InterviewRecord } from '@/types/interview';
 import { safeGetStorage, safeSetStorage, safeRemoveStorage } from '@/lib/storage/safeStorage';
 
 const INTERVIEW_RECORDS_STORAGE_KEY = 'interview_records';

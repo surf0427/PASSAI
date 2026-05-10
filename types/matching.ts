@@ -116,3 +116,16 @@ export type MatchingResult = {
   suggestionType: '自分の志望校' | 'ストレートマッチ' | '潜在マッチ';
   matchSummary: string;
 };
+
+// ── AI 強化アドバイス ───────────────────────────────────────────
+// 文章生成層 (/app/api/matching/route.ts) が大学ごとに返す narrative。
+// スコアリング層の MatchingResult と組み合わせて表示する。
+
+export type AiMatchAdvice = {
+  universityId: string;
+  reason: string;
+  strengthPoints: string[];
+  weaknesses: string[];
+  actionItems: string[];
+  nextStep?: string;
+};

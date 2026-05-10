@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { InterviewRecord } from '../types';
+import type { InterviewRecord } from '@/types/interview';
 import { getInterviewRecords, deleteInterviewRecord } from '@/lib/interviewRecordStorage';
 import { InterviewHistoryList } from './InterviewHistoryList';
 
