@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { analyzeStructure } from '@/lib/structureAnalysis';
 import type { StructureAnalysis, StructureElement } from '@/lib/structureAnalysis';
 import { Card } from '@/components/ui/Card';
@@ -66,16 +66,12 @@ type Props = {
 };
 
 export function StructureCheck({ text }: Props) {
-  const [analysis, setAnalysis] = useState<StructureAnalysis[]>([]);
-
-  useEffect(() => {
-    if (!text.trim()) {
-      setAnalysis([]);
-      return;
-    }
+  // analysis は text から決まる純粋な derived state。
+  // analyzeStructure は副作用のない純関数なので、useState + useEffect で持たず useMemo で直接導出する。
+  const analysis = useMemo<StructureAnalysis[]>(() => {
+    if (!text.trim()) return [];
     const result = analyzeStructure(text);
-    const sorted = DISPLAY_ORDER.map((t) => result.find((a) => a.type === t)!).filter(Boolean);
-    setAnalysis(sorted);
+    return DISPLAY_ORDER.map((t) => result.find((a) => a.type === t)!).filter(Boolean);
   }, [text]);
 
   if (analysis.length === 0) return null;
