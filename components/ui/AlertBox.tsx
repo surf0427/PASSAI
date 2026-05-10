@@ -21,8 +21,14 @@ export function AlertBox({
   children,
   ...rest
 }: Props) {
+  // error / warning は割り込み（assertive）通知、info / success は穏やかな通知。
+  // 呼び出し側が role / aria-live を渡した場合は ...rest で上書きされる（spread が後勝ち）。
+  const isAssertive = variant === 'error' || variant === 'warning';
+
   return (
     <div
+      role={isAssertive ? 'alert' : 'status'}
+      aria-live={isAssertive ? 'assertive' : 'polite'}
       className={`${ALERT_BASE} ${ALERT_VARIANT[variant]} ${className}`}
       {...rest}
     >
