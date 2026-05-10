@@ -297,14 +297,15 @@ export function InterviewRecordForm() {
       </section>
 
       {/* 送信ボタン */}
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="md"
         onClick={handleSubmit}
         disabled={isSubmitting}
-        className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors mb-4"
+        className="mb-4"
       >
         {isSubmitting ? 'AIが改善点を作成中...' : '改善点を確認する'}
-      </button>
+      </Button>
 
       {savedMessage && (
         <AlertBox variant="success" className="mb-8">
