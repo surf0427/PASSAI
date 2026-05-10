@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewHistoryClient } from './components/InterviewHistoryClient';
 
 export default function InterviewHistoryPage() {
@@ -12,12 +13,11 @@ export default function InterviewHistoryPage() {
         ← 面接練習トップへ戻る
       </Link>
 
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-3">過去の練習記録</h1>
-        <p className="text-gray-600 text-sm leading-relaxed">
-          これまでの面接練習の記録と改善ポイントを確認できます。
-        </p>
-      </div>
+      <PageHeader
+        title="過去の練習記録"
+        description="これまでの面接練習の記録と改善ポイントを確認できます。"
+        className="mb-8"
+      />
 
       <InterviewHistoryClient />
 

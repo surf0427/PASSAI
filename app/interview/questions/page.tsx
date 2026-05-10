@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewQuestionForm } from './components/InterviewQuestionForm';
 
 export default function InterviewQuestionsPage() {
@@ -12,12 +13,11 @@ export default function InterviewQuestionsPage() {
         ← 面接練習トップへ戻る
       </Link>
 
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-3">予想質問を作る</h1>
-        <p className="text-gray-600 text-sm leading-relaxed">
-          志望大学や活動内容を入力すると、面接で聞かれそうな質問を作成できます。
-        </p>
-      </div>
+      <PageHeader
+        title="予想質問を作る"
+        description="志望大学や活動内容を入力すると、面接で聞かれそうな質問を作成できます。"
+        className="mb-8"
+      />
 
       <InterviewQuestionForm />
 
