@@ -170,12 +170,18 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [statuses, setStatuses] = useState<Record<string, ProgressStatus>>({});
 
+  // この useEffect はマウント時に基本情報未入力なら /input/basic へ遷移させる
+  // genuine side-effect（router.replace）が主目的。setState 群は遷移しない側の
+  // 早期 return 後に走るミラーリングで、useSyncExternalStore + useMemo へは
+  // 置換できない（navigation 自体が外部副作用で、値の派生では表現できないため）。
+  // よって react-hooks/set-state-in-effect は意図的に block-disable する。
   useEffect(() => {
     const info = loadBasicInfo();
     if (!info) {
       router.replace('/input/basic');
       return;
     }
+    /* eslint-disable react-hooks/set-state-in-effect */
     setBasicInfo(info);
     setStatuses({
       '/input/activity':     checkActivityStatus(),
@@ -186,6 +192,7 @@ export default function HomePage() {
       '/interview':          checkInterviewStatus(),
     });
     setIsLoading(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [router]);
 
   if (isLoading) return null;
