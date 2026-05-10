@@ -1,12 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { LinkButton } from '@/components/ui/LinkButton';
 import {
   loadDiagnosisResult,
   type DiagnosisResult,
 } from '@/lib/diagnosisStorage';
 import type { DiagnosisType } from '@/types/diagnosis';
+
+// マウント前 false / マウント後 true を返す flag。
+// loadDiagnosisResult() は localStorage 依存のため SSR では null を返したい。
+// useSyncExternalStore の getServerSnapshot/getSnapshot で setState なしにこの semantics を表現する。
+// （STEP9 hooks/useActivityForm.ts / STEP10 app/interview/page.tsx と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
 
 // ── /home 上部に表示する「あなたの診断タイプ」カード ──────────────
 // /diagnosis で localStorage に保存した結果を読み取り、タイプ別の
@@ -75,16 +83,19 @@ function formatDate(iso: string): string {
 }
 
 export function DiagnosisTypeCard() {
-  // hydration mismatch 回避：マウント前は何も描画しない
-  const [loaded, setLoaded] = useState(false);
-  const [result, setResult] = useState<DiagnosisResult | null>(null);
+  // hydration mismatch 回避：マウント前は何も描画しない。
+  // マウント後に loadDiagnosisResult() を 1度だけ呼んで以降は memo 値を返す。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const result = useMemo<DiagnosisResult | null>(
+    () => (isMounted ? loadDiagnosisResult() : null),
+    [isMounted],
+  );
 
-  useEffect(() => {
-    setResult(loadDiagnosisResult());
-    setLoaded(true);
-  }, []);
-
-  if (!loaded) return null;
+  if (!isMounted) return null;
 
   if (!result || !isResultUsable(result)) {
     return <PromoCard />;
