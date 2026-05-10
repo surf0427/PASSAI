@@ -1,6 +1,7 @@
 import { anthropic } from '@/lib/ai';
 import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
+import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -47,10 +48,16 @@ export async function POST(req: Request) {
 - 完成文は絶対に出さない`;
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
+  const firstPreference = basicInfo?.preferences?.[0];
+  const essayUniversityContext = buildEssayUniversityContext({
+    university: firstPreference?.university ?? '',
+    faculty: firstPreference?.faculty ?? '',
+    department: firstPreference?.department ?? '',
+  });
 
   const userMessage = `${basicInfoSection}
 
-【テーマ】
+${essayUniversityContext ? `${essayUniversityContext}\n\n` : ''}【テーマ】
 ${theme}
 
 【生徒の結論（1文）】

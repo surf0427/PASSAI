@@ -1,6 +1,7 @@
 import { anthropic, extractJson } from '@/lib/ai';
 import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
+import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 
 // 受験方式に応じた小論文添削の方針を生成する。breakdown 構造（5項目固定）には影響を与えず、
 // improvement / weakPoints / goodPoints の中身を文脈に沿わせるためだけに使う。
@@ -220,12 +221,18 @@ export async function POST(req: Request) {
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
   const examTypeGuidance = buildExamTypeEssayGuidance(basicInfo?.examTypes);
+  const firstPreference = basicInfo?.preferences?.[0];
+  const essayUniversityContext = buildEssayUniversityContext({
+    university: firstPreference?.university ?? '',
+    faculty: firstPreference?.faculty ?? '',
+    department: firstPreference?.department ?? '',
+  });
 
   const userMessage = `以下の小論文を採点・添削してください。
 
 ${basicInfoSection}
 
-${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}【テーマ】
+${essayUniversityContext ? `${essayUniversityContext}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}【テーマ】
 ${theme || '（未入力）'}
 
 【生徒の結論（1文）】
