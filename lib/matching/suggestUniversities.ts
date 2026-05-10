@@ -14,7 +14,7 @@ import type {
   University,
   MatchingResult,
 } from '@/types/matching';
-import { universities } from '@/data/universities';
+import { getAllUniversities } from '@/lib/universities';
 import { calculateScoreBreakdown, calculateOverallMatchScore } from './calculateScore';
 import {
   generateMatchReason,
@@ -166,6 +166,8 @@ export function buildMatchingResults(
   basicInfo: MatchingBasicInfo,
   analysis: StudentAnalysis,
 ): MatchingResult[] {
+  const universities = getAllUniversities();
+
   // ① 自分の志望校
   const choiceResults = evaluateStudentChoices(basicInfo, analysis, universities);
   const usedIds = choiceResults.map((r) => r.university.id);

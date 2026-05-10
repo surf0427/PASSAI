@@ -153,3 +153,25 @@ key 一覧と保存形式の正本は [`lib/storage/README.md`](./storage/README
 
 3. **同期 → 非同期 API の変換**
    - localStorage 同期、Supabase 非同期。`load*` / `save*` 関数のシグネチャが `Promise` 返却に変わる。呼び出し側全箇所で `await` の追加が必要になる。Supabase 導入と同 PR で一括変換する想定。
+
+---
+
+## 大学DB（`lib/universities.ts`）
+
+`data/universities.ts` / `data/universityEntries.ts` の**唯一の読み取り境界**。`page` / `route` / 他 `lib` から `data/` 配下を直接 import せず、必ず `lib/universities.ts` 経由で読む。Supabase 移行時はこのファイルの中身だけを差し替える。
+
+### 利用ルールの正本
+
+機能別の DB 利用方針 / AI プロンプト原則 / 例外対応 / 将来 helper の予約は **[`docs/principles/university_database_usage_guide.md`](../docs/principles/university_database_usage_guide.md) が正本**。本セクションには重複させない。
+
+### lib/ 観点で押さえるべき要点
+
+- 現状エクスポートは `getAllUniversities(): University[]` のみ。matching が唯一の消費者
+- `data/` 配下に大学データは 5 ファイル併存:
+  - [`data/universities.ts`](../data/universities.ts) — 旧 matching 用（学部単位・約 25 件、`types/matching.ts:University`）
+  - [`data/universityEntries.ts`](../data/universityEntries.ts) — CSV 由来の新DB（入試方式単位・約 532 件、`UniversityEntry` 型・現状 import ゼロ）
+  - [`data/universityMaster.ts`](../data/universityMaster.ts) — 大学マスタ（学校単位・24 件、`UniversityMaster` 型・現状 import ゼロ）。`universityEntries` と `school_id` で結合する想定
+  - [`data/selectionSteps.ts`](../data/selectionSteps.ts) — 選考ステップ詳細（選考フロー単位・466 件、`SelectionStep` 型・現状 import ゼロ）。`universityEntries` と `entry_id` で結合する想定
+  - [`data/updateLogs.ts`](../data/updateLogs.ts) — 更新ログ（メタ情報・初期は空配列、`UpdateLog` 型・現状 import ゼロ）。`target_type` + `target_id` で任意レイヤーへの soft FK
+- Supabase 移行時は `lib/universities.ts` の中身のみを差し替える。同期 → 非同期化が必要になった場合は呼び出し側 `await` 化を別 STEP として独立させる
+- 新規 helper / 型切り出し / context builder は禁止。消費者が現れた PR で初めて追加する
