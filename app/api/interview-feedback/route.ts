@@ -3,6 +3,7 @@ import { anthropic } from '@/lib/ai';
 import type { Level, LevelEvaluation, InterviewFeedback } from '@/types/interview';
 import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
+import { buildInterviewUniversityContext } from '@/lib/buildInterviewUniversityContext';
 
 export type { InterviewFeedback };
 
@@ -203,6 +204,10 @@ export async function POST(request: Request) {
 
     const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
     const examTypeGuidance = buildExamTypeInterviewGuidance(basicInfo?.examTypes);
+    const interviewUniversityContext = buildInterviewUniversityContext({
+      university: universityName,
+      facultyName,
+    });
 
     const prompt = `あなたは大学の総合型選抜・学校推薦型選抜に詳しい面接指導者です。
 受験生の「質問と回答のペア」を分析し、必ず以下のJSON形式だけで返してください。JSON以外のテキストは一切含めないでください。
@@ -249,7 +254,7 @@ ${basicInfoSection}
 学部・学科：${facultyName}
 志望理由：${motivation || '（未入力）'}
 ${examTypeGuidance ? `\n${examTypeGuidance}\n` : ''}
-【質問と回答】
+${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}【質問と回答】
 ${qaText}
 
 ---
