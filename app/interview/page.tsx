@@ -1,11 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import type { BasicInfo } from '@/types/basicInfo';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewMenuCard } from './components/InterviewMenuCard';
+
+// マウント前 false / マウント後 true を返す flag。
+// loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
+// useSyncExternalStore の getServerSnapshot/getSnapshot で setState なしにこの semantics を表現する。
+// （STEP9 hooks/useActivityForm.ts と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
 
 const MENU_ITEMS = [
   {
@@ -30,10 +38,16 @@ const MENU_ITEMS = [
 
 export default function InterviewPage() {
   // 表示用に basicInfo を取得する。共通関数 loadBasicInfo() 経由で localStorage を直接読まない。
-  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
-  useEffect(() => {
-    setBasicInfo(loadBasicInfo());
-  }, []);
+  // マウント前は null、マウント後に loadBasicInfo() を 1度だけ呼んで以降は memo 値を返す。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const basicInfo = useMemo<BasicInfo | null>(
+    () => (isMounted ? loadBasicInfo() : null),
+    [isMounted],
+  );
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
