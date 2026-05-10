@@ -5,6 +5,7 @@ import type { NgWordIssue } from '@/lib/detectNgWords';
 import { useDeepDive } from '@/hooks/useDeepDive';
 import { DeepDivePanel, DeepDiveReviewPanel } from '@/components/DeepDivePanel';
 import { QualityDeepDive } from '@/components/QualityDeepDive';
+import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 
 type Props = {
@@ -213,13 +214,13 @@ export function NgWordCheck({ issues, onStartRewrite, onInsertStarterHint }: Pro
                               >
                                 {copiedPhrase === issue.phrase ? '✔ コピーしました' : 'コピーする'}
                               </button>
-                              <button
-                                type="button"
+                              <Button
+                                variant="outline"
+                                size="sm"
                                 onClick={() => onInsertStarterHint(issue.starterHint!)}
-                                className="text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-3 py-1.5 transition-colors"
                               >
                                 本文に入れる
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         )}
@@ -227,13 +228,13 @@ export function NgWordCheck({ issues, onStartRewrite, onInsertStarterHint }: Pro
                         {/* 深掘りボタン */}
                         {issue.qualityType && !isQualityDiveActive && (
                           <div className="pt-3 border-t border-gray-100 mt-1">
-                            <button
-                              type="button"
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => setActiveQualityDive(issue.phrase)}
-                              className="text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors"
                             >
                               この部分を深掘りする
-                            </button>
+                            </Button>
                           </div>
                         )}
                       </div>
@@ -294,13 +295,13 @@ export function NgWordCheck({ issues, onStartRewrite, onInsertStarterHint }: Pro
                       {/* アクションボタン */}
                       <div className="flex flex-wrap gap-2">
                         {!isSessionActive && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="outline"
+                            size="sm"
                             onClick={() => handleStart(issue)}
-                            className="text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors"
                           >
                             この部分を具体化する
-                          </button>
+                          </Button>
                         )}
                         {isSessionActive && !isComplete && (
                           <button
