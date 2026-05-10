@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useSyncExternalStore } from 'react';
 import type { PartTimeJobActivity } from '@/types/activity';
 import { ActivityCard } from './ActivityCard';
 import { ActivitySectionShell } from './ActivitySectionShell';
@@ -11,6 +11,15 @@ import { Button } from '@/components/ui/Button';
 const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
 const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
 
+// useActivityForm が localStorage から activities を hydrate するため、
+// 親 useState の lazy initializer がサーバ（空）とクライアント（保存値あり）で
+// 異なる値を返し、count badge が hydration mismatch の原因になる。
+// useSyncExternalStore の getServerSnapshot/getSnapshot を使うと、
+// マウント前は false、マウント後は true を返す flag を setState in effect なしで作れる。
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
+
 type Props = {
   activities: PartTimeJobActivity[];
   errors?: string[];
@@ -21,13 +30,10 @@ type Props = {
 };
 
 export default function PartTimeJobActivitySection({ activities, errors, onAdd, onRemove, onUpdate, onUpdatePeriod }: Props) {
-  const [isMounted, setIsMounted] = useState(false);
+  const isMounted = useSyncExternalStore(subscribeMount, getMountedSnapshot, getMountedServerSnapshot);
   const [isOpen, setIsOpen] = useState(activities.length > 0);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const prevLen = useRef(activities.length);
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
   useEffect(() => {
     if (activities.length > prevLen.current) setEditingIndex(activities.length - 1);
     prevLen.current = activities.length;
