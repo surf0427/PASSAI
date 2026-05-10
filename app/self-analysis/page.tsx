@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { ActivityData } from '@/types/activity';
@@ -17,6 +17,14 @@ import { saveAnalyzeState, loadAnalyzeState, clearAnalyzeState } from '@/lib/ana
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { AiInlineThinking, ImprovementList } from '@/components/shared/result';
+
+// マウント前 false / マウント後 true を返す flag。
+// loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
+// useSyncExternalStore の getServerSnapshot/getSnapshot で setState なしにこの semantics を表現する。
+// （STEP9/10/14 と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
 
 export default function SelfAnalysisPage() {
   const router = useRouter();
@@ -49,10 +57,21 @@ export default function SelfAnalysisPage() {
       return null;
     }
   });
+  // SSRとCSRのHTML不一致（Hydration error）を防ぐためのフラグ。
+  // localStorageから復元した値に依存するUIはこれが true になってから描画する。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
   // basicInfo は 3 つの自己分析API（analysis / analysis/additional / summarize）に同梱して、
   // AI が志望大学・学部・学科・受験方式・文理・学年を踏まえた分析を返せるようにする。
   // 共通関数 loadBasicInfo() 経由で取得し、null フォールバック対応済み。
-  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
+  // マウント前は null、マウント後に loadBasicInfo() を 1度だけ呼んで以降は memo 値を返す。
+  const basicInfo = useMemo<BasicInfo | null>(
+    () => (isMounted ? loadBasicInfo() : null),
+    [isMounted],
+  );
   const [answers, setAnswers] = useState<string[]>(
     () => loadAnalyzeState()?.answers ?? [],
   );
@@ -84,9 +103,6 @@ export default function SelfAnalysisPage() {
   const [summarizeError, setSummarizeError] = useState('');
   const [addQuestionsLoading, setAddQuestionsLoading] = useState(false);
   const [addQuestionsError, setAddQuestionsError] = useState('');
-  // SSRとCSRのHTML不一致（Hydration error）を防ぐためのフラグ
-  // localStorageから復元した値に依存するUIはこれが true になってから描画する
-  const [isMounted, setIsMounted] = useState(false);
 
   // freshAnalysis: APIから取得した新規結果。analysis: 新規 or 復元のいずれか
   const { result: freshAnalysis, loading: analysisLoading, error: analysisError, run: runAnalysis } = useWallHitting(activityData, basicInfo);
@@ -111,13 +127,6 @@ export default function SelfAnalysisPage() {
     if (step === 'confirm') return; // confirm 中は保存しない
     saveAnalyzeState({ step, answers, analysis, summary, displayedQuestions });
   }, [step, answers, analysis, summary, displayedQuestions]);
-
-  // クライアントにマウントされたことを記録する
-  // 同タイミングで basicInfo もロードする（SSR と localStorage の hydration 不整合を避けるため）
-  useEffect(() => {
-    setIsMounted(true);
-    setBasicInfo(loadBasicInfo());
-  }, []);
 
   async function handleAnalyze() {
     if (loading) return;
