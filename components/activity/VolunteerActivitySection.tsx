@@ -5,8 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
 import { AlertBox } from '@/components/ui/AlertBox';
-
-const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
+import { Button } from '@/components/ui/Button';
 
 // activity 系セクションのフォーム振る舞いはセクション全体で 1 つの hasError を持ち、
 // 最初の必須 input にだけ赤枠を付けて「ここを直して」を示す（個別 error 文言は出さない）。
@@ -71,9 +70,9 @@ export default function VolunteerActivitySection({ activities, errors, onAdd, on
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        <button type="button" onClick={handleAdd} className={`${addBtnClass} ml-3`}>
+        <Button variant="outline" size="sm" onClick={handleAdd} className="ml-3 shrink-0">
           ＋ 追加
-        </button>
+        </Button>
       </div>
 
       {isOpen && (

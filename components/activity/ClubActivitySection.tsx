@@ -5,8 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
 import { AlertBox } from '@/components/ui/AlertBox';
-
-const addBtnClass = 'text-sm text-blue-600 border border-blue-300 rounded px-3 py-1 hover:bg-blue-50 shrink-0';
+import { Button } from '@/components/ui/Button';
 
 const ERROR_INPUT_CLASS = '!border-red-400 focus:!ring-red-400';
 const TEXTAREA_CLASS = 'resize-none min-h-[80px]';
@@ -67,9 +66,9 @@ export default function ClubActivitySection({ activities, errors, onAdd, onRemov
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        <button type="button" onClick={handleAdd} className={`${addBtnClass} ml-3`}>
+        <Button variant="outline" size="sm" onClick={handleAdd} className="ml-3 shrink-0">
           ＋ 追加
-        </button>
+        </Button>
       </div>
 
       {/* コンテンツ（折りたたみ） */}

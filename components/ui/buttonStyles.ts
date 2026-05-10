@@ -11,6 +11,8 @@
 //     値は Tailwind blue-600 / indigo-600 と同等のため、
 //     既存 bg-blue-600 直書きから差し替えても視覚差は出ない。
 //   - 緑系ボタンは原則使わない（プロダクト全体で青系に統一）。
+//     例外: success / 保存完了の肯定的フィードバック文脈に限り許容。
+//     新規追加時は要レビュー（緑を primary 用途に広げない）。
 
 export type ButtonVariant =
   | 'primary'
