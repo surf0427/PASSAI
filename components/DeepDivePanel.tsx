@@ -328,14 +328,15 @@ export function DeepDiveReviewPanel({
 
         {/* 書き直しCTA */}
         <div className="border-t border-gray-100 pt-5">
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="md"
             onClick={onRewrite}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+            className="w-full gap-2"
           >
             <span>▶</span>
             <span>この内容をもとに書き直す</span>
-          </button>
+          </Button>
           <p className="text-xs text-gray-400 text-center mt-2">
             入力欄へ移動し、書き直しガイドを表示します
           </p>
