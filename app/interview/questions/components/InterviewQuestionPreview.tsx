@@ -1,5 +1,6 @@
 'use client';
 
+import { Button } from '@/components/ui/Button';
 import type { GeneratedQuestion } from '../utils/generateInterviewQuestions';
 import { EXPANDABLE_CATEGORIES } from '../utils/generateAdditionalQuestions';
 
@@ -53,18 +54,19 @@ export function InterviewQuestionPreview({ questions, extraQuestions, onAddMore,
               ))}
 
               {isExpandable && (
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  size="md"
                   onClick={() => onAddMore(item.category)}
                   disabled={loadingCategory !== null || isLimitReached}
-                  className="mt-3 w-full text-sm text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed font-semibold py-2 rounded-lg transition-colors"
+                  className="mt-3 w-full"
                 >
                   {isLoading
                     ? '生成中...'
                     : isLimitReached
                     ? 'この項目の追加質問は上限に達しました'
                     : `さらに質問を生成する（残り${remaining}回）`}
-                </button>
+                </Button>
               )}
             </div>
           );
