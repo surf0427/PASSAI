@@ -1,20 +1,14 @@
 import type { BasicInfo } from '@/types/basicInfo';
 import type { UniversityContext } from '@/types/universityContext';
+import { buildSelfAnalysisUniversityContext } from '@/lib/buildSelfAnalysisUniversityContext';
 
-// basicInfo から UniversityContext を組み立てる暫定実装。
+// basicInfo から UniversityContext を組み立てる。
 // 第一志望（preferences[0]）を対象大学とする。
 //
-// 現状埋まるフィールド: universityName / facultyName / departmentName / examTypes
-//
-// TODO: 大学DBが整備されたら以下の処理を追加する
-//   1. universityName から universityId を引き当てる
-//   2. universityId / facultyId / departmentId をキーに、
-//      admissionPolicy / preferredTraits / preferredExperiences /
-//      essayThemes / interviewTopics / requiredGpa を取得する
-//   3. それらをマージしてより充実した UniversityContext を返す
-//
-//   API側の設計上、buildUniversityContextFromBasicInfo の返り値を上書きする
-//   別ヘルパー（例: enrichUniversityContextFromDB）を後付けで挟めるようにしておく。
+// basicInfo 由来で埋まるフィールド: universityName / facultyName / departmentName / examTypes
+// 大学DB由来で enrich されるフィールド: admissionPolicy / preferredExperiences / preferredTraits
+//   （buildSelfAnalysisUniversityContext の戻り値を spread merge）
+//   未登録大学の場合は enrichment が {} を返すため、basicInfo 由来フィールドだけが残る。
 export function buildUniversityContextFromBasicInfo(
   basicInfo: BasicInfo | null,
 ): UniversityContext | null {
@@ -22,11 +16,22 @@ export function buildUniversityContextFromBasicInfo(
   const pref = basicInfo.preferences?.[0];
   if (!pref || !pref.university.trim()) return null;
 
-  return {
+  const baseContext: UniversityContext = {
     universityName: pref.university,
     facultyName: pref.faculty?.trim() ? pref.faculty : undefined,
     departmentName: (pref.department ?? '').trim() || undefined,
     examTypes: basicInfo.examTypes,
+  };
+
+  const enrichment = buildSelfAnalysisUniversityContext({
+    university: pref.university,
+    faculty: pref.faculty ?? '',
+    department: pref.department ?? '',
+  });
+
+  return {
+    ...baseContext,
+    ...enrichment,
   };
 }
 
