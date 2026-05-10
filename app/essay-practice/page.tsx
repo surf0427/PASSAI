@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import {
   saveEssayProgress,
   saveReviewResult,
@@ -16,6 +16,14 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
 import { ImprovementList } from '@/components/shared/result';
+
+// マウント前 false / マウント後 true を返す flag。
+// loadReviewResult() / loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
+// useSyncExternalStore の getServerSnapshot/getSnapshot で setState なしにこの semantics を表現する。
+// （STEP9/10/14/15 と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
 
 const TOTAL_STEPS = 5;
 const CHAT_MAX_COUNT = 3;
@@ -45,15 +53,30 @@ export default function EssayPracticePage() {
   const [reviewHistory, setReviewHistory] = useState<ReviewResult[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
-  const [savedReview, setSavedReview] = useState<SavedReview | null>(null);
+  // savedReview は (1) マウント時に loadReviewResult() で初期化し、
+  // (2) API 添削成功時 (handleEssayReview の最後) に上書きされる。
+  // post-API の上書き値だけを useState で持ち、マウント時の値は useMemo([isMounted]) で結合する
+  // ことで、useEffect 内で setState する形(react-hooks/set-state-in-effect)を回避する。
+  // 既存の setSavedReview 呼び出し側はそのまま動くよう setter 名は維持する。
+  const [postApiSavedReview, setSavedReview] = useState<SavedReview | null>(null);
+
   // basicInfo は両 API（chat / review）に同梱して、AI が志望大学・学部・学科・文理・受験方式を踏まえた回答を返せるようにする。
   // localStorage を直接読まず、共通関数 loadBasicInfo() を経由する。null フォールバック対応済み。
-  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
-
-  useEffect(() => {
-    setSavedReview(loadReviewResult());
-    setBasicInfo(loadBasicInfo());
-  }, []);
+  // マウント前は null、マウント後に loadBasicInfo() を 1度だけ呼んで以降は memo 値を返す。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const mountedSavedReview = useMemo<SavedReview | null>(
+    () => (isMounted ? loadReviewResult() : null),
+    [isMounted],
+  );
+  const savedReview: SavedReview | null = postApiSavedReview ?? mountedSavedReview;
+  const basicInfo = useMemo<BasicInfo | null>(
+    () => (isMounted ? loadBasicInfo() : null),
+    [isMounted],
+  );
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
