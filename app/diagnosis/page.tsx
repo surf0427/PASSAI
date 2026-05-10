@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import {
   saveDiagnosisResult,
@@ -8,6 +8,14 @@ import {
   type DiagnosisResult,
 } from '@/lib/diagnosisStorage';
 import type { DiagnosisType } from '@/types/diagnosis';
+
+// マウント前 false / マウント後 true を返す flag。
+// loadDiagnosisResult() は localStorage 依存のため SSR では null を返したい。
+// useSyncExternalStore の getServerSnapshot/getSnapshot で setState なしにこの semantics を表現する。
+// （STEP9/10/14/15/16 と同形パターン）
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
 
 // ── 受験タイプ診断（MVP） ──────────────────────────────────────
 // 単一ファイル + クライアントコンポーネントで完結。
@@ -124,19 +132,30 @@ function calcResultType(answers: number[]): DiagnosisType {
 // ── ページ本体 ────────────────────────────────────────────────
 
 export default function DiagnosisPage() {
-  const [step, setStep] = useState<Step>('start');
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<number[]>([]);
-  const [result, setResult] = useState<DiagnosisResult | null>(null);
 
-  // 再訪時：保存された結果があれば結果画面に直接戻す
-  useEffect(() => {
-    const saved = loadDiagnosisResult();
-    if (saved) {
-      setResult(saved);
-      setStep('result');
-    }
-  }, []);
+  // step / result は (1) 再訪時にマウント snapshot として loadDiagnosisResult() から復元され、
+  // (2) フロー中（startDiagnosis / 5 問完了 / restart）に setState で更新される。
+  // useEffect 内で setState すると react-hooks/set-state-in-effect になるため、
+  // post-mount の override 値だけを useState で持ち、マウント時の snapshot は useMemo で結合する。
+  // 既存の setStep / setResult 呼び出し側はそのまま動くよう setter 名は維持する。
+  const [postMountStep, setStep] = useState<Step | null>(null);
+  const [postMountResult, setResult] = useState<DiagnosisResult | null>(null);
+
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const mountedSaved = useMemo<DiagnosisResult | null>(
+    () => (isMounted ? loadDiagnosisResult() : null),
+    [isMounted],
+  );
+
+  // 公開する step / result: post-mount 値があればそれを、なければ snapshot ベースの初期値。
+  const step: Step = postMountStep ?? (mountedSaved ? 'result' : 'start');
+  const result: DiagnosisResult | null = postMountResult ?? mountedSaved;
 
   function startDiagnosis() {
     setAnswers([]);
