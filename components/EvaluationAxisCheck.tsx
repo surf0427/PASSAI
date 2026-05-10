@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import {
   getEvaluationAxes,
   checkAxis,
@@ -18,20 +18,18 @@ type Props = {
 };
 
 export function EvaluationAxisCheck({ university, faculty, text }: Props) {
-  const [preset, setPreset] = useState<EvaluationAxisPreset | null>(null);
-  const [results, setResults] = useState<AxisCheckResult[]>([]);
+  // preset / results は props から決まる純粋な derived state。
+  // useEffect + setState で持つ必要がないので useMemo 直計算に寄せる。
+  // getEvaluationAxes / checkAxis はいずれも副作用のない純関数。
+  const preset = useMemo<EvaluationAxisPreset | null>(() => {
+    if (!university.trim() && !faculty.trim()) return null;
+    return getEvaluationAxes(university, faculty);
+  }, [university, faculty]);
 
-  useEffect(() => {
-    if (!university.trim() && !faculty.trim()) {
-      setPreset(null);
-      setResults([]);
-      return;
-    }
-    const selected = getEvaluationAxes(university, faculty);
-    const checked = selected.axes.map((axis) => checkAxis(text, axis));
-    setPreset(selected);
-    setResults(checked);
-  }, [university, faculty, text]);
+  const results = useMemo<AxisCheckResult[]>(() => {
+    if (!preset) return [];
+    return preset.axes.map((axis) => checkAxis(text, axis));
+  }, [preset, text]);
 
   if (!preset) return null;
 
