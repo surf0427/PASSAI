@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // ── /privacy（プライバシーポリシー・仮ページ） ─────────────────
 // 正式リリース前の placeholder。
@@ -21,9 +22,7 @@ export default function PrivacyPage() {
           ← トップに戻る
         </Link>
 
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-6">
-          プライバシーポリシー
-        </h1>
+        <PageHeader title="プライバシーポリシー" />
 
         <div className="space-y-5 text-slate-700 leading-relaxed">
           <p>

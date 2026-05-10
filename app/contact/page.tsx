@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // ── /contact（お問い合わせ・仮ページ） ────────────────────────
 // 正式リリース前の placeholder。フォームは未実装。
@@ -20,9 +21,7 @@ export default function ContactPage() {
           ← トップに戻る
         </Link>
 
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-6">
-          お問い合わせ
-        </h1>
+        <PageHeader title="お問い合わせ" />
 
         <div className="space-y-5 text-slate-700 leading-relaxed">
           <p>PASSAIに関するお問い合わせは、現在準備中です。</p>
