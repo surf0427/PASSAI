@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // ── /about（運営者情報・仮ページ） ─────────────────────────────
 // 正式リリース前の placeholder。詳細は順次差し替える前提で、
@@ -20,9 +21,7 @@ export default function AboutPage() {
           ← トップに戻る
         </Link>
 
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-6">
-          運営者情報
-        </h1>
+        <PageHeader title="運営者情報" />
 
         <div className="space-y-5 text-slate-700 leading-relaxed">
           <p>
