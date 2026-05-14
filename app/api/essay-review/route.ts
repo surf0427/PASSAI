@@ -2,6 +2,21 @@ import { anthropic, extractJson } from '@/lib/ai';
 import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
+import { safeParseResult } from '@/lib/essay/parseEssayReview';
+import { logAiUsage } from '@/lib/aiUsageLog';
+// STEP15h: subjectGrades semantic instruction を SYSTEM_PROMPT に接続する。
+// 文字列の中身は lib/prompts.ts に集約。本ファイルは「essay-review でどう使うか」だけ持つ。
+// これら 2 つの const の文字列が lib/prompts.ts 側で変わったら ESSAY_REVIEW_PROMPT_VERSION
+// （lib/aiInputHash.ts）を必ず bump すること。
+import {
+  SUBJECT_GRADES_SHARED_INSTRUCTION,
+  SUBJECT_GRADES_ASYMMETRY_RULE,
+} from '@/lib/prompts';
+
+// 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
+// /api/analysis 系列と同じパターン。
+const MODEL = 'claude-sonnet-4-6';
+const ROUTE = 'api/essay-review';
 
 // 受験方式に応じた小論文添削の方針を生成する。breakdown 構造（5項目固定）には影響を与えず、
 // improvement / weakPoints / goodPoints の中身を文脈に沿わせるためだけに使う。
@@ -28,125 +43,45 @@ function buildExamTypeEssayGuidance(examTypes: string[] | undefined): string {
   return ['【受験方式に応じた添削方針】', ...rules].join('\n');
 }
 
-const VALID_VERDICTS = ['合格ライン', 'あと一歩', '改善必要', '構造からやり直し'] as const;
-const VALID_BREAKDOWN_LABELS = ['論理構造', '具体性', '説得力', 'テーマ理解', '独自性'] as const;
+// AI 出力 JSON parser / 正規化 (safeParseResult / deriveVerdict / safeStringArray /
+// VALID_VERDICTS / VALID_BREAKDOWN_LABELS / FALLBACK_* / ReviewResult / BreakdownItem) は
+// lib/essay/parseEssayReview.ts に切り出した。戻り値 shape および fallback 挙動は完全に同一。
 
-type BreakdownItem = { label: string; score: number };
+// STEP15h: essay-review 固有の subjectGrades 取り扱い制約。
+// shared 側（lib/prompts.ts）で断定禁止・AO 推薦混同禁止・関連科目以外の過剰減点禁止は既に効いている。
+// 本 route は小論文の score / breakdown が**本文の質のみ**で決まることを最優先に守る。
+const ESSAY_REVIEW_SUBJECT_GRADES_QUALIFIER = `【essay-review route での subjectGrades の使い方】
+・subjectGrades は、小論文本文の採点根拠にはしない。
 
-type ReviewResult = {
-  totalScore: number;
-  verdict: string;
-  breakdown: BreakdownItem[];
-  improvement: string;
-  goodPoints: string[];
-  weakPoints: string[];
-};
+・score / breakdown / feedback は、本文の論理構造・具体性・説得力・テーマ理解・独自性のみで判断する。
 
-function deriveVerdict(score: number): string {
-  if (score >= 80) return '合格ライン';
-  if (score >= 70) return 'あと一歩';
-  if (score >= 60) return '改善必要';
-  return '構造からやり直し';
-}
+・評定値や欠席日数を feedback / improvement / modelAnswer に直接書かない。
 
-const FALLBACK_IMPROVEMENT =
-  '「私は〇〇と考える。なぜなら〜だからだ」という形で、結論と理由をそれぞれ1文ずつ書き直してみましょう。';
+・subjectGrades は、必要な場合のみ「今後の学習・面接で補助的に活かせる背景情報」として扱う。
 
-const FALLBACK_GOOD_POINTS = [
-  '自分の考えを言葉にして表現できています。論述の第一歩として大切な力です。',
-];
+・志望学部に関連する高評定があっても、小論文本文の弱さを上書きしない。
 
-const FALLBACK_WEAK_POINTS = [
-  '結論→理由→具体例の流れを意識すると、読み手に伝わる論文になります。',
-];
+・志望学部に関連しない低評定を、小論文上の主要弱点として扱わない。
 
-function safeStringArray(value: unknown, max: number): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
-    .slice(0, max);
-}
+・欠席日数がある場合でも、小論文評価には反映しない。不安を煽らない。
 
-function safeParseResult(data: unknown): ReviewResult {
-  if (typeof data !== 'object' || data === null) {
-    return {
-      totalScore: 0,
-      verdict: '構造からやり直し',
-      breakdown: [],
-      improvement: FALLBACK_IMPROVEMENT,
-      goodPoints: FALLBACK_GOOD_POINTS,
-      weakPoints: FALLBACK_WEAK_POINTS,
-    };
-  }
-  const d = data as Record<string, unknown>;
+・subjectGrades 未入力時は、評定や欠席を推測しない。`;
 
-  const rawScore = d.totalScore;
-  const totalScore =
-    typeof rawScore === 'number' &&
-    Number.isInteger(rawScore) &&
-    rawScore >= 0 &&
-    rawScore <= 100
-      ? rawScore
-      : 0;
-
-  const rawBreakdown = Array.isArray(d.breakdown) ? d.breakdown : [];
-  const breakdown: BreakdownItem[] = rawBreakdown
-    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-    .filter((row) =>
-      VALID_BREAKDOWN_LABELS.includes(row.label as typeof VALID_BREAKDOWN_LABELS[number]) &&
-      typeof row.score === 'number' &&
-      Number.isInteger(row.score) &&
-      (row.score as number) >= 0 &&
-      (row.score as number) <= 20
-    )
-    .map((row) => ({ label: row.label as string, score: row.score as number }))
-    .slice(0, 5);
-
-  const finalScore =
-    breakdown.length === 5
-      ? breakdown.reduce((sum, item) => sum + item.score, 0)
-      : totalScore;
-
-  const rawVerdict = d.verdict;
-  const verdict = VALID_VERDICTS.includes(rawVerdict as typeof VALID_VERDICTS[number])
-    ? (rawVerdict as string)
-    : deriveVerdict(finalScore);
-
-  const rawImprovement = d.improvement;
-  const improvement =
-    typeof rawImprovement === 'string' && rawImprovement.trim().length > 0
-      ? rawImprovement.trim()
-      : FALLBACK_IMPROVEMENT;
-
-  const goodPoints = safeStringArray(d.goodPoints, 3);
-  const weakPoints = safeStringArray(d.weakPoints, 3);
-
-  return {
-    totalScore: finalScore,
-    verdict,
-    breakdown,
-    improvement,
-    goodPoints: goodPoints.length > 0 ? goodPoints : FALLBACK_GOOD_POINTS,
-    weakPoints: weakPoints.length > 0 ? weakPoints : FALLBACK_WEAK_POINTS,
-  };
-}
-
-export async function POST(req: Request) {
-  const body = await req.json();
-  const theme: string = body.theme ?? '';
-  const conclusion: string = body.conclusion ?? '';
-  const reasonOne: string = body.reasonOne ?? '';
-  const reasonTwo: string = body.reasonTwo ?? '';
-  const essayBody: string = body.essayBody ?? '';
-  // basicInfo は任意。未送信や形が不正でも null として扱う。
-  const basicInfo: BasicInfo | null = body.basicInfo ?? null;
-
-  if (!essayBody.trim()) {
-    return Response.json({ error: '本文を入力してください' }, { status: 400 });
-  }
-
-  const systemPrompt = `あなたは高校生・大学受験生向けの小論文添削者です。
+// STEP15h: systemPrompt を module-level export const に lift。
+//   - 旧 function-local 定義（POST 内）を撤去
+//   - shared 2 つ（SUBJECT_GRADES_SHARED_INSTRUCTION / SUBJECT_GRADES_ASYMMETRY_RULE）と
+//     route 固有 qualifier を役割宣言の直後・既存「絶対にやってはいけないこと」の前に挿入
+//   - 既存の採点軸・スコアルール・出力 schema・トーン規律は文言を変えない
+//   - scripts/step15-qa.ts から本番経路を完全再現するため export する
+//   - PROMPT_VERSION bump: ESSAY_REVIEW_PROMPT_VERSION 1→2（lib/aiInputHash.ts）
+export const ESSAY_REVIEW_SYSTEM_PROMPT = `あなたは高校生・大学受験生向けの小論文添削者です。
 生徒の小論文を採点・添削し、自分で改善できるよう具体的なフィードバックを返します。
+
+${SUBJECT_GRADES_SHARED_INSTRUCTION}
+
+${SUBJECT_GRADES_ASYMMETRY_RULE}
+
+${ESSAY_REVIEW_SUBJECT_GRADES_QUALIFIER}
 
 【絶対にやってはいけないこと】
 - 小論文の本文・完成文・模範解答を書くこと
@@ -203,6 +138,22 @@ export async function POST(req: Request) {
 - 出力の1文字目が { であること
 - 出力の最後の文字が } であること
 
+【トーンと文体（厳守）】
+- 「次に何を直すか」が最短で伝わることを最優先する
+- 前置き・総評の言い換え・自己言及（「以下に評価を…」等）は書かない
+- 称賛だけの修飾（「素晴らしい」「とても良い」）は使わない。指摘は事実ベースで端的に
+- 同じ趣旨を別の言い方で繰り返さない
+- 1 文は短く（目安 60 字以内）。説教調や精神論を避ける
+- 抽象的助言（「具体性を上げましょう」等）は禁止。必ず行動レベルで書く
+
+【優先度の付け方（必須）】
+- weakPoints は「直すと最も差が出る順」に並べる。配列の 0 番目が最重要
+- improvement は 1 文で最重要の行動指示を言い切る
+
+【出力長の上限】
+- improvement は 80〜120 字以内、1 文
+- goodPoints / weakPoints の各要素は 60〜100 字以内
+
 出力形式：
 {
   "totalScore": 78,
@@ -218,6 +169,20 @@ export async function POST(req: Request) {
   "goodPoints": ["...", "..."],
   "weakPoints": ["...", "..."]
 }`;
+
+export async function POST(req: Request) {
+  const body = await req.json();
+  const theme: string = body.theme ?? '';
+  const conclusion: string = body.conclusion ?? '';
+  const reasonOne: string = body.reasonOne ?? '';
+  const reasonTwo: string = body.reasonTwo ?? '';
+  const essayBody: string = body.essayBody ?? '';
+  // basicInfo は任意。未送信や形が不正でも null として扱う。
+  const basicInfo: BasicInfo | null = body.basicInfo ?? null;
+
+  if (!essayBody.trim()) {
+    return Response.json({ error: '本文を入力してください' }, { status: 400 });
+  }
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
   const examTypeGuidance = buildExamTypeEssayGuidance(basicInfo?.examTypes);
@@ -248,27 +213,71 @@ ${reasonTwo || '（未入力）'}
 ${essayBody}`;
 
   try {
+    // STEP2.7: Anthropic prompt caching を system 部にのみ適用する（STEP2.4 と同じパターン）。
+    //   - ESSAY_REVIEW_SYSTEM_PROMPT は採点軸・JSON schema・出力ルール・トーン規律など毎回不変の static 部
+    //   - userMessage は essayBody / theme / 結論 / 理由 / basicInfo / universityContext と
+    //     毎回変化する動的データを含むため cache_control は付けない
+    //   → system のみキャッシュ対象とすることで、5 分以内の連続添削で input 単価を ~90% 割引
+    //     にできる（Anthropic prompt caching 仕様）。
+    //   SDK: @anthropic-ai/sdk@0.91.1 で cache_control: { type: 'ephemeral' } を型安全に指定可能。
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL,
       max_tokens: 1000,
       temperature: 0.2,
-      system: systemPrompt,
+      system: [
+        {
+          type: 'text',
+          text: ESSAY_REVIEW_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [{ role: 'user', content: userMessage }],
     });
 
     const text = message.content[0].type === 'text' ? message.content[0].text : '';
 
+    // max_tokens で途中終了している場合、JSON はほぼ確実に壊れている。safeParseResult が
+    // 静的フォールバックに落とすため raw text 自体は露出しないが、ユーザーには「点数 0 ・
+    // 既定の改善提案」が出るだけで添削が動かなかった事実が伝わらない。明示エラーで弾く。
+    if (message.stop_reason === 'max_tokens') {
+      console.error('essay-review truncated', {
+        stopReason: message.stop_reason,
+        rawTextTail: text.slice(-200),
+      });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      return Response.json(
+        {
+          error: 'AI_REVIEW_TRUNCATED',
+          message: 'AIの添削結果が途中で終了しました。もう一度お試しください。',
+        },
+        { status: 502 },
+      );
+    }
+
+    // essay-review は parse 失敗時も safeParseResult で fallback して 200 を返す既存 control flow を維持する。
+    // ただし usage log では「parse が壊れた事実」を区別したいので、flag で status を分岐させる。
     let parsed: unknown = {};
+    let parseOk = true;
     try {
       parsed = JSON.parse(extractJson(text));
     } catch {
-      console.error('essay-review: JSON parse failed. raw text:', text);
+      parseOk = false;
+      console.error('essay-review: JSON parse failed. rawTextTail:', text.slice(-200));
     }
 
+    logAiUsage({
+      route: ROUTE,
+      model: MODEL,
+      status: parseOk ? 'success' : 'parse_failed',
+      usage: message.usage,
+    });
     return Response.json(safeParseResult(parsed));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('essay-review API error:', msg);
+    // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
+    // status のみログして「失敗回数」が集計できる状態にする（analysis 系列と共通方針）。
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     return Response.json(
       { error: 'AIの処理に失敗しました。時間をおいてお試しください。' },
       { status: 500 }
