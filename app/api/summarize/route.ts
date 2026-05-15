@@ -7,7 +7,7 @@ import type { SummarizeMode, WallHittingResult, SummaryResult } from '@/types/an
 import type { BasicInfo } from '@/types/basicInfo';
 import type { UniversityContext } from '@/types/universityContext';
 import { formatActivityData } from '@/lib/formatActivity';
-import { buildSummarizePrompt, getSummarizeSystemPrompt } from '@/lib/prompts';
+import { buildSummarizePrompt, getSummarizeSystemPrompt } from '@/lib/prompts/summarizePrompt';
 import { anthropic, extractJson } from '@/lib/ai';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import {

@@ -32,7 +32,7 @@ import type { WallHittingResult } from '@/types/analysis';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { UniversityContext } from '@/types/universityContext';
 import { formatActivityData } from '@/lib/formatActivity';
-import { ANALYSIS_SYSTEM_PROMPT, buildWallHittingPrompt } from '@/lib/prompts';
+import { ANALYSIS_SYSTEM_PROMPT, buildWallHittingPrompt } from '@/lib/prompts/analysisPrompt';
 import { anthropic, extractJson } from '@/lib/ai';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import {
