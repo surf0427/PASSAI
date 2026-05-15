@@ -17,146 +17,75 @@ import type { MatchingResult, AiMatchAdvice } from '@/types/matching';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { UniversityContext } from '@/types/universityContext';
-import { anthropic, extractJson } from '@/lib/ai';
-import {
-  buildBasicInfoPromptSection,
-  hasAnyDepartmentSpecified,
-} from '@/lib/buildBasicInfoPromptSection';
-import { buildUniversityContextPromptSection } from '@/lib/buildUniversityContext';
+import { anthropic } from '@/lib/ai';
+import { safeParseJson } from '@/lib/matching/safeParseJson';
+import { logAiUsage } from '@/lib/aiUsageLog';
 import {
   buildUniversityContextsFromBasicInfo,
   findUniversityContextByName,
 } from '@/lib/matching/buildUniversityContextsFromBasicInfo';
+import { toStudentProfile } from '@/lib/studentProfile';
+import { isStudentProfile } from '@/lib/studentProfileStorage';
+// STEP15d: prompt 文字列の組み立ては lib/matching/matchingPrompt.ts に切り出した。
+//   - MATCHING_SYSTEM_PROMPT: 役割宣言 + subjectGrades semantic instruction + 出力ルール / schema
+//   - buildMatchingUserPrompt: 候補大学 1 件分の dynamic data セクション
+// 旧 route 内 buildDetailPrompt / buildActivityContext / buildExamTypeMatchingGuidance は撤去済み。
+import {
+  MATCHING_SYSTEM_PROMPT,
+  buildMatchingUserPrompt,
+  type BuildMatchingUserPromptOptions,
+} from '@/lib/matching/matchingPrompt';
 
-// JSON.parse を安全に行う
-function safeParseJson<T>(text: string): T {
-  const textToParse = extractJson(text);
-  try {
-    return JSON.parse(textToParse) as T;
-  } catch (error) {
-    console.error("JSON parse failed:", error);
-    console.error("Text to parse:", textToParse);
-    throw error;
-  }
-}
+// 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
+// 本 route は候補 5 大学それぞれに対して generateUniversityDetail() で 1 回ずつ
+// anthropic.messages.create() を呼ぶため、log は per-call で発火する（1 request = 5 log line）。
+const MODEL = 'claude-sonnet-4-6';
+const ROUTE = 'api/matching';
 
-// 受験方式に応じたAI助言の方針を生成する。マッチング機能専用の文言。
-// examTypes が複数選択されている場合はそれぞれのルールを併記する。
-function buildExamTypeMatchingGuidance(
-  examTypes: string[] | undefined,
-  hasDepartment: boolean,
-): string {
-  const types = examTypes ?? [];
-  const rules: string[] = [];
+// safeParseJson<T> は lib/matching/safeParseJson.ts に切り出した。挙動・ログ文言は完全に同一。
 
-  if (types.includes('総合型選抜（AO入試）')) {
-    rules.push('- 総合型選抜（AO）対策として、活動の一貫性・探究性・将来目標・主体性を重視して判定する。');
-  }
-  if (types.includes('学校推薦型選抜（公募・指定校）')) {
-    rules.push('- 学校推薦型選抜対策として、評定平均（GPA）・学校生活・安定性・継続力を最重要視して判定する。');
-  }
-  if (types.includes('一般選抜') || types.includes('共通テスト利用')) {
-    rules.push('- 一般選抜（共通テスト利用を含む）も併願しているため、一般受験との両立負担・推薦利用の現実性を踏まえて助言する。');
-  }
-  if (types.includes('海外大学受験')) {
-    rules.push('- 海外大学受験を含むため、語学力・国際経験の評価軸も加味する。');
-  }
-  if (types.includes('まだ決まっていない')) {
-    rules.push('- 受験方式が未確定のため、複数方式を比較しながら選び方の助言も行う。');
-  }
-  if (hasDepartment) {
-    rules.push('- 学科名が指定されている場合は、学部全体ではなく該当学科の専門性・カリキュラムとの適合度を一段細かく判定する。');
-  }
-
-  if (rules.length === 0) return '';
-  return ['【受験方式に応じた助言ルール】', ...rules].join('\n');
-}
-
-// 活動整理の概要を短く整形する。詳細は出さず件数とラベルだけ出して、AI の文脈に渡す。
-function buildActivityContext(data: ActivityData | null): string {
-  if (!data) return '';
-  const lines: string[] = [];
-  if (data.clubActivities?.length) lines.push(`部活: ${data.clubActivities.map((a) => a.clubName).filter(Boolean).join('・') || `${data.clubActivities.length}件`}`);
-  if (data.volunteerActivities?.length) lines.push(`ボランティア: ${data.volunteerActivities.length}件`);
-  if (data.researchActivities?.length) lines.push(`探究: ${data.researchActivities.map((a) => a.theme).filter(Boolean).join('・') || `${data.researchActivities.length}件`}`);
-  if (data.studyAbroadActivities?.length) lines.push(`留学: ${data.studyAbroadActivities.length}件`);
-  if (data.contestActivities?.length) lines.push(`コンテスト: ${data.contestActivities.length}件`);
-  if (data.certificationActivities?.length) lines.push(`資格: ${data.certificationActivities.map((a) => a.certificationName).filter(Boolean).join('・') || `${data.certificationActivities.length}件`}`);
-  if (lines.length === 0) return '';
-  return ['【活動整理の概要】', ...lines].join('\n');
-}
-
-// 1大学分の詳細アドバイス生成プロンプト（文字数制限を明示）。
-// 入力は文章生成に必要な「すでに整形済みの情報」だけを受け取る。
-type BuildDetailPromptOptions = {
-  result: MatchingResult;
-  selfAnalysis: WallHittingResult;
-  basicInfo: BasicInfo | null;
-  activityData: ActivityData | null;
-  universityContext: UniversityContext | null;
-};
-
-function buildDetailPrompt(opts: BuildDetailPromptOptions): string {
-  const { result, selfAnalysis, basicInfo, activityData, universityContext } = opts;
-  const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
-  const universityContextSection = buildUniversityContextPromptSection(universityContext);
-  const activitySection = buildActivityContext(activityData);
-  const guidanceSection = buildExamTypeMatchingGuidance(
-    basicInfo?.examTypes,
-    hasAnyDepartmentSpecified(basicInfo),
-  );
-
-  return `あなたは総合型選抜・学校推薦型選抜の受験指導のプロです。
-以下の生徒データと大学情報をもとに、この大学への受験アドバイスをJSON形式で出力してください。
-
-${basicInfoSection}
-${activitySection ? `\n${activitySection}\n` : ''}
-【自己分析サマリー】
-${selfAnalysis.summary}
-
-強み: ${selfAnalysis.strengths.slice(0, 3).map((s) => `・${s}`).join(' ')}
-弱み: ${selfAnalysis.weaknesses.slice(0, 2).map((w) => `・${w}`).join(' ')}
-${guidanceSection ? `\n${guidanceSection}\n` : ''}${universityContextSection ? `\n${universityContextSection}\n` : ''}
-【大学情報（スコアリング層から）】
-大学ID: ${result.university.id}
-大学名: ${result.university.name}（${result.university.faculty}）
-入試方式: ${result.university.admissionType}
-スコア: ${result.score}点
-特徴: ${result.university.description}
-
-【出力ルール（必ず守ること）】
-- reason: 120文字以内
-- strengthPoints: 60文字以内の文字列、最大3つ
-- weaknesses: 60文字以内の文字列、最大3つ
-- actionItems: 60文字以内・「〜する」で終わる文、最大3つ
-- nextStep: 80文字以内
-- 「汎用的な褒め文章」にしない。志望大学・学部・学科・評定平均・受験方式・活動整理・自己分析の具体に踏み込むこと。
-
-【出力形式】
-必ずJSONのみを出力してください。説明文・補足・前置き・後書きは一切禁止です。
-最初の1文字は「{」、最後の1文字は「}」にしてください。
-{
-  "universityId": "${result.university.id}",
-  "reason": "...",
-  "strengthPoints": ["..."],
-  "weaknesses": ["..."],
-  "actionItems": ["..."],
-  "nextStep": "..."
-}`;
-}
-
-// 1大学分の詳細アドバイスを生成する
+// 1大学分の詳細アドバイスを生成する。
+//
+// STEP15d: prompt 文字列は lib/matching/matchingPrompt.ts に切り出し、本関数は
+//   anthropic API 呼び出し / parse / usage log だけに専念する。
+//   - system: MATCHING_SYSTEM_PROMPT（候補大学 5 件で同一・cache_control: 'ephemeral' で prompt caching）
+//   - user:  buildMatchingUserPrompt(opts)（候補大学ごとに変わる dynamic data）
+//   既存の AI 出力契約（{ universityId, reason }）と route 内の status ログ経路は変えない。
 async function generateUniversityDetail(
-  opts: BuildDetailPromptOptions,
+  opts: BuildMatchingUserPromptOptions,
 ): Promise<AiMatchAdvice> {
   const universityId = opts.result.university.id;
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: buildDetailPrompt(opts) }],
-  });
+  // STEP4.9: per-call で usage log を発火させる構造にする。
+  // 各 status 経路（success / truncated / parse_failed / failed）で必ず 1 回だけログするため、
+  // anthropic.messages.create() と safeParseJson() を個別に try/catch で囲む。
+  // 既存の throw 挙動は変えない（log 後に re-throw、outer の POST handler の catch に届く）。
+  let message;
+  try {
+    message = await anthropic.messages.create({
+      model: MODEL,
+      // STEP1.1: AI 出力は reason（120字以内）のみに縮小したため 1500 → 500 へ。
+      // 余裕を持って 500 に設定（reason 本文 + 周辺 JSON 構造で約 200 tokens 想定）。
+      max_tokens: 500,
+      // STEP15d: system は固定文字列（MATCHING_SYSTEM_PROMPT）。5 大学呼び出し間で
+      // 共有されるため cache_control: 'ephemeral' で prompt caching を効かせる。
+      // user 側は候補大学ごとに変わる dynamic data。
+      system: [
+        {
+          type: 'text',
+          text: MATCHING_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [{ role: 'user', content: buildMatchingUserPrompt(opts) }],
+    });
+  } catch (error) {
+    // network / API error 経路: response が無いため usage は取れない。
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    throw error;
+  }
 
   if (message.stop_reason === 'max_tokens') {
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
     throw new Error(
       `Claude response was truncated by max_tokens for university ${universityId}. Reduce output length or increase max_tokens.`,
     );
@@ -164,7 +93,22 @@ async function generateUniversityDetail(
 
   const raw = message.content[0].type === 'text' ? message.content[0].text : '';
 
-  return safeParseJson<AiMatchAdvice>(raw);
+  // STEP1.1: AI 出力は { universityId, reason } のみを信用する。
+  // strengthPoints / weaknesses / actionItems / nextStep は型上 optional として残しているが、
+  // 仮に AI が古いプロンプト記憶で返してきても無視し、UI 側の deterministic フォールバック
+  // （MatchingResult.* / generateReason.ts 由来）に揃える。
+  // universityId は AI 出力ではなく opts 側を真実とする（プロンプトでテンプレ埋めしているが安全側に倒す）。
+  let parsed: { reason?: unknown };
+  try {
+    parsed = safeParseJson<{ reason?: unknown }>(raw);
+  } catch (error) {
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
+    throw error;
+  }
+  const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
+
+  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+  return { universityId, reason };
 }
 
 // 大学候補リストを返す
@@ -200,12 +144,22 @@ export async function POST(req: Request) {
   }
 
   try {
+    // 自己分析は 1 回だけ StudentProfile を確定して、候補大学ごとの prompt 生成で使い回す。
+    // 受信側で WallHittingResult を直接 prompt に流さない（questions / answers が混入する
+    // 経路を構造的に消す）。優先順位は次のとおり:
+    //   1. body.studentProfile（クライアントが localStorage の canonical artifact から送ったもの）
+    //   2. 無ければ selfAnalysis (= WallHittingResult) から toStudentProfile() で派生（後方互換）
+    // TODO: クライアント側（admission-matching）も getStudentProfileForFeature 経由で
+    //   studentProfile を送る形に移行する。今は server-side 受け口だけ先行整備。
+    const studentProfileFromBody = isStudentProfile(body.studentProfile) ? body.studentProfile : null;
+    const studentProfile = studentProfileFromBody ?? toStudentProfile(selfAnalysis);
+
     const candidates = await generateUniversityCandidates(selfAnalysis, results);
     const advices = await Promise.all(
       candidates.map((candidate) =>
         generateUniversityDetail({
           result: candidate,
-          selfAnalysis,
+          studentProfile,
           basicInfo,
           activityData,
           // 候補大学に対応する UniversityContext を引く（無ければ null）。
