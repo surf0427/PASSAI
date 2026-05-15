@@ -16,8 +16,8 @@ import { getImprovementPriority } from '@/lib/scoreRank';
 import {
   getLatestStatementScore,
   breakdownToRankItems,
-} from '@/lib/statementScoreSource';
-import type { StatementScoreResult } from '@/lib/statementScore';
+} from '@/lib/statement/score/statementScoreSource';
+import type { StatementScoreResult } from '@/lib/statement/score/statementScore';
 
 // 各軸の説明テキストはスコアに依存しない汎用説明にする（旧版はハードコードスコア前提だった）。
 const AXIS_DESCRIPTIONS: Record<string, string> = {

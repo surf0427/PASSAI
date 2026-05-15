@@ -12,7 +12,7 @@ import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import { loadAnalyzeState, saveAnalyzeState } from '@/lib/analyzeStorage';
 import { loadMatchingInput, loadMatchingResult } from '@/lib/admissionMatchingStorage';
 import { loadEssayProgress } from '@/lib/essayPracticeStorage';
-import { loadDraft, loadReviewHistory } from '@/lib/statementStorage';
+import { loadDraft, loadReviewHistory } from '@/lib/statement/review/statementStorage';
 import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
 import type { BasicInfo } from '@/types/basicInfo';

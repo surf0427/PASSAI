@@ -4,8 +4,8 @@
 // 受け取って 4 項目（具体性／一貫性／大学接続／将来接続）に集約するだけ。
 // 同じ判定ロジックを重複させないため、判定そのものは行わず "受け取った結果を分類" する。
 
-import type { StatementPrepareWeakPoint } from '@/lib/detectStatementPrepareWeakPoints';
-import type { StatementPrepareLogicGap } from '@/lib/detectStatementPrepareLogicGaps';
+import type { StatementPrepareWeakPoint } from '@/lib/statement/prepare/detectStatementPrepareWeakPoints';
+import type { StatementPrepareLogicGap } from '@/lib/statement/prepare/detectStatementPrepareLogicGaps';
 
 export type StatementPrepareQualityLevel = 'good' | 'normal' | 'needsWork';
 

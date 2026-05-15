@@ -5,14 +5,14 @@ import {
   saveDraft, loadDraft, clearDraft,
   saveReviewHistory, loadReviewHistory, clearReviewHistory, deleteReviewHistoryItem,
   type ReviewHistoryItem,
-} from '@/lib/statementStorage';
+} from '@/lib/statement/review/statementStorage';
 import {
   canUseStatementReview,
   incrementStatementReviewCount,
   getRemainingStatementReviewCount,
-} from '@/lib/statementLimit';
+} from '@/lib/statement/review/statementLimit';
 import type { StatementResult } from '@/types/statement';
-import { normalizeStatementScore } from '@/lib/statementScore';
+import { normalizeStatementScore } from '@/lib/statement/score/statementScore';
 import { loadActivityData } from '@/lib/activityStorage';
 import {
   clearStatementPrepareFollowUpAnswers,
@@ -20,11 +20,11 @@ import {
   getStatementPrepareFollowUpAnswers,
   type StatementPrepareFollowUpAnswers,
   type StatementPrepareSummary,
-} from '@/lib/statementPrepareStorage';
+} from '@/lib/statement/prepare/statementPrepareStorage';
 import {
   STATEMENT_PREPARE_FOLLOW_UP_LABELS,
   type StatementPrepareWeakPointKey,
-} from '@/lib/detectStatementPrepareWeakPoints';
+} from '@/lib/statement/prepare/detectStatementPrepareWeakPoints';
 import type { ActivityData } from '@/types/activity';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { WallHittingResult } from '@/types/analysis';
@@ -32,10 +32,10 @@ import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { detectNgWords } from '@/lib/detectNgWords';
-import { NgWordCheck } from '@/components/NgWordCheck';
-import { RewriteGuide } from '@/components/RewriteGuide';
-import { StructureCheck } from '@/components/StructureCheck';
-import { EvaluationAxisCheck } from '@/components/EvaluationAxisCheck';
+import { NgWordCheck } from '@/components/statement/NgWordCheck';
+import { RewriteGuide } from '@/components/statement/RewriteGuide';
+import { StructureCheck } from '@/components/statement/StructureCheck';
+import { EvaluationAxisCheck } from '@/components/statement/EvaluationAxisCheck';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
 import { Accordion } from '@/components/ui/Accordion';
 import { Card } from '@/components/ui/Card';

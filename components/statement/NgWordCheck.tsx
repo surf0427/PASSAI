@@ -3,8 +3,8 @@
 import { useState } from 'react';
 import type { NgWordIssue } from '@/lib/detectNgWords';
 import { useDeepDive } from '@/hooks/useDeepDive';
-import { DeepDivePanel, DeepDiveReviewPanel } from '@/components/DeepDivePanel';
-import { QualityDeepDive } from '@/components/QualityDeepDive';
+import { DeepDivePanel, DeepDiveReviewPanel } from '@/components/statement/DeepDivePanel';
+import { QualityDeepDive } from '@/components/statement/QualityDeepDive';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 

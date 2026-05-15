@@ -7,12 +7,12 @@
 //     変換は statementResultToScore に集約済み（内部で normalizeStatementScore を呼ぶ）
 //   - 保存前 normalize は app/statement/edit/page.tsx の mapApiResponse で実行済み
 
-import { loadReviewHistory } from '@/lib/statementStorage';
+import { loadReviewHistory } from '@/lib/statement/review/statementStorage';
 import {
   statementResultToScore,
   type StatementScoreBreakdown,
   type StatementScoreResult,
-} from '@/lib/statementScore';
+} from '@/lib/statement/score/statementScore';
 import type { EvaluationItem as PassLineEvaluationItem } from '@/lib/passLineComparison';
 import type { EvaluationItem as RankEvaluationItem } from '@/lib/scoreRank';
 

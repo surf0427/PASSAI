@@ -7,7 +7,7 @@
 //     接続表現が無い                                          → medium
 // 上記いずれにも該当しなければ gap を出さない（ロジックは一旦 OK）。
 
-import type { StatementPrepareWeakPointInput } from '@/lib/detectStatementPrepareWeakPoints';
+import type { StatementPrepareWeakPointInput } from '@/lib/statement/prepare/detectStatementPrepareWeakPoints';
 
 export type StatementPrepareLogicGapKey =
   | 'experienceToIssue'

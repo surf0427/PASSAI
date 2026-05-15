@@ -16,8 +16,8 @@ import {
 import {
   getLatestStatementScore,
   breakdownToPassLineItems,
-} from '@/lib/statementScoreSource';
-import type { StatementScoreResult } from '@/lib/statementScore';
+} from '@/lib/statement/score/statementScoreSource';
+import type { StatementScoreResult } from '@/lib/statement/score/statementScore';
 
 export default function StatementComparePage() {
   const [score, setScore] = useState<StatementScoreResult | null>(null);

@@ -17,13 +17,13 @@ import {
   saveStatementPrepareFollowUpAnswers,
   saveStatementPrepareSummary,
   type StatementPrepareFollowUpAnswers,
-} from '@/lib/statementPrepareStorage';
+} from '@/lib/statement/prepare/statementPrepareStorage';
 import {
   canUseStatementPrepare,
   getStatementPrepareLimitStatus,
   incrementStatementPrepareUsage,
   type StatementPrepareLimitStatus,
-} from '@/lib/statementPrepareLimit';
+} from '@/lib/statement/prepare/statementPrepareLimit';
 import {
   detectStatementPrepareWeakPoints,
   getStatementPrepareFollowUpQuestions,
@@ -31,16 +31,16 @@ import {
   type StatementPrepareWeakPoint,
   type StatementPrepareWeakPointKey,
   type StatementPrepareWeakPointSeverity,
-} from '@/lib/detectStatementPrepareWeakPoints';
+} from '@/lib/statement/prepare/detectStatementPrepareWeakPoints';
 import {
   detectStatementPrepareLogicGaps,
   type StatementPrepareLogicGap,
-} from '@/lib/detectStatementPrepareLogicGaps';
+} from '@/lib/statement/prepare/detectStatementPrepareLogicGaps';
 import {
   evaluateStatementPrepareQuality,
   type StatementPrepareQualityEvaluation,
   type StatementPrepareQualityLevel,
-} from '@/lib/evaluateStatementPrepareQuality';
+} from '@/lib/statement/prepare/evaluateStatementPrepareQuality';
 import {
   FACULTY_CATEGORY_LIST,
   getFacultyCategoryCheckpoints,
@@ -51,14 +51,14 @@ import {
 import {
   getStatementDraftStructureGuide,
   getStatementDraftStructureSummaryKeyLabel,
-} from '@/lib/getStatementDraftStructureGuide';
+} from '@/lib/statement/prepare/getStatementDraftStructureGuide';
 // STEP 25: 既存 storage helper をそのまま使う（key を直書きしない）。
 import { loadActivityData } from '@/lib/activityStorage';
 import { loadAnalyzeState } from '@/lib/analyzeStorage';
 import {
   buildStatementPrepareMaterials,
   type StatementPrepareMaterial,
-} from '@/lib/buildStatementPrepareMaterials';
+} from '@/lib/statement/prepare/buildStatementPrepareMaterials';
 import type { ActivityData } from '@/types/activity';
 import type { PersistedAnalyzeState } from '@/types/analysis';
 

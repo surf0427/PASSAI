@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { DeepDiveSession, CompletedDeepDive } from '@/hooks/useDeepDive';
 import { getSummaryForPhrase } from '@/lib/deepDiveQuestions';
-import { StructureMapping } from '@/components/StructureMapping';
+import { StructureMapping } from '@/components/statement/StructureMapping';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Textarea';
 

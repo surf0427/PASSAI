@@ -3,7 +3,7 @@ import {
   safeSetStorage,
   safeRemoveStorage,
 } from '@/lib/storage/safeStorage';
-import type { StatementPrepareWeakPointKey } from '@/lib/detectStatementPrepareWeakPoints';
+import type { StatementPrepareWeakPointKey } from '@/lib/statement/prepare/detectStatementPrepareWeakPoints';
 
 // ── 型定義 ────────────────────────────────────────────────────────
 

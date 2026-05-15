@@ -5,7 +5,7 @@ import { safeGetStorage, safeSetStorage, safeRemoveStorage } from '@/lib/storage
 
 const DRAFT_KEY = 'statementDraft';
 
-type StatementDraft = {
+export type StatementDraft = {
   university: string;
   faculty: string;
   department: string; // 学科。STEP4 で追加。任意項目（空文字でOK）。

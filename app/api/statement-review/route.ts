@@ -1,5 +1,5 @@
 import { anthropic, extractJson } from '@/lib/ai';
-import { buildStatementReviewPrompt } from '@/lib/statementPrompt';
+import { buildStatementReviewPrompt } from '@/lib/statement/review/statementPrompt';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
