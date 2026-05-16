@@ -347,13 +347,24 @@ function StatementPageInner() {
     // C1 mitigation: studentProfile は page 上位の useMemo で派生済みの stable reference を
     // 閉包経由で参照する。inline で getStudentProfileForFeature() を呼ぶと canonical 不在 user で
     // toStudentProfile() が新 generatedAt を都度生成し inputHash が drift するため。
-    // 後方互換のため wallHittingResult も併送する（API 側で studentProfile が無効なときの fallback に使う）。
+    // 後方互換のため wallHittingResult は fetch body 側にだけ載せる（API 側で
+    // studentProfile が無効なときの prompt fallback に使う）。
 
-    // STEP5.10: input hash cache を daily limit gate より先に判定する。
+    // STEP5.10 / STEP-F: input hash cache を daily limit gate より先に判定する。
     // 同入力なら AI を呼ばずに保存済み response を復元する。limit gate は AI 生成回数の
     // 制御で、cache hit は生成が起きないため bypass する（STEP5.4 と同方針）。
     // history は「ユーザーが確認した添削履歴」semantics として hit 時も append する。
     // 出力 hash (StudentProfile.sourceHash) とは別レーン。
+    //
+    // INTENTIONAL ASYMMETRY (STEP-F):
+    //   - hash 入力（本 call）: canonical studentProfile のみ。wallHittingResult は含めない
+    //     （v5 で除外。同素材を 2 object で二重 hash するのを止め canonical 一本化）
+    //   - fetch body（下の fetch(...)）: studentProfile / wallHittingResult を両方送る
+    //     （route.ts の prompt builder が studentProfile ?? toStudentProfile(wallHittingResult)
+    //      で fallback するため、canonical 不在ユーザでも prompt 品質を落とさない）
+    //   この非対称は cache identity と prompt 入力を別レーンとして扱う設計。
+    //   STEP-F は minimum migration で、studentProfile.generatedAt drift の完全解消は
+    //   別 STEP として残す（C1 useMemo が session 内 stabilizer として依然必要）。
     const inputHash = hashStatementReviewInput({
       university,
       faculty,
@@ -362,7 +373,6 @@ function StatementPageInner() {
       basicInfo,
       activityData: activities,
       studentProfile,
-      wallHittingResult: wallHitting,
       model: STATEMENT_REVIEW_MODEL,
       promptVersion: STATEMENT_REVIEW_PROMPT_VERSION,
     });

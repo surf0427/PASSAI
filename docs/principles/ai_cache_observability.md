@@ -115,7 +115,7 @@ cache hit 時に daily limit を消費しないのは、limit の semantics が�
 - 利用箇所: [`app/statement/edit/page.tsx`](../../app/statement/edit/page.tsx) の `submitReview`
 - 関連 storage: [`lib/statementReviewCache.ts`](../../lib/statementReviewCache.ts)（hash と生成済み `ApiReviewResponse` を 1 key に同居）
 - input hash 計算: [`lib/aiInputHash.ts`](../../lib/aiInputHash.ts) の `hashStatementReviewInput()`
-- 入力: `university` / `faculty` / `department` / `essay` / `basicInfo` / `activityData` / `studentProfile` / `wallHittingResult` / `model` / `promptVersion`。`statementReviewHistory` / `statementReviewLimit` / 出力 score・feedback は含めない
+- 入力（STEP-F / v5 以降）: `university` / `faculty` / `department` / `essay` / `basicInfo` / `activityData` / `studentProfile` / `model` / `promptVersion`。`statementReviewHistory` / `statementReviewLimit` / 出力 score・feedback は含めない。`wallHittingResult` は v5 で **hash 入力から除外**（canonical `studentProfile` 一本化）。ただし `fetch('/api/statement-review')` の body には引き続き含める（route.ts 側の prompt builder が canonical 不在ユーザに対して `toStudentProfile(wallHittingResult)` で fallback を作るため。hash と prompt body が input source 上 intentional に非対称）
 
 **daily limit / history との関係（STEP5.10）**:
 
@@ -148,3 +148,4 @@ cache hit が daily limit を消費しないのは limit semantics が「AI 生�
 - 2026-05-11: STEP5.8 — `/api/summarize` への横展開を追記（活動まとめ生成 cache）。
 - 2026-05-11: STEP5.10 — `/api/statement-review` への横展開を追記。hit 時の daily limit / history 扱いを明文化（hit は limit 不消費、history は append）。
 - 2026-05-11: STEP5.11 — `/api/essay-review` への横展開を追記（小論文添削 cache）。daily limit なし。
+- 2026-05-16: STEP-F — `/api/statement-review` の `STATEMENT_REVIEW_PROMPT_VERSION` を 4 → 5 に bump。`hashStatementReviewInput` から `wallHittingResult` を除外し、cache identity を canonical `studentProfile` 一本に揃えた（同素材を 2 object で二重 hash していたのを 1 object に縮める変更）。route.ts / prompt 本文は不変で、`fetch` body は両方を引き続き送信する（hash と body の intentional asymmetry）。bump により旧 v4 cache は一律 miss になる（intentional 1 回損失）。`studentProfile.generatedAt` drift の完全解消は別 STEP として残す（minimum migration）。

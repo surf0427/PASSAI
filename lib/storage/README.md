@@ -84,7 +84,7 @@ raw string ストレージには以下のコメントを必ず付けること:
 | `wallHittingInputHash` | `lib/wallHittingInputHashStorage.ts` | JSON | `/api/analysis` の input hash cache（STEP5.2）。同入力なら AI call を skip するための判定 key。`wallHittingResult` と AND で照合する |
 | `additionalQuestionsInputHash` | `lib/additionalQuestionsCache.ts` | JSON | `/api/analysis/additional` の input hash + 生成済み追加質問の同居 cache（STEP5.4）。hit 時は daily limit を消費しない |
 | `summarizeInputHash` | `lib/summarizeCache.ts` | JSON | `/api/summarize` の input hash + 生成済み `SummaryResult` の同居 cache（STEP5.8）。`analyzeState.summary` とは独立 |
-| `statementReviewInputHash` | `lib/statement/review/statementReviewCache.ts` | JSON | `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache（STEP5.10）。hit 時は `statementReviewLimit` を消費せず、`statementReviewHistory` には append する |
+| `statementReviewInputHash` | `lib/statement/review/statementReviewCache.ts` | JSON | `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache（STEP5.10 / STEP-F で v5）。hit 時は `statementReviewLimit` を消費せず、`statementReviewHistory` には append する。STEP-F (v5) で hash 入力から `wallHittingResult` を除外し canonical `studentProfile` 一本化 |
 | `essayReviewInputHash` | `lib/essayReviewCache.ts` | JSON | `/api/essay-review` の input hash + 生成済み `ReviewResult` の同居 cache（STEP5.11）。`essayPracticeReview` (`SavedReview`) とは独立 |
 | `selfPRs` | `lib/selfPRStorage.ts` | JSON | 自己 PR 一覧 |
 | `selfPR_draft` | `lib/selfPRDraftStorage.ts` | **raw string** | 自己 PR 下書き（ページ間受け渡し）。既存例外（raw string） |

@@ -28,7 +28,7 @@
 
 ## STEP5.10 で追加された key
 
-- `statementReviewInputHash`（[`lib/statement/review/statementReviewCache.ts`](../../lib/statement/review/statementReviewCache.ts), JSON）— `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache。同一入力（university / faculty / department / essay / basicInfo / activityData / studentProfile / wallHittingResult / model / promptVersion）なら AI call を skip して保存済み response を復元するための判定 key。hit 時は `statementReviewLimit` を消費しないが、`statementReviewHistory` には append される。
+- `statementReviewInputHash`（[`lib/statement/review/statementReviewCache.ts`](../../lib/statement/review/statementReviewCache.ts), JSON）— `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache。同一入力（university / faculty / department / essay / basicInfo / activityData / studentProfile / model / promptVersion）なら AI call を skip して保存済み response を復元するための判定 key。hit 時は `statementReviewLimit` を消費しないが、`statementReviewHistory` には append される。STEP-F (v5) で `wallHittingResult` を hash 入力から除外し canonical `studentProfile` 一本化（旧 v4 cache は一律 miss → 1 回 AI call → 新 v5 cache 保存）。`fetch` body には引き続き `wallHittingResult` を含めるため hash と body は intentional に非対称（route.ts の prompt builder が canonical 不在ユーザに対して fallback を作る）。`studentProfile.generatedAt` drift の完全解消は別 STEP として残す（STEP-F は minimum migration）。
 
 ## STEP5.11 で追加された key
 

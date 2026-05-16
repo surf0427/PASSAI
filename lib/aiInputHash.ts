@@ -173,9 +173,25 @@ export function hashSummarizeInput(input: HashSummarizeInput): string {
 //             値そのまま・サーバで再計算」と明記し、60 点未満禁止と合計一致の二重制約を撤廃。
 //             hash 入力構造 / JSON contract / 各 score 範囲（8〜20）は不変。出力 totalScore の
 //             数値分布が変わるため既存 v3 cache の意味的妥当性が変わり bump 必須。
-export const STATEMENT_REVIEW_PROMPT_VERSION = 4;
+//   v4 → v5 : STEP-F で hash 入力から wallHittingResult を除外し、自己分析素材の
+//             cache identity を canonical StudentProfile 一本に揃える。同素材を
+//             studentProfile / wallHittingResult の 2 object で二重に hash していたのを
+//             1 object に縮める変更（hash 入力構造が変わる）。route.ts / prompt 本文は
+//             不変で、prompt 側は今後も studentProfile ?? toStudentProfile(wallHittingResult)
+//             の fallback を維持するため、wallHittingResult-only ユーザの prompt 品質は
+//             落ちない。bump によって旧 v4 cache は一律 miss になる（intentional 1 回損失）。
+//             STEP-F は minimum migration。studentProfile.generatedAt drift の完全解消は
+//             別 STEP（hash 入力を sourceHash 一本に絞る等）として残す。
+export const STATEMENT_REVIEW_PROMPT_VERSION = 5;
 export const STATEMENT_REVIEW_MODEL = 'claude-sonnet-4-6';
 
+// hash と prompt body の input source は STEP-F 以降 intentional に非対称:
+//   - hash 入力 (本 type): canonical StudentProfile のみ。wallHittingResult は含めない
+//   - prompt body (route.ts に渡す JSON): studentProfile / wallHittingResult の両方
+//     （route.ts 側の prompt builder が canonical 優先 + wallHitting fallback で参照する）
+// この非対称は、cache identity を canonical 一本に揃えつつ、canonical 不在ユーザの
+// prompt 品質を落とさないための trade-off。app/statement/edit/page.tsx 側の呼び出し
+// コメントも同趣旨を明記している。
 export type HashStatementReviewInput = {
   university: string;
   faculty: string;
@@ -184,7 +200,6 @@ export type HashStatementReviewInput = {
   basicInfo: unknown;
   activityData: unknown;
   studentProfile: unknown;
-  wallHittingResult: unknown;
   model: string;
   promptVersion: number;
 };
