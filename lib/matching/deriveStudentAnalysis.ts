@@ -1,11 +1,17 @@
 // 活動整理・基本情報・自己分析添削データから StudentAnalysis を導出する。
-// wallHittingResult（AI壁打ち結果）があればそれを優先して使う。
+// wallHittingResult（AI壁打ち結果）があれば、内部で StudentProfile に変換してから読む。
+//
+// 設計方針:
+//   - 外部からの呼び出しシグネチャは互換維持（admission-matching が直接呼ぶ）
+//   - 内部では必ず toStudentProfile() を経由する
+//   - これにより questions / answers などの working memory が誤って読まれる経路を消す
 
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { SelfPR } from '@/types/selfPR';
 import type { WallHittingResult } from '@/types/analysis';
 import type { StudentAnalysis } from '@/types/matching';
+import { toStudentProfile } from '@/lib/studentProfile';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -32,11 +38,15 @@ export function deriveStudentAnalysis(
   selfPRs: SelfPR[],
   wallHittingResult?: WallHittingResult | null,
 ): StudentAnalysis {
+  // 自己分析は受信時点で StudentProfile に変換し、以降はこの profile だけを読む。
+  // 外部シグネチャは互換のため WallHittingResult のまま受けるが、内部参照は profile 側で完結する。
+  const studentProfile = wallHittingResult ? toStudentProfile(wallHittingResult) : null;
+
   // 活動データがない場合はスコアを計算できない
   if (!activityData) {
     return {
-      strengths: wallHittingResult?.strengths ?? [],
-      weaknesses: wallHittingResult?.weaknesses ?? [],
+      strengths: studentProfile?.strengths ?? [],
+      weaknesses: studentProfile?.weaknesses ?? [],
       aoScoreProfile: null,
       recommendationScoreProfile: null,
     };
@@ -69,8 +79,11 @@ export function deriveStudentAnalysis(
   };
 
   // ── AI壁打ち結果で弱点調整 ──────────────────────────────────
-  if (wallHittingResult?.weaknesses) {
-    applyWeaknessAdjustments(wallHittingResult.weaknesses, aoScores, recScores);
+  // 弱点テキストのキーワードマッチで AO/推薦スコアを下方修正する。
+  // StudentProfile.weaknesses は WallHittingResult.weaknesses を sanitize したものなので、
+  // キーワードの一致挙動は従来と等価。
+  if (studentProfile?.weaknesses?.length) {
+    applyWeaknessAdjustments(studentProfile.weaknesses, aoScores, recScores);
   }
 
   // ── 強み・弱みテキスト ─────────────────────────────────────────
@@ -78,9 +91,9 @@ export function deriveStudentAnalysis(
   let strengths: string[];
   let weaknesses: string[];
 
-  if (wallHittingResult) {
-    strengths = wallHittingResult.strengths;
-    weaknesses = wallHittingResult.weaknesses;
+  if (studentProfile) {
+    strengths = studentProfile.strengths;
+    weaknesses = studentProfile.weaknesses;
   } else {
     strengths = [];
     weaknesses = [];
