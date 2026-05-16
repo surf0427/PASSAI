@@ -13,12 +13,13 @@ export type WallHittingResult = {
   questions: string[];
 };
 
+// /api/summarize の出力。「自己分析の簡潔な要約」のみを返す。
+// 自己PR下書き / 面接で話す要点は feature 側（self-pr / interview）の責務であり、
+// 各 feature は StudentProfile から自前で派生する。
 export type SummaryResult = {
   activitySummary: string;
   strengths: string;
   appealPoints: string;
-  selfPRDraft: string;
-  interviewPoints: string[];
 };
 
 // AI壁打ちのフロー上のステップ
@@ -38,4 +39,13 @@ export type PersistedAnalyzeState = {
   analysis: WallHittingResult | null;
   summary: SummaryResult | null;
   displayedQuestions?: string[]; // 表示中の質問（初期5問 + 追加分）
+  // 各質問に対する任意の「追加深掘りメモ」。answers と index 一対一対応。
+  // optional にして旧保存データ（このキーを持たない JSON）との互換を保つ。
+  // working memory として扱い、StudentProfile / SummaryResult / WallHittingResult には流さない。
+  deepAnswers?: string[];
+  // 任意の自由メモ（全体単位・1 フィールド）。質問では拾いきれない気づき・違和感を書く欄。
+  // optional にして旧保存データ互換を維持。working memory として扱い、
+  // /api/summarize にのみ流す。StudentProfile / Context Builder / downstream feature には絶対に流さない。
+  // 上限は lib/summarizeNormalize.ts:FREE_MEMO_MAX_CHARS。
+  freeMemo?: string;
 };

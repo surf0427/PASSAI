@@ -14,20 +14,6 @@ export function SummarySection({ summary }: Props) {
       <SummaryCard title="アピールポイント">
         <p className="text-gray-800 leading-relaxed text-sm">{summary.appealPoints}</p>
       </SummaryCard>
-      <SummaryCard title="自己PRのたたき台">
-        <p className="text-gray-800 leading-relaxed text-sm whitespace-pre-line">
-          {summary.selfPRDraft}
-        </p>
-      </SummaryCard>
-      <SummaryCard title="面接で話せる要点">
-        <ul className="list-disc pl-5 space-y-1">
-          {summary.interviewPoints.map((point, i) => (
-            <li key={i} className="text-gray-800 text-sm">
-              {point}
-            </li>
-          ))}
-        </ul>
-      </SummaryCard>
     </div>
   );
 }
