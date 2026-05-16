@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
-import type { BasicInfo, SchoolPreference } from '@/types/basicInfo';
+import type { BasicInfo, SchoolPreference, SubjectGrades } from '@/types/basicInfo';
 import { saveBasicInfo, loadBasicInfo } from '@/lib/basicInfoStorage';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { FormField } from '@/components/ui/FormField';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Accordion } from '@/components/ui/Accordion';
 
 type FormErrors = {
   name?: string;
@@ -29,7 +30,58 @@ const EXAM_TYPE_OPTIONS = [
   'まだ決まっていない',
 ] as const;
 
+// 科目別評定・欠席日数の field 定義。
+// 評定 5 科目は overallGpa と同じ思想で decimal、欠席日数のみ整数想定で numeric。
+// label の順序は UI 表示順を兼ねる。
+const SUBJECT_GRADE_FIELDS: ReadonlyArray<{
+  key: keyof SubjectGrades;
+  label: string;
+  inputMode: 'decimal' | 'numeric';
+  placeholder: string;
+}> = [
+  { key: 'english', label: '英語評定', inputMode: 'decimal', placeholder: '例：4.5' },
+  { key: 'japanese', label: '国語評定', inputMode: 'decimal', placeholder: '例：4.2' },
+  { key: 'math', label: '数学評定', inputMode: 'decimal', placeholder: '例：3.8' },
+  { key: 'science', label: '理科評定', inputMode: 'decimal', placeholder: '例：4.0' },
+  { key: 'social', label: '社会評定', inputMode: 'decimal', placeholder: '例：4.3' },
+  { key: 'absenceDays', label: '欠席日数', inputMode: 'numeric', placeholder: '例：3' },
+];
+
 const emptyPreference: SchoolPreference = { university: '', faculty: '', department: '' };
+
+// マウント前 false / マウント後 true を返す flag（SSR/hydration セーフ）。
+// useSyncExternalStore は server snapshot / client snapshot を React のハイドレーション
+// フェーズと協調させるため、setState を使わずに「マウント済み」フラグを表現できる。
+// app/self-analysis/page.tsx / app/statement/edit/page.tsx と同形パターン。
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
+
+// 保存直前に呼ぶ。subjectGrades を field 単位で prune する：
+//   - 各 key を trim し、空文字になった key は落とす
+//   - 残る key が 1 つでもあれば subjectGrades に非空 key だけ残す
+//   - 全部空なら subjectGrades キーごと削除する
+// 空の {} や空文字フィールドが localStorage に残るのを防ぎ、
+// AI input hash（lib/aiInputHash.ts）が無駄に変動するのを防ぐ。
+function pruneSubjectGrades(data: BasicInfo): BasicInfo {
+  const grades = data.subjectGrades;
+  if (!grades) return data;
+  const nextGrades: SubjectGrades = {};
+  for (const [key, value] of Object.entries(grades) as Array<
+    [keyof SubjectGrades, string | undefined]
+  >) {
+    const trimmed = (value ?? '').trim();
+    if (trimmed !== '') {
+      nextGrades[key] = trimmed;
+    }
+  }
+  if (Object.keys(nextGrades).length === 0) {
+    const next = { ...data };
+    delete next.subjectGrades;
+    return next;
+  }
+  return { ...data, subjectGrades: nextGrades };
+}
 
 const initialFormData: BasicInfo = {
   name: '',
@@ -48,15 +100,24 @@ const initialFormData: BasicInfo = {
 
 export default function BasicInfoPage() {
   const router = useRouter();
-  const [formData, setFormData] = useState<BasicInfo>(initialFormData);
+  // STEP5.15: mount フラグを useSyncExternalStore に置換し、formData は lazy initializer で
+  // localStorage から直接復元する。
+  //   - SSR / client first render: isMounted = false → 下方の `if (!isMounted) return null` で
+  //     どちらも DOM を空に保つため、formData の lazy init が server '' / client '実値' で
+  //     異なる状態を持っても **DOM レベルの hydration mismatch は発生しない**。
+  //   - hydration commit 後: isMounted = true に切り替わり、formData は既に loadBasicInfo() の
+  //     値を保持しているため、追加の setState なしでフォームが復元状態で表示される。
+  // これにより従来の `useEffect → setFormData(saved); setIsMounted(true)` 副作用が不要となり、
+  // react-hooks/set-state-in-effect 違反は eslint-disable なしで解消される。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const [formData, setFormData] = useState<BasicInfo>(
+    () => loadBasicInfo() ?? initialFormData,
+  );
   const [errors, setErrors] = useState<FormErrors>({});
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    const saved = loadBasicInfo();
-    if (saved) setFormData(saved);
-    setIsMounted(true);
-  }, []);
 
   function handleChange(
     event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -75,6 +136,19 @@ export default function BasicInfoPage() {
       return { ...prev, examTypes: next };
     });
     setErrors((prev) => ({ ...prev, examTypes: undefined }));
+  }
+
+  // subjectGrades はネストオブジェクトかつ optional のため、generic な handleChange に
+  // 混ぜず専用ハンドラを置く。未入力フィールドは undefined のまま温存することで、
+  // 保存時 prune と AI input hash の不変性を維持する。
+  function handleSubjectGradeChange(key: keyof SubjectGrades, value: string) {
+    setFormData((prev) => ({
+      ...prev,
+      subjectGrades: {
+        ...(prev.subjectGrades ?? {}),
+        [key]: value,
+      },
+    }));
   }
 
   function handlePreferenceChange(
@@ -124,7 +198,7 @@ export default function BasicInfoPage() {
       setErrors(newErrors);
       return;
     }
-    saveBasicInfo(formData);
+    saveBasicInfo(pruneSubjectGrades(formData));
     router.push('/home');
   }
 
@@ -220,6 +294,30 @@ export default function BasicInfoPage() {
                 placeholder="例：4.3"
               />
             </FormField>
+
+            {/* 科目別評定・欠席日数（任意）
+                推薦・AO の科目条件マッチング精度を上げるための optional 入力。
+                初回離脱を増やさないよう defaultOpen=false。
+                値は subjectGrades オブジェクトにネストして保存し、未入力なら
+                handleSubmit 時の pruneSubjectGrades で key ごと落とす。 */}
+            <Accordion title="＋ 科目別評定・欠席日数を入力する（任意）">
+              <p className="text-xs text-gray-500 mb-4">
+                詳しく入力すると、推薦可能校や科目条件をより正確に判定できます。あとからでも入力できます。
+              </p>
+              <div className="space-y-3">
+                {SUBJECT_GRADE_FIELDS.map((field) => (
+                  <FormField key={field.key} label={field.label}>
+                    <Input
+                      type="text"
+                      inputMode={field.inputMode}
+                      value={formData.subjectGrades?.[field.key] ?? ''}
+                      onChange={(e) => handleSubjectGradeChange(field.key, e.target.value)}
+                      placeholder={field.placeholder}
+                    />
+                  </FormField>
+                ))}
+              </div>
+            </Accordion>
 
           </div>
         </section>
