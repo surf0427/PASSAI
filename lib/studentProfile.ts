@@ -13,6 +13,7 @@
 //
 // 詳細な責務境界は AI API 責務分離設計（前タスク）参照。
 
+import { djb2 } from '@/lib/hash/djb2';
 import type { WallHittingResult } from '@/types/analysis';
 import type {
   SignatureEpisode,
@@ -82,16 +83,11 @@ function sanitizeStringArray(input: unknown): string[] {
   return result;
 }
 
-// djb2 系の軽量文字列 hash を base36 で表現する。
-// crypto を使わないのは、Node / Edge / Browser のいずれの環境でも動くようにするため。
-// 衝突耐性は要求しない（再生成判定の cache key 用途のみ）。
+// 再生成判定用の sourceHash を作る。
+// 入力 unknown を JSON.stringify(_ ?? null) で文字列化してから lib/hash/djb2 を通す。
+// STEP-D で djb2 本体は lib/hash/djb2.ts に集約済み（同入力で hash 値は不変）。
 function hashSourceContent(input: unknown): string {
-  const text = JSON.stringify(input ?? null);
-  let h = 5381;
-  for (let i = 0; i < text.length; i++) {
-    h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
-  }
-  return h.toString(36);
+  return djb2(JSON.stringify(input ?? null));
 }
 
 // ── valueKeywords ──────────────────────────────────────────────────

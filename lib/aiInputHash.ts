@@ -18,6 +18,8 @@
 //   - lib/aiCacheLog.ts                         ← hit/miss 観測ログ（logAiCache）
 //   - docs/principles/ai_cache_observability.md ← 観測仕様と route 別の hit 時セマンティクス
 
+import { djb2 } from '@/lib/hash/djb2';
+
 // プロンプト本文を変更した時に bump する版数。これを上げると既存 cache が一律 miss になる。
 // STEP5.2 時点では 1。ANALYSIS_SYSTEM_PROMPT / buildWallHittingPrompt を改修するときに +1 する。
 //
@@ -304,14 +306,7 @@ function normalize(value: unknown): unknown {
   return null;
 }
 
-// djb2 系の軽量文字列 hash を base36 で表現する。
-// crypto を使わないのは、Node / Edge / Browser のいずれの環境でも動かすため + 外部ライブラリ追加禁止。
-// 衝突耐性は要求しない（cache 用途では衝突しても miss 扱いで 1 回 AI を呼ぶだけ）。
-// lib/studentProfile.ts:hashSourceContent と同型だが、責務が違うので意図的に重複させている。
-function djb2(text: string): string {
-  let h = 5381;
-  for (let i = 0; i < text.length; i++) {
-    h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
-  }
-  return h.toString(36);
-}
+// djb2 hash 本体は lib/hash/djb2.ts に集約（STEP-D）。
+// 用途は input hash（同入力なら AI call を skip する cache key）で、
+// lib/studentProfile.ts:hashSourceContent（出力 hash）とは責務が違う点は不変。
+// hash 値は集約前と完全に同一（同入力 → 同 hash）。
