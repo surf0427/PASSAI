@@ -1,13 +1,19 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import type { SelfPR } from '@/types/selfPR';
+import type { StudentProfile } from '@/types/studentProfile';
+import type { SummaryResult } from '@/types/analysis';
 import { loadSelfPRs, saveSelfPRs } from '@/lib/selfPRStorage';
 import { loadSelfPRDraft, clearSelfPRDraft } from '@/lib/selfPRDraftStorage';
 import { selfAnalysisLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { saveAnalyzeState, loadAnalyzeState } from '@/lib/analyzeStorage';
+import { loadWallHittingResult } from '@/lib/wallHittingStorage';
+import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
+import { buildSelfPRDraftSeed } from '@/lib/buildSelfPRDraftSeed';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
 
@@ -23,6 +29,33 @@ function formatDateTime(isoString: string): string {
   return `${y}/${m}/${day} ${h}:${min}`;
 }
 
+// buildSelfPRDraftSeed の入力（profile + analyzeSummary）を identity-stable に hash 化する。
+// 既存 selfPRs[].seedInputHash と比較し、現在の canonical 入力に対応する PR が無い時だけ
+// 新規カードを追加する判定キー（重複作成を防ぐ）。
+// 含めるフィールドは buildSelfPRDraftSeed が実際に読む全項目 + profile.sourceHash の早期判定キー。
+// djb2 base36 — 衝突耐性は要求しない（重複作成判定用途のみ）。
+function computeSeedInputHash(
+  profile: StudentProfile | null,
+  analyzeSummary: SummaryResult | null,
+): string {
+  const payload = {
+    profileSourceHash: profile?.sourceHash ?? null,
+    profileSummary: profile?.summary ?? null,
+    profileStrengths: profile?.strengths ?? null,
+    profileFutureConnections: profile?.futureConnections ?? null,
+    profileSignatureEpisodes: profile?.signatureEpisodes ?? null,
+    analyzeActivitySummary: analyzeSummary?.activitySummary ?? null,
+    analyzeStrengths: analyzeSummary?.strengths ?? null,
+    analyzeAppealPoints: analyzeSummary?.appealPoints ?? null,
+  };
+  const text = JSON.stringify(payload);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(36);
+}
+
 // タイトルが未入力の場合に本文冒頭20文字を使う
 function resolveTitle(pr: SelfPR): string {
   if (pr.title && pr.title.trim()) return pr.title.trim();
@@ -36,6 +69,10 @@ export default function Page() {
   const router = useRouter();
   const [selfPRs, setSelfPRs] = useState<SelfPR[]>([]);
   const [usage, setUsage] = useState<DailyUsage>({ date: '', count: 0 });
+  // 「まだ自己分析が作成されていません」を出すかの判定材料。
+  // analyzeState.summary（/api/summarize の結果）が存在すれば自己分析は完了済み。
+  // 既存の selfPRs 件数（=自己PR添削履歴）とは別レーン。
+  const [hasSelfAnalysis, setHasSelfAnalysis] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
@@ -44,29 +81,104 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // 本 effect は単純な storage restore ではなく、以下を兼ねる
+  //   genuine mount-time side-effect である。
+  //
+  //   (1) storage 読込: selfPRs / selfAnalysisLimit usage / hasSelfAnalysis 判定
+  //   (2) 自動 prefill の **one-time consumption（write side-effect）**:
+  //       canonical priority に従って新規 PR を 1 件だけ追加するか決める。
+  //         a. legacy selfPR_draft（writer 廃止済み）が残っていれば消費して 1 件追加
+  //         b. 上記が無く、現在の canonical 入力に対応する PR が無く、
+  //            StudentProfile/analyzeState.summary から seed が作れる場合は 1 件追加
+  //         c. どちらも該当しなければ何も作らず既存 selfPRs を読むだけ
+  //       a の場合、および b で初回（stored 空）の場合は openPR で自動オープンする。
+  //       b で既存カードがあるとき（STEP3 等で summary 更新後の 2 件目追加）は
+  //       openPR せず、user に一覧で新規カード追加を視認させる。
+  //   (3) 既存 PR の text / seedInputHash は触らない（user 編集済みカードを保護）。
+  //       同じ seed hash を持つ PR が既にあれば重複作成しない。
+  //
+  // mount gate（`if (!mounted) return null`）を持たないため lazy initializer /
+  // useMemo に逃がすと SSR / client first render で hydration mismatch を起こす。
+  // また prefill consumption は render 経路に置けない genuine write side-effect で、
+  // useState() の初期化フェーズには載せられない。よって本 effect は genuine
+  // side-effect のままにし、react-hooks/set-state-in-effect は scoped に disable する。
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
       const stored = loadSelfPRs();
       const currentUsage = selfAnalysisLimit.loadUsage();
-      const draft = loadSelfPRDraft();
+      const analyzeState = loadAnalyzeState();
+      const legacyDraft = loadSelfPRDraft();
+      // analyzeState.summary が非 null なら自己分析が完了済み（empty-state の文言分岐に使う）。
+      // 旧 selfPR_draft writer 撤去後、ここでは「自己分析の有無」を analyzeState で直接判定する。
+      setHasSelfAnalysis(!!analyzeState?.summary);
 
-      if (draft) {
+      // seed 生成 / 重複判定で同じ source を読むために、profile / currentSeedInputHash を
+      // branch 前に確定する（hash 計算は副作用なしの純粋関数）。
+      const profile = getStudentProfileForFeature({
+        wallHittingResult: loadWallHittingResult(),
+      });
+      const currentSeedInputHash = computeSeedInputHash(profile, analyzeState?.summary ?? null);
+
+      // canonical prefill: legacy drain → 現在の seed hash 未対応なら追加 → none の順で
+      // 1 度だけ決定する。既存カードの text / seedInputHash は触らない。
+      let prefillText = '';
+      let openAfterCreate = false;
+      if (legacyDraft) {
+        // legacy drain: 旧 raw string storage を消費して 1 件目 PR にする。
+        // writer は廃止済みのため、stale data の自然な吐き出し経路として 1 度きり走る。
         clearSelfPRDraft();
+        prefillText = legacyDraft;
+        openAfterCreate = true;
+      } else {
+        // 現在の canonical 入力 hash に対応する PR が無ければ新規追加する。
+        //   - stored 空: 初回。1 件目を seed で作って auto-open（従来 UX 維持）
+        //   - stored あり: 自己分析 summary が更新された（STEP3 等）→ 新規 2 件目を追加。
+        //     auto-open しない: user に一覧で新規カードを視認させる。
+        // user 編集後も seedInputHash は保持する（updateCurrentPR 参照）ため、
+        // 同じ seed の重複作成は防げる。
+        //
+        // PR10c (H1): legacy user の selfPRs に seedInputHash 未設定の record が
+        //   ある状態でも、自動 seed 追加は **同一 currentSeedInputHash で 1 度だけ** 走る。
+        //   理由: 追加直後の new PR は `seedInputHash: currentSeedInputHash` を持つため
+        //   (L165 参照)、次回 mount で `stored.some(pr => pr.seedInputHash === currentSeedInputHash)`
+        //   が true になり、重複追加経路に入らない。currentSeedInputHash が変わるのは
+        //   profile.sourceHash か analyzeState.summary が変化したときのみ（STEP3 等の
+        //   意図的な再生成）であり、その場合は「新規 2 件目」が意図動作。よって
+        //   無限増殖は構造的に発生しない。legacy record（hash 未設定）は dedup 対象外で
+        //   保護されるため、user 編集済みカードは触らない。
+        const hasCurrentSeed = stored.some((pr) => pr.seedInputHash === currentSeedInputHash);
+        if (!hasCurrentSeed) {
+          const seed = buildSelfPRDraftSeed({
+            profile,
+            analyzeSummary: analyzeState?.summary ?? null,
+          });
+          if (seed) {
+            prefillText = seed;
+            openAfterCreate = stored.length === 0;
+          }
+        }
+      }
+
+      if (prefillText) {
         const now = new Date().toISOString();
+        // legacy drain 由来は user-controlled 既存テキスト → 重複判定対象から外すため
+        // seedInputHash を付けない。それ以外（buildSelfPRDraftSeed 由来）には現在の hash を保存する。
         const newPR: SelfPR = {
           id: crypto.randomUUID(),
           index: stored.length + 1,
           title: '',
-          text: draft,
+          text: prefillText,
           latestResult: '',
           createdAt: now,
           updatedAt: now,
+          ...(legacyDraft ? {} : { seedInputHash: currentSeedInputHash }),
         };
         const updated = [...stored, newPR];
         saveSelfPRs(updated);
         setSelfPRs(updated);
         setUsage(currentUsage);
-        openPR(newPR);
+        if (openAfterCreate) openPR(newPR);
       } else {
         setSelfPRs(stored);
         setUsage(currentUsage);
@@ -76,16 +188,19 @@ export default function Page() {
       setError('読み込みに失敗しました。もう一度お試しください。');
     }
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const selectedPR = selfPRs.find((pr) => pr.id === selectedId) ?? null;
 
   function updateCurrentPR(patch: Partial<SelfPR>) {
     setSelfPRs((prev) => {
-      const updated = prev.map((pr) =>
-        pr.id === selectedId
-          ? { ...pr, ...patch, updatedAt: new Date().toISOString() }
-          : pr,
-      );
+      const updated = prev.map((pr) => {
+        if (pr.id !== selectedId) return pr;
+        // seedInputHash は user 編集後も保持する: mount effect の重複作成判定で
+        // 「この PR は seed hash X 由来」というマーカーとして使い続けるため。
+        // text/title/latestResult は patch 通りに更新する。
+        return { ...pr, ...patch, updatedAt: new Date().toISOString() };
+      });
       saveSelfPRs(updated);
       return updated;
     });
@@ -233,17 +348,42 @@ export default function Page() {
         </div>
 
         {selfPRs.length === 0 ? (
-          <div className="text-center py-24">
-            <p className="text-gray-400 text-base mb-6">まだ自己分析が作成されていません</p>
-            <button
-              type="button"
-              onClick={createNewPR}
-              disabled={!selfAnalysisLimit.canUse(usage)}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
-            >
-              最初の自己分析を作成する
-            </button>
-          </div>
+          hasSelfAnalysis ? (
+            // 自己分析は完了しているが selfPRs が空のケース。
+            // 通常は mount effect で seed/legacy drain により 1 件 auto-create されるため
+            // 到達経路はレア（profile も summary も legacy draft も全て空 = 手動でストレージを
+            // 消した直後など）。ここでは従来通りの「新規作成」ボタンを残す。
+            <div className="text-center py-24">
+              <p className="text-gray-400 text-base mb-6">まだ自己PR添削はありません</p>
+              <button
+                type="button"
+                onClick={createNewPR}
+                disabled={!selfAnalysisLimit.canUse(usage)}
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
+              >
+                最初の自己PR添削を作成する
+              </button>
+            </div>
+          ) : (
+            // 自己分析が未完了のケース。
+            // 旧 UI ではボタンが createNewPR を呼んで空 PR を作っており、ラベル
+            //（「最初の自己分析を作成する」）と挙動が乖離していた CTA dead-end。
+            // /self-analysis へ遷移する Link に置換し、自己分析を完了させてから戻ると
+            // mount effect の seed 派生で自動的にたたき台が用意されることを案内する。
+            <div className="text-center py-24">
+              <p className="text-gray-400 text-base mb-3">まだ自己分析が作成されていません</p>
+              <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+                自己分析を完了させると、整理メモから<br />
+                自己PRのたたき台が自動で用意されます。
+              </p>
+              <Link
+                href="/self-analysis"
+                className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
+              >
+                自己分析を始める →
+              </Link>
+            </div>
+          )
         ) : (
           <div className="grid gap-4">
             {selfPRs.map((pr) => (

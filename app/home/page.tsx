@@ -175,6 +175,14 @@ export default function HomePage() {
   // 早期 return 後に走るミラーリングで、useSyncExternalStore + useMemo へは
   // 置換できない（navigation 自体が外部副作用で、値の派生では表現できないため）。
   // よって react-hooks/set-state-in-effect は意図的に block-disable する。
+  //
+  // PR10c (H2): dependency は **空配列** で mount 1 回限り。
+  //   旧 `[router]` 依存だと Next.js の useRouter 戻り値が render ごとに新オブジェクト
+  //   参照になる場合があり、effect が再実行 → router.replace 再呼び出しで redirect
+  //   replay / flicker のリスクがあった。router.replace と loadBasicInfo はどちらも
+  //   render-time に依存しない外部 API のため、closure で `router` を参照しつつ
+  //   依存配列を空にしても挙動は等価。react-hooks/exhaustive-deps は block-disable
+  //   済みのため lint エラーは出ない。
   useEffect(() => {
     const info = loadBasicInfo();
     if (!info) {
@@ -193,7 +201,8 @@ export default function HomePage() {
     });
     setIsLoading(false);
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (isLoading) return null;
   if (!basicInfo) return null; // TypeScriptの型絞り込み用。実際にはisLoading後に必ず設定済み
