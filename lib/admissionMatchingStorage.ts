@@ -16,7 +16,12 @@ import { safeGetStorage, safeSetStorage } from '@/lib/storage/safeStorage';
 
 const STORAGE_KEY = 'admissionMatchingInput';
 
-// localStorage から basicInfo・activityData・selfPRs・wallHittingResult を集めて保存する
+// localStorage から basicInfo・activityData・selfPRs・wallHittingResult を集めて保存する。
+// 「集めて save する」副作用付き。"診断を開始する" タイミングなど、ユーザーの意図ある
+// アクション時にのみ呼ぶこと。画面を開いただけの mount restore には使わない
+// （home の checkMatchingStatus が in_progress 判定にこの key 存在を見ているため、
+//  単純な mount で write すると「ページを開いた瞬間 = in_progress」になってしまう）。
+// 画面表示のための read-only restore には loadFreshMatchingInputSnapshot を使う。
 export function collectAndSaveMatchingInput(): AdmissionMatchingInput {
   const input: AdmissionMatchingInput = {
     basicInfo: loadBasicInfo(),
@@ -29,7 +34,23 @@ export function collectAndSaveMatchingInput(): AdmissionMatchingInput {
   return input;
 }
 
-// 保存済みの入力データを読み込む
+// STEP6.6: collectAndSaveMatchingInput の read 部分のみを切り出した read-only 版。
+//   個別 storage 4 つから直読みするだけで、admissionMatchingInput key への write は行わない。
+//   matching page の mount restore で「画面を開いただけで進捗状態を変えてしまわない」ために使う。
+//   collectAndSaveMatchingInput とは戻り値の中身が同じ shape だが、savedAt は常に「今」を入れる
+//   （消費側がタイムスタンプを使う場合の互換性のため。型契約上は必須フィールド）。
+export function loadFreshMatchingInputSnapshot(): AdmissionMatchingInput {
+  return {
+    basicInfo: loadBasicInfo(),
+    activityData: loadActivityData(),
+    selfPRs: loadSelfPRs(),
+    wallHittingResult: loadWallHittingResult(),
+    savedAt: new Date().toISOString(),
+  };
+}
+
+// 保存済みの入力データを読み込む（集約 key 経由。個別 storage の最新を取りたい場合は
+// loadFreshMatchingInputSnapshot を使うこと）
 export function loadMatchingInput(): AdmissionMatchingInput | null {
   return safeGetStorage<AdmissionMatchingInput | null>(STORAGE_KEY, null);
 }
