@@ -83,5 +83,6 @@ type StatementScoreBreakdown = {
 
 - AI ポリシー（代筆禁止）：[../principles/ai_policy.md](../principles/ai_policy.md)
 - アーキテクチャルール：[../principles/architecture_rules.md](../principles/architecture_rules.md)
+- AI 数値スコア contract の予防ルール（totalScore / 合計一致 / PROMPT_VERSION bump 条件）：[../principles/ai_score_contract.md](../principles/ai_score_contract.md)
 - 現在仕様：[statement_current_state.md](./statement_current_state.md)
 - STEP 履歴：[statement_steps.md](./statement_steps.md)

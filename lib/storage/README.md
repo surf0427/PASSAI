@@ -81,6 +81,11 @@ raw string ストレージには以下のコメントを必ず付けること:
 | `activityFormData` | `lib/activityStorage.ts` | JSON | 活動整理フォーム（入力途中） |
 | `analyzeState` | `lib/analyzeStorage.ts` | JSON | 壁打ちセッション状態 |
 | `wallHittingResult` | `lib/wallHittingStorage.ts` | JSON | 壁打ち分析結果 |
+| `wallHittingInputHash` | `lib/wallHittingInputHashStorage.ts` | JSON | `/api/analysis` の input hash cache（STEP5.2）。同入力なら AI call を skip するための判定 key。`wallHittingResult` と AND で照合する |
+| `additionalQuestionsInputHash` | `lib/additionalQuestionsCache.ts` | JSON | `/api/analysis/additional` の input hash + 生成済み追加質問の同居 cache（STEP5.4）。hit 時は daily limit を消費しない |
+| `summarizeInputHash` | `lib/summarizeCache.ts` | JSON | `/api/summarize` の input hash + 生成済み `SummaryResult` の同居 cache（STEP5.8）。`analyzeState.summary` とは独立 |
+| `statementReviewInputHash` | `lib/statement/review/statementReviewCache.ts` | JSON | `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache（STEP5.10）。hit 時は `statementReviewLimit` を消費せず、`statementReviewHistory` には append する |
+| `essayReviewInputHash` | `lib/essayReviewCache.ts` | JSON | `/api/essay-review` の input hash + 生成済み `ReviewResult` の同居 cache（STEP5.11）。`essayPracticeReview` (`SavedReview`) とは独立 |
 | `selfPRs` | `lib/selfPRStorage.ts` | JSON | 自己 PR 一覧 |
 | `selfPR_draft` | `lib/selfPRDraftStorage.ts` | **raw string** | 自己 PR 下書き（ページ間受け渡し）。既存例外（raw string） |
 | `admissionMatchingInput` | `lib/admissionMatchingStorage.ts` | JSON | AI 志望校マッチング入力 |
@@ -103,6 +108,7 @@ raw string ストレージには以下のコメントを必ず付けること:
 | `interview_records` | `lib/interviewRecordStorage.ts` | JSON | 面接練習記録 |
 | `interviewDraft` | `lib/interviewDraftStorage.ts` | JSON | 面接記録フォームの入力途中 |
 | `interviewAdditionalQuestionUsage` | `lib/interviewAdditionalUsage.ts` | JSON | 面接予想質問の追加生成 日次カテゴリ別制限（daily limit、`{date, categoryCounts:{reason,activity,university}}`） |
+| `interviewQuestionsCache` | `lib/interviewQuestionCache.ts` | JSON | `/api/interview-questions` の input hash + 生成済み `TwoLayerInterviewQuestions` の同居 cache（STEP8）。同入力（basicInfo / statementDraft / studentProfile / activitySummary / model / promptVersion）なら AI call を skip して保存済み questions を復元する。legacy fallback 経路は保存対象外 |
 
 ---
 

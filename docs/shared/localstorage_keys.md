@@ -14,6 +14,30 @@
 
 このファイル（`docs/shared/localstorage_keys.md`）は **`lib/storage/README.md` への入り口** として機能する。仕様の二重化を避けるため、ここに表は書かない。
 
+## STEP5.2 で追加された key
+
+- `wallHittingInputHash`（[`lib/wallHittingInputHashStorage.ts`](../../lib/wallHittingInputHashStorage.ts), JSON）— `/api/analysis` の input hash cache。同一入力なら AI call を skip して保存済み `wallHittingResult` を復元するための判定 key。
+
+## STEP5.4 で追加された key
+
+- `additionalQuestionsInputHash`（[`lib/additionalQuestionsCache.ts`](../../lib/additionalQuestionsCache.ts), JSON）— `/api/analysis/additional` の input hash + 生成済み追加質問の同居 cache。同一入力なら AI call を skip して保存済み questions を復元するための判定 key。hit 時は daily limit を消費しない。
+
+## STEP5.8 で追加された key
+
+- `summarizeInputHash`（[`lib/summarizeCache.ts`](../../lib/summarizeCache.ts), JSON）— `/api/summarize` の input hash + 生成済み `SummaryResult` の同居 cache。同一入力（activityData / basicInfo / universityContext / analysis / answers / model / promptVersion）なら AI call を skip して保存済み summary を復元するための判定 key。`analyzeState.summary` とは独立。
+
+## STEP5.10 で追加された key
+
+- `statementReviewInputHash`（[`lib/statement/review/statementReviewCache.ts`](../../lib/statement/review/statementReviewCache.ts), JSON）— `/api/statement-review` の input hash + 生成済み `ApiReviewResponse` の同居 cache。同一入力（university / faculty / department / essay / basicInfo / activityData / studentProfile / wallHittingResult / model / promptVersion）なら AI call を skip して保存済み response を復元するための判定 key。hit 時は `statementReviewLimit` を消費しないが、`statementReviewHistory` には append される。
+
+## STEP5.11 で追加された key
+
+- `essayReviewInputHash`（[`lib/essayReviewCache.ts`](../../lib/essayReviewCache.ts), JSON）— `/api/essay-review` の input hash + 生成済み `ReviewResult` の同居 cache。同一入力（theme / themeType / conclusion / reasonOne / reasonTwo / essayBody / basicInfo / model / promptVersion）なら AI call を skip して保存済み review を復元するための判定 key。`essayPracticeReview` (`SavedReview`) とは独立。
+
+## STEP8 で追加された key
+
+- `interviewQuestionsCache`（[`lib/interviewQuestionCache.ts`](../../lib/interviewQuestionCache.ts), JSON）— `/api/interview-questions` の input hash + 生成済み `TwoLayerInterviewQuestions` の同居 cache。同一入力（basicInfo / statementDraft / studentProfile / activitySummary / model / promptVersion）なら AI call を skip して保存済み 2 層質問を復元する。`legacy` fallback 経路は保存対象外。route 側には cache を入れずクライアント側のみで管理する。
+
 ## storage 配置ルール
 
 - すべての `*Storage.ts` は `lib/` 直下に配置する（flat な命名規則）。
