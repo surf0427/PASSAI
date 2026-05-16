@@ -11,11 +11,25 @@ import {
 } from '@/lib/essayPracticeStorage';
 import type { BasicInfo } from '@/types/basicInfo';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import {
+  ESSAY_REVIEW_MODEL,
+  ESSAY_REVIEW_PROMPT_VERSION,
+  hashEssayReviewInput,
+} from '@/lib/aiInputHash';
+import {
+  loadEssayReviewCache,
+  saveEssayReviewCache,
+} from '@/lib/essayReviewCache';
+import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
 import { ImprovementList } from '@/components/shared/result';
+import {
+  getEssayThemeCandidates,
+  type EssayThemeCandidate,
+} from '@/lib/essayThemes';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadReviewResult() / loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
@@ -25,10 +39,27 @@ const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
+// ステップ構成（ステップ0：練習条件設定 → 1：テーマ確認 → 2〜5：執筆〜添削）。
+// TOTAL_STEPS は「執筆フェーズ」のステップ番号上限（テーマ確認＝1, …, 添削結果＝5）。
+// 練習条件設定 (=0) はテーマ生成のための前段で、執筆ステップのカウンタには含めない。
 const TOTAL_STEPS = 5;
 const CHAT_MAX_COUNT = 3;
 
-const DEFAULT_THEME = 'AI時代において、大学教育はどのように変化すべきか。あなたの考えを述べなさい。';
+// 小論文テーマは getEssayThemeCandidates(selectedEssayTarget) で動的に取得し、
+// themeIndex でその中の 1 件を選ぶ（同条件で「新しいテーマで始める」と次へ巡回）。
+// essayTheme / essayThemeSource / essayThemeReason / themeCandidates は
+// selectedEssayTarget から派生する概念で、コード上で明確に分けて扱う。
+
+// ステップ0で選べる入試方式の選択肢。app/input/basic/page.tsx の EXAM_TYPE_OPTIONS と揃える。
+// 共有定数化は利用者が増えた時点で検討（現状 2 箇所のため inline で許容）。
+const ESSAY_EXAM_TYPE_OPTIONS = [
+  '総合型選抜（AO入試）',
+  '学校推薦型選抜（公募・指定校）',
+  '一般選抜',
+  '共通テスト利用',
+  '海外大学受験',
+  'まだ決まっていない',
+] as const;
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -41,9 +72,33 @@ const CHAT_SUGGESTIONS = [
   'もっと具体例ある？',
 ];
 
+// 今回の小論文練習で使う志望校・入試方式（テーマ生成の入力条件）。
+// basicInfo.preferences[0] / basicInfo.examTypes[0] を初期値とするが、
+// ステップ0で自由に書き換え可能。basicInfo 本体は更新せず、API へ渡す basicInfo の
+// preferences[0] / examTypes のみ差し替える。
+// 将来は大学DB・アドミッションポリシー・過去問傾向と組み合わせて
+// essayTheme を生成するための入力として使われる。
+type SelectedEssayTarget = {
+  university: string;
+  faculty: string;
+  department: string;
+  examType: string; // 単一選択。空文字なら未指定（API 側で basicInfo.examTypes を上書きしない）。
+};
+
+const EMPTY_SELECTED_ESSAY_TARGET: SelectedEssayTarget = {
+  university: '',
+  faculty: '',
+  department: '',
+  examType: '',
+};
+
 export default function EssayPracticePage() {
-  const [currentStep, setCurrentStep] = useState(1);
-  const [theme, setTheme] = useState(DEFAULT_THEME);
+  // ステップ番号: 0=練習条件設定 / 1=テーマ確認 / 2=ミニ思考欄 / 3=本文 / 4=壁打ち / 5=添削結果
+  const [currentStep, setCurrentStep] = useState(0);
+  // テーマ候補（themeCandidates）の中のどれを表示中か。
+  // selectedEssayTarget が変わるたびに 0 にリセット（handleConfirmCondition / handleReset 内で実施）。
+  // 「新しいテーマで始める」で +1 する。bounds は modulo で常に正規化する（後段で派生時に処理）。
+  const [themeIndex, setThemeIndex] = useState(0);
   const [conclusion, setConclusion] = useState('');
   const [reasonOne, setReasonOne] = useState('');
   const [reasonTwo, setReasonTwo] = useState('');
@@ -78,6 +133,86 @@ export default function EssayPracticePage() {
     [isMounted],
   );
 
+  // 今回の小論文練習で使う志望校・入試方式（selectedEssayTarget）。
+  // - pre-mount: 空（hydration mismatch を避ける）
+  // - post-mount: basicInfo.preferences[0] / basicInfo.examTypes[0] を初期値として表示
+  // - ユーザーがステップ0で編集したら userEditedSelectedTarget を上書きする（以降そちらを優先）
+  // 既存の savedReview パターンと同じ「postUser ?? mounted」結合で
+  // useEffect 内 setState を回避する。
+  const [userEditedSelectedTarget, setUserEditedSelectedTarget] =
+    useState<SelectedEssayTarget | null>(null);
+  const defaultSelectedEssayTarget = useMemo<SelectedEssayTarget>(() => {
+    if (!isMounted) return EMPTY_SELECTED_ESSAY_TARGET;
+    const pref = basicInfo?.preferences?.[0];
+    const firstExamType = basicInfo?.examTypes?.[0];
+    return {
+      university: pref?.university?.trim() ?? '',
+      faculty: pref?.faculty?.trim() ?? '',
+      department: (pref?.department ?? '').trim(),
+      examType: firstExamType?.trim() ?? '',
+    };
+  }, [isMounted, basicInfo]);
+  const selectedEssayTarget: SelectedEssayTarget =
+    userEditedSelectedTarget ?? defaultSelectedEssayTarget;
+
+  // 添削/壁打ち API に渡す basicInfo は preferences[0] / examTypes を
+  // selectedEssayTarget で差し替える。localStorage の basicInfo 本体は変更しない。
+  const basicInfoForAi = useMemo<BasicInfo | null>(() => {
+    const target = selectedEssayTarget;
+    const hasAnyTarget =
+      target.university.trim() !== '' ||
+      target.faculty.trim() !== '' ||
+      target.department.trim() !== '';
+    // preferences[0] へ詰める志望校（型に合わせて preferences 形に変換）。
+    const preferenceFromTarget = {
+      university: target.university,
+      faculty: target.faculty,
+      department: target.department,
+    };
+    // examType が選ばれていれば examTypes はその 1 件のみで上書き。
+    // 未選択ならオリジナルの basicInfo.examTypes を尊重する。
+    const overrideExamTypes = (original: string[] | undefined): string[] => {
+      const trimmed = target.examType.trim();
+      if (trimmed !== '') return [trimmed];
+      return original ?? [];
+    };
+    if (!basicInfo) {
+      if (!hasAnyTarget && target.examType.trim() === '') return null;
+      return {
+        name: '',
+        grade: '',
+        track: '',
+        preferences: [preferenceFromTarget],
+        examTypes: overrideExamTypes(undefined),
+      };
+    }
+    const rest = (basicInfo.preferences ?? []).slice(1);
+    return {
+      ...basicInfo,
+      preferences: [preferenceFromTarget, ...rest],
+      examTypes: overrideExamTypes(basicInfo.examTypes),
+    };
+  }, [basicInfo, selectedEssayTarget]);
+
+  // selectedEssayTarget からテーマ候補を導出する。
+  // lib/essayThemes.ts は大学DB（lib/universities.ts 経由）の admission_policy を
+  // 素材にして候補を作る。該当 entries / policy が無い場合は fallback 候補が返る。
+  // 常に 1 件以上返る保証があるため、表示時の空配列ハンドリングは不要。
+  const themeCandidates = useMemo<EssayThemeCandidate[]>(
+    () => getEssayThemeCandidates(selectedEssayTarget),
+    [selectedEssayTarget],
+  );
+  // themeIndex は modulo で常に有効範囲に収める。
+  // selectedEssayTarget 変更時は handleConfirmCondition / handleReset で 0 に戻すが、
+  // 候補数が変わるケースに備えて派生時にも防御する。
+  const currentThemeCandidate: EssayThemeCandidate =
+    themeCandidates[themeIndex % themeCandidates.length];
+  const essayTheme = currentThemeCandidate.theme;
+  const essayThemeSource = currentThemeCandidate.sourceType;
+  const essayThemeReason = currentThemeCandidate.reason;
+  // themeType は添削/深掘り/面接質問の文脈調整に使うため API へも送る。
+  const essayThemeType = currentThemeCandidate.themeType;
+
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatRemainingCount, setChatRemainingCount] = useState(CHAT_MAX_COUNT);
@@ -99,13 +234,15 @@ export default function EssayPracticePage() {
       const res = await fetch('/api/essay-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ theme, conclusion, reasonOne, reasonTwo, essayBody, userQuestion, basicInfo }),
+        body: JSON.stringify({ theme: essayTheme, themeType: essayThemeType, conclusion, reasonOne, reasonTwo, essayBody, userQuestion, basicInfo: basicInfoForAi }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setChatError(data.error ?? 'AIの処理に失敗しました。時間をおいてお試しください。');
+        // 構造化エラー（{ error: 'AI_REPLY_TRUNCATED', message: '...' }）の場合は
+        // ユーザー向け文言である message を優先表示する。後方互換で error が文言の場合にも対応。
+        setChatError(data.message ?? data.error ?? 'AIの処理に失敗しました。時間をおいてお試しください。');
         return;
       }
 
@@ -119,8 +256,22 @@ export default function EssayPracticePage() {
     }
   }
 
+  // ステップ0 → ステップ1（練習条件設定からテーマ確認へ）。
+  // 条件確定時は themeCandidates が新しい配列に切り替わる可能性が高いため、
+  // themeIndex を 0 にリセットして「先頭の候補」を表示する。
+  function handleConfirmCondition() {
+    setThemeIndex(0);
+    setCurrentStep(1);
+  }
+
+  // ステップ1 → ステップ2（テーマ確認 → ミニ思考欄）。
   function handleStart() {
     setCurrentStep(2);
+  }
+
+  // ステップ1 → ステップ0（条件を変更する）。
+  function handleEditCondition() {
+    setCurrentStep(0);
   }
 
   function handleBack() {
@@ -130,6 +281,53 @@ export default function EssayPracticePage() {
   }
 
   async function handleReviewEssay() {
+    // STEP5.11: input hash cache を先に判定する。
+    // 同入力なら AI を呼ばずに保存済み review を復元する。
+    // savedReview / reviewHistory / 出力 score / loading / error は AI 入力ではないので hash に含めない。
+    // 出力 hash (StudentProfile.sourceHash) とは別レーン。
+    const inputHash = hashEssayReviewInput({
+      theme: essayTheme,
+      themeType: essayThemeType,
+      conclusion,
+      reasonOne,
+      reasonTwo,
+      essayBody,
+      basicInfo: basicInfoForAi,
+      model: ESSAY_REVIEW_MODEL,
+      promptVersion: ESSAY_REVIEW_PROMPT_VERSION,
+    });
+
+    const cached = loadEssayReviewCache();
+    if (
+      cached &&
+      cached.inputHash === inputHash &&
+      cached.model === ESSAY_REVIEW_MODEL &&
+      cached.promptVersion === ESSAY_REVIEW_PROMPT_VERSION
+    ) {
+      // cache hit: AI を呼ばずに即復元。loading は立てない（spinner flash を避ける）。
+      // 通常成功時と同じ state 更新 / 保存処理を通す。
+      logAiCache({ route: 'api/essay-review', action: 'hit', inputHash });
+      setReviewError('');
+      const newResult = cached.review;
+      const saved: SavedReview = {
+        ...newResult,
+        updatedAt: new Date().toISOString(),
+        essayBodySnapshot: essayBody,
+      };
+      const previousResult = reviewHistory.length > 0
+        ? reviewHistory[reviewHistory.length - 1]
+        : null;
+      setPrevReviewResult(previousResult);
+      setReviewHistory([...reviewHistory, newResult]);
+      setReviewResult(newResult);
+      saveReviewResult(newResult, essayBody);
+      setSavedReview(saved);
+      setCurrentStep(5);
+      saveEssayProgress({ hasContent: true, hasReview: true });
+      return;
+    }
+    logAiCache({ route: 'api/essay-review', action: 'miss', inputHash });
+
     setReviewLoading(true);
     setReviewError('');
 
@@ -137,13 +335,15 @@ export default function EssayPracticePage() {
       const res = await fetch('/api/essay-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ theme, conclusion, reasonOne, reasonTwo, essayBody, basicInfo }),
+        body: JSON.stringify({ theme: essayTheme, themeType: essayThemeType, conclusion, reasonOne, reasonTwo, essayBody, basicInfo: basicInfoForAi }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setReviewError(data.error ?? 'AIの処理に失敗しました。時間をおいてお試しください。');
+        // 構造化エラー（{ error: 'AI_REVIEW_TRUNCATED', message: '...' }）の場合は
+        // ユーザー向け文言である message を優先表示する。後方互換で error が文言の場合にも対応。
+        setReviewError(data.message ?? data.error ?? 'AIの処理に失敗しました。時間をおいてお試しください。');
         return;
       }
 
@@ -164,6 +364,14 @@ export default function EssayPracticePage() {
       setSavedReview(saved);
       setCurrentStep(5);
       saveEssayProgress({ hasContent: true, hasReview: true });
+      // STEP5.11: 成功時のみ cache 書き込み（!res.ok / catch では保存しない）。
+      saveEssayReviewCache({
+        inputHash,
+        model: ESSAY_REVIEW_MODEL,
+        promptVersion: ESSAY_REVIEW_PROMPT_VERSION,
+        savedAt: new Date().toISOString(),
+        review: newResult,
+      });
     } catch {
       setReviewError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {
@@ -177,14 +385,18 @@ export default function EssayPracticePage() {
     setCurrentStep(5);
   }
 
+  // 「新しいテーマで始める」: 志望校条件（selectedEssayTarget）は保持し、
+  // 同じ条件の中で themeCandidates の次のテーマに切り替える。
+  // 書きかけ本文・添削結果・チャット履歴はクリアして、テーマ確認（ステップ1）に戻す。
+  // 志望校条件を変えたい場合は「条件を変更する」(handleEditCondition) を使う。
   function handleReset() {
+    setThemeIndex((prev) => prev + 1); // 派生側で modulo するので bounds 計算は不要。
     setCurrentStep(1);
     setReviewResult(null);
     setPrevReviewResult(null);
     setReviewHistory([]);
     setReviewLoading(false);
     setReviewError('');
-    setTheme(DEFAULT_THEME);
     setConclusion('');
     setReasonOne('');
     setReasonTwo('');
@@ -212,7 +424,9 @@ export default function EssayPracticePage() {
 
       <BasicInfoSummary basicInfo={basicInfo} />
 
-      {/* ── ステップ表示 ── */}
+      {/* ── ステップ表示 ──
+          ステップ0（練習条件設定）は執筆フェーズ前の準備ステップとして
+          カウンタには含めず、専用ラベルを表示する。 */}
       <div className="mb-8 flex items-center justify-between">
         <div className="flex items-center gap-4">
           {currentStep > 1 && (
@@ -225,7 +439,13 @@ export default function EssayPracticePage() {
             </button>
           )}
           <p className="text-sm text-gray-500">
-            ステップ <span className="font-semibold text-gray-700">{currentStep}</span> / {TOTAL_STEPS}
+            {currentStep === 0 ? (
+              <span className="font-semibold text-gray-700">練習条件設定</span>
+            ) : (
+              <>
+                ステップ <span className="font-semibold text-gray-700">{currentStep}</span> / {TOTAL_STEPS}
+              </>
+            )}
           </p>
         </div>
         <button
@@ -237,28 +457,143 @@ export default function EssayPracticePage() {
         </button>
       </div>
 
-      {/* ── ステップ1：テーマ入力 ── */}
-      {currentStep === 1 && (
+      {/* ── ステップ0：練習条件設定 ──
+          将来は selectedEssayTarget（大学・学部・学科・入試方式）と
+          大学DB・アドミッションポリシー・過去問傾向をもとに essayTheme を生成する。
+          現状はテキスト入力で selectedEssayTarget を選び、確定後に固定テーマを表示する。 */}
+      {currentStep === 0 && (
         <section className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-          <h2 className="text-base font-semibold text-gray-700 mb-5">ステップ1：テーマ確認</h2>
+          <h2 className="text-base font-semibold text-gray-700 mb-2">練習条件設定</h2>
+          <p className="text-sm text-gray-500 mb-5">
+            今回の小論文練習で使う志望校・入試方式を選んでください。基本情報の第一志望をもとに初期表示しており、必要に応じて変更できます（基本情報の値は上書きされません）。
+          </p>
 
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm font-semibold text-gray-700">小論文テーマ</p>
-              <span className="text-xs text-gray-400">変更不可</span>
-            </div>
-            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-800 leading-relaxed">
-              {theme}
-            </div>
+          <div className="space-y-3 mb-6">
+            <FormField label="大学名">
+              <Input
+                type="text"
+                value={selectedEssayTarget.university}
+                onChange={(e) =>
+                  setUserEditedSelectedTarget({ ...selectedEssayTarget, university: e.target.value })
+                }
+                placeholder="例：〇〇大学"
+              />
+            </FormField>
+            <FormField label="学部名">
+              <Input
+                type="text"
+                value={selectedEssayTarget.faculty}
+                onChange={(e) =>
+                  setUserEditedSelectedTarget({ ...selectedEssayTarget, faculty: e.target.value })
+                }
+                placeholder="例：〇〇学部"
+              />
+            </FormField>
+            <FormField label="学科名（任意）">
+              <Input
+                type="text"
+                value={selectedEssayTarget.department}
+                onChange={(e) =>
+                  setUserEditedSelectedTarget({ ...selectedEssayTarget, department: e.target.value })
+                }
+                placeholder="例：〇〇学科"
+              />
+            </FormField>
+            <FormField
+              label="入試方式（任意）"
+              hint="基本情報で選んだ受験予定方式の先頭を初期値にしています。"
+            >
+              <select
+                value={selectedEssayTarget.examType}
+                onChange={(e) =>
+                  setUserEditedSelectedTarget({ ...selectedEssayTarget, examType: e.target.value })
+                }
+                className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">未選択</option>
+                {ESSAY_EXAM_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </FormField>
           </div>
 
           <button
             type="button"
-            onClick={handleStart}
+            onClick={handleConfirmCondition}
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
           >
-            このテーマで始める
+            この条件でテーマを確認する
           </button>
+        </section>
+      )}
+
+      {/* ── ステップ1：テーマ確認 ──
+          selectedEssayTarget の確認と essayTheme の表示。両者は別 state として保持し、
+          将来 essayTheme は selectedEssayTarget をもとに生成される想定。 */}
+      {currentStep === 1 && (
+        <section className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
+          <h2 className="text-base font-semibold text-gray-700 mb-5">ステップ1：テーマ確認</h2>
+
+          <div className="mb-6 bg-blue-50/50 border border-blue-100 rounded-lg p-4">
+            <p className="text-sm font-semibold text-gray-700 mb-2">今回の練習で使う志望校</p>
+            <div className="space-y-1 text-sm text-gray-800">
+              <p><span className="text-gray-400 mr-1">大学</span>{selectedEssayTarget.university || '未入力'}</p>
+              <p><span className="text-gray-400 mr-1">学部</span>{selectedEssayTarget.faculty || '未入力'}</p>
+              <p><span className="text-gray-400 mr-1">学科</span>{selectedEssayTarget.department || '未入力'}</p>
+              <p><span className="text-gray-400 mr-1">入試方式</span>{selectedEssayTarget.examType || '未選択'}</p>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-sm font-semibold text-gray-700">小論文テーマ</p>
+              <span className="text-xs text-gray-400">この練習で使用</span>
+            </div>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-800 leading-relaxed">
+              {essayTheme}
+            </div>
+            {/* themeType を小さく badge 風表示。値はそのまま英 snake_case を出す
+                （添削/深掘り/面接質問との連携キーとして表示）。 */}
+            <div className="mt-2">
+              <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                {essayThemeType}
+              </span>
+            </div>
+            {/* テーマの根拠（大学DB の admission_policy か汎用 fallback か）。
+                essayThemeSource により表示色だけ分け、reason は essayThemes.ts が生成済み。 */}
+            <p
+              className={
+                essayThemeSource === 'admission_policy'
+                  ? 'text-xs text-blue-600 mt-2'
+                  : 'text-xs text-amber-600 mt-2'
+              }
+            >
+              {essayThemeReason}
+            </p>
+            {themeCandidates.length > 1 && (
+              <p className="text-xs text-gray-400 mt-1">
+                ※「新しいテーマで始める」で同じ条件のまま別テーマに切り替えられます（候補 {themeCandidates.length} 件）。
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={handleStart}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
+            >
+              このテーマで始める
+            </button>
+            <button
+              type="button"
+              onClick={handleEditCondition}
+              className="bg-white hover:bg-gray-50 border border-gray-300 text-gray-600 font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
+            >
+              条件を変更する
+            </button>
+          </div>
         </section>
       )}
 
@@ -270,7 +605,7 @@ export default function EssayPracticePage() {
               <p className="text-xs font-semibold text-blue-600">テーマ</p>
               <span className="text-xs text-blue-400">確定済み・変更不可</span>
             </div>
-            <p className="text-sm text-gray-800 leading-relaxed">{theme}</p>
+            <p className="text-sm text-gray-800 leading-relaxed">{essayTheme}</p>
           </div>
         </section>
       )}
@@ -293,7 +628,7 @@ export default function EssayPracticePage() {
                 type="text"
                 value={conclusion}
                 onChange={(e) => setConclusion(e.target.value)}
-                placeholder="大学教育は〇〇すべきである"
+                placeholder="〇〇は△△だと考える"
               />
             </FormField>
           </div>
@@ -613,8 +948,36 @@ export default function EssayPracticePage() {
             );
           })()}
 
-          {/* 内訳 */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
+          {/* 改善提案（結論ファースト UX：最優先で目に入る位置に置く） */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 mb-4">
+            <h3 className="text-sm font-semibold text-yellow-800 mb-2">まず直すこと</h3>
+            <p className="text-sm text-yellow-900 leading-relaxed">{reviewResult.improvement}</p>
+          </div>
+
+          {/* まだ弱い点（次に優先すべき箇所をまとめて見せる） */}
+          <div className="bg-red-50 border border-red-200 rounded-xl p-5 mb-4">
+            <h3 className="text-sm font-semibold text-red-800 mb-2">まだ弱い点</h3>
+            <ul className="space-y-1">
+              {reviewResult.weakPoints.map((w, i) => (
+                <li key={i} className="text-sm text-red-700 flex gap-2">
+                  <span>△</span>
+                  <span>{w}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* 良かった点
+              ラッパー（bg-green-50 + h3）は raw 維持。リストだけ ImprovementList に置換。
+              variant="success" は ✓ + text-green-700 で元の見た目とほぼ一致する
+              （prefix span に shrink-0 が付く点だけ差分。長文折り返し時の整列が改善）。 */}
+          <div className="bg-green-50 border border-green-200 rounded-xl p-5 mb-4">
+            <h3 className="text-sm font-semibold text-green-800 mb-2">良かった点</h3>
+            <ImprovementList items={reviewResult.goodPoints} variant="success" />
+          </div>
+
+          {/* 内訳（参照情報。最後に置く） */}
+          <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
             <h3 className="text-sm font-semibold text-gray-700 mb-4">内訳</h3>
             <div className="space-y-4">
               {reviewResult.breakdown.length === 0 ? (
@@ -638,34 +1001,6 @@ export default function EssayPracticePage() {
                 })
               )}
             </div>
-          </div>
-
-          {/* 改善提案 */}
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 mb-4">
-            <h3 className="text-sm font-semibold text-yellow-800 mb-2">改善提案</h3>
-            <p className="text-sm text-yellow-900 leading-relaxed">{reviewResult.improvement}</p>
-          </div>
-
-          {/* 良かった点
-              ラッパー（bg-green-50 + h3）は raw 維持。リストだけ ImprovementList に置換。
-              variant="success" は ✓ + text-green-700 で元の見た目とほぼ一致する
-              （prefix span に shrink-0 が付く点だけ差分。長文折り返し時の整列が改善）。 */}
-          <div className="bg-green-50 border border-green-200 rounded-xl p-5 mb-4">
-            <h3 className="text-sm font-semibold text-green-800 mb-2">良かった点</h3>
-            <ImprovementList items={reviewResult.goodPoints} variant="success" />
-          </div>
-
-          {/* まだ弱い点 */}
-          <div className="bg-red-50 border border-red-200 rounded-xl p-5 mb-8">
-            <h3 className="text-sm font-semibold text-red-800 mb-2">まだ弱い点</h3>
-            <ul className="space-y-1">
-              {reviewResult.weakPoints.map((w, i) => (
-                <li key={i} className="text-sm text-red-700 flex gap-2">
-                  <span>△</span>
-                  <span>{w}</span>
-                </li>
-              ))}
-            </ul>
           </div>
 
           {/* 添削履歴（2回以上添削した場合のみ表示） */}
