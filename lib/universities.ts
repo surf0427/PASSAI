@@ -3,6 +3,11 @@ import { universities } from '@/data/universities';
 import { universityEntries, type UniversityEntry } from '@/data/universityEntries';
 import { selectionSteps, type SelectionStep } from '@/data/selectionSteps';
 
+// 境界経由で row 型を消費できるよう re-export。
+// 他 lib（lib/matching/checkEligibility 等）は data/ ではなく @/lib/universities から
+// この型を import すること（data/ 直 import 禁止ルールの遵守）。
+export type { UniversityEntry } from '@/data/universityEntries';
+
 // 大学DBの唯一の読み取り境界。
 // - page / route / 他 lib は data/ 配下を直接 import しない
 // - getAllUniversities は matching 機能（全件参照の例外）専用
