@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "qa:step15": "npx tsx scripts/step15-qa.ts",
+    "qa:step15:dry": "npx tsx scripts/step15-qa.ts --dry"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
