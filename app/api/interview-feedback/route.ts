@@ -6,6 +6,8 @@ import type { WallHittingResult } from '@/types/analysis';
 import type { StudentProfile } from '@/types/studentProfile';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildInterviewUniversityContext } from '@/lib/buildInterviewUniversityContext';
+import { getAdmissionFocusContextForUser } from '@/lib/admissionFocus/getAdmissionFocusContextForUser';
+import { parseFacultyName } from '@/lib/parseFacultyName';
 import { toStudentProfile } from '@/lib/studentProfile';
 import { isStudentProfile } from '@/lib/studentProfileStorage';
 import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/interviewContext';
@@ -330,6 +332,38 @@ export async function POST(request: Request) {
       university: universityName,
       facultyName,
     });
+    // STEP2c: 入試方式の型タグ context を「大学側情報」クラスタに並べる。
+    // faculty が解決できない場合は wrapper を呼ばない（学部・学科未指定で大学全体の
+    // entries が合算されると「面接10回」のような誤った集約値が AI に渡るため）。
+    // dry-run の CASE I で確認済みのガード。
+    //
+    // PR8b / H1 marker:
+    //   admissionFocusContext は state C で末尾に STATE_C_AI_NOTE
+    //   （「型名そのものをフィードバック文中で強調せず観点として活用する」）を含む。
+    //   ただし現状この note は **user prompt の末尾** に乗っており、SYSTEM_PROMPT
+    //   への lift (future trigger T2、incremental_refactor_policy.md 既登録) が
+    //   未施行のため、AI に対する strong signal にならない可能性がある。
+    //   feedback 文中に「面接重視型」「活動アピール型」等の type label が literal
+    //   引用されていないことは **manual QA で必ず確認**する。発生していたら T2 で
+    //   SYSTEM_PROMPT lift を実施し、prompt caching の対象に格上げする。
+    //
+    // PR8b / H4 marker:
+    //   admissionFocusContext (~400-600 chars) が userPrompt に毎回乗ることで
+    //   prompt token が約 +10-15% 増加する（state A の空文字経路を除く）。
+    //   interview-feedback は Opus model (claude-opus-4-7) を使うためコスト影響が
+    //   小さくない。これは **intentional tradeoff**: 大学側の評価軸を踏まえた
+    //   feedback 品質向上を優先する判断（PR9d audit の決定）。token compression
+    //   (admissionFocusContext と statement / studentProfile の情報重複削減) や
+    //   Opus → Sonnet downgrade は別 STEP で評価する。
+    const { faculty, department } = parseFacultyName(facultyName);
+    const admissionFocusContext = faculty
+      ? getAdmissionFocusContextForUser({
+          university: universityName,
+          faculty,
+          department,
+          examTypes: basicInfo?.examTypes,
+        })
+      : '';
     // 面接向けに絞った StudentProfile セクション。null なら空文字。
     const studentProfileSection = buildInterviewStudentProfileContext(studentProfile);
 
@@ -347,7 +381,7 @@ export async function POST(request: Request) {
 学部・学科：${facultyName}
 志望理由：${motivation || '（未入力）'}
 ${examTypeGuidance ? `\n${examTypeGuidance}\n` : ''}
-${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}${studentProfileSection ? `${studentProfileSection}\n\n` : ''}【質問と回答】
+${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}${admissionFocusContext ? `${admissionFocusContext}\n\n` : ''}${studentProfileSection ? `${studentProfileSection}\n\n` : ''}【質問と回答】
 ${qaText}`;
 
     // STEP2.1: max_tokens を質問数ベースで動的化する。

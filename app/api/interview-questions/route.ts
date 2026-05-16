@@ -14,6 +14,21 @@
 //   lib/interview/parseInterviewQuestions.ts
 //   lib/buildInterviewUniversityContext.ts
 //   app/api/interview-feedback/route.ts（実装パターンの参考元）
+//
+// PR8b: admissionFocus 非接続方針
+//   本 route は **interview-feedback (sibling) と異なり admissionFocus context を
+//   接続しない**。理由:
+//     1. 2-layer questions は personalized 質問で AI hallucination が顕在化しやすい
+//        構造（件数硬制 vs 捏造禁止の競合、H3 audit risk）。admissionFocus を
+//        加えると「この大学の面接評価軸を反映した質問」を AI が捏造するリスクが
+//        さらに上がる
+//     2. matching route と同じ Option B 採用パターン: 長文評価
+//        (interview-feedback / statement-review) のみに admissionFocus を適用し、
+//        短文・複数項目生成 (matching / 2-layer questions) では使わない
+//     3. interviewQuestionsCache (lib/interviewQuestionCache.ts) の hash 入力に
+//        admissionFocusContext を含めていない。接続する場合は PROMPT_VERSION bump
+//        + cache 全 miss + hash 仕様変更が必要になり、コストが高い
+//   接続再判断は PR8 後、実 personalized 質問品質と admissionFocus 効果を見てから。
 
 import { NextResponse } from 'next/server';
 import { anthropic } from '@/lib/ai';
