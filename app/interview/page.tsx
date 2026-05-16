@@ -2,10 +2,15 @@
 
 import { useMemo, useSyncExternalStore } from 'react';
 import type { BasicInfo } from '@/types/basicInfo';
+import type { StudentProfile } from '@/types/studentProfile';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { loadWallHittingResult } from '@/lib/wallHittingStorage';
+import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
+import { buildInterviewTalkingPoints } from '@/lib/buildInterviewTalkingPoints';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewMenuCard } from './components/InterviewMenuCard';
+import { InterviewTalkingPointsCard } from './components/InterviewTalkingPointsCard';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
@@ -48,6 +53,24 @@ export default function InterviewPage() {
     () => (isMounted ? loadBasicInfo() : null),
     [isMounted],
   );
+  // 面接で話せる要点を deterministic に派生するための canonical 入力。
+  // 優先順位: 1. localStorage の StudentProfile → 2. wallHittingResult から派生 → 3. null。
+  // self-analysis 未完了なら null になり、talkingPoints は [] になって Card は非描画。
+  const studentProfile = useMemo<StudentProfile | null>(
+    () =>
+      isMounted
+        ? getStudentProfileForFeature({
+            wallHittingResult: loadWallHittingResult(),
+          })
+        : null,
+    [isMounted],
+  );
+  // 「面接で話せる要点」リスト。AI を呼ばず deterministic に生成する。
+  // /api/summarize に interviewPoints を戻さない方針のため、表示はここで責務を負う。
+  const talkingPoints = useMemo(
+    () => buildInterviewTalkingPoints(studentProfile),
+    [studentProfile],
+  );
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
@@ -57,6 +80,11 @@ export default function InterviewPage() {
       />
 
       <BasicInfoSummary basicInfo={basicInfo} />
+
+      {/* mount 前は studentProfile=null → talkingPoints=[] → Card 非描画。
+          mount 後は素材があれば Card が描画される。SSR/client で初期 render が
+          一致するため hydration mismatch は起きない。 */}
+      {isMounted && <InterviewTalkingPointsCard points={talkingPoints} />}
 
       <div className="grid gap-4">
         {MENU_ITEMS.map((item) => (

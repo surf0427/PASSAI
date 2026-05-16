@@ -1,9 +1,50 @@
+import Link from 'next/link';
 import type { InterviewRecord } from '@/types/interview';
+import type { StatementInterviewInsights } from '@/types/statementInterviewInsights';
+import { isInterviewFeedback } from '@/lib/interview/isInterviewFeedback';
+import { buildStatementImprovementHints } from '@/lib/interview/buildStatementImprovementHints';
 
 type Props = {
-  record: InterviewRecord;
+  // feedbackJson は storage の StoredInterviewRecord 由来。display 型に optional で
+  // 足すだけで上流（List / Client）の型を広げずに済む。未存在のときは CTA 非表示。
+  record: InterviewRecord & { feedbackJson?: string };
   onDelete: (id: string) => void;
 };
+
+// 改善ヒントは情報密度を抑えるため Card 内で 3 件にトリミング（builder 上限 5 件はそのまま）。
+const DISPLAY_HINTS_MAX = 3;
+
+// feedbackJson → StatementInterviewInsights | null。
+// 失敗（undefined / parse 失敗 / guard 通過せず / hints 空）はすべて silent fail。
+// 既存の improvementSummary 表示パスとは独立。
+function deriveInsightsForRecord(
+  feedbackJson: string | undefined,
+): StatementInterviewInsights | null {
+  if (!feedbackJson) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(feedbackJson);
+  } catch {
+    return null;
+  }
+  if (!isInterviewFeedback(parsed)) return null;
+
+  const insights = buildStatementImprovementHints({
+    weaknesses: parsed.improvements,
+    shallowPoints: parsed.perQuestionFeedback
+      .filter((q) => q.levelEvaluation.concrete === 'weak')
+      .map((q) => q.improvement),
+    contradictionPoints: parsed.perQuestionFeedback
+      .filter((q) => q.levelEvaluation.consistency === 'weak')
+      .map((q) => q.improvement),
+    followUpQuestions: parsed.followUpQuestions
+      .map((f) => f.followUps[0])
+      .filter((s): s is string => typeof s === 'string'),
+  });
+
+  if (insights.hints.length === 0) return null;
+  return insights;
+}
 
 type Section = {
   heading: string;
@@ -80,6 +121,9 @@ export function InterviewHistoryCard({ record, onDelete }: Props) {
     ? parseImprovementSummary(record.improvementSummary)
     : null;
 
+  // 旧記録（feedbackJson なし）や schema 不一致は null。null のとき CTA は描画しない。
+  const insights = deriveInsightsForRecord(record.feedbackJson);
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-6">
 
@@ -144,6 +188,41 @@ export function InterviewHistoryCard({ record, onDelete }: Props) {
           )}
         </div>
       )}
+
+      {/* 面接から見えた志望理由書の改善ポイント（feedbackJson があるときのみ） */}
+      {insights && (() => {
+        // 最重要 hint の targetSection を CTA の focus query param に渡す。
+        // /statement/edit 側で「どのセクションを直すか」を軽く案内するため。
+        const primaryTargetSection = insights.hints[0]?.targetSection;
+        const ctaHref = primaryTargetSection
+          ? `/statement/edit?focus=${primaryTargetSection}`
+          : '/statement/edit';
+        return (
+          <div className="mb-5">
+            <p className="text-xs font-semibold text-gray-500 mb-2">
+              面接から見えた志望理由書の改善ポイント
+            </p>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+              <ul className="space-y-3 mb-3">
+                {insights.hints.slice(0, DISPLAY_HINTS_MAX).map((hint, i) => (
+                  <li key={i}>
+                    <p className="text-sm text-amber-900 leading-relaxed">・{hint.issue}</p>
+                    <p className="text-xs text-amber-800 leading-relaxed pl-3 mt-1">
+                      → {hint.suggestedDirection}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <Link
+                href={ctaHref}
+                className="inline-block text-sm font-semibold text-amber-900 hover:text-amber-700 border border-amber-300 hover:border-amber-400 px-4 py-2 rounded-lg transition-colors"
+              >
+                志望理由書を改善する
+              </Link>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ボタン行 */}
       <div className="flex items-center gap-3">

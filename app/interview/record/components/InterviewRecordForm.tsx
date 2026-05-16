@@ -5,7 +5,10 @@ import Link from 'next/link';
 import type { InterviewRecordFormData } from '../types';
 import type { QuestionAnswerItem } from '@/types/interview';
 import type { BasicInfo } from '@/types/basicInfo';
+import type { WallHittingResult } from '@/types/analysis';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { loadWallHittingResult } from '@/lib/wallHittingStorage';
+import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { EXAM_TYPE_OPTIONS } from '@/app/interview/constants';
 import { InterviewQuestionAnswerItem } from './InterviewQuestionAnswerItem';
 import { addInterviewRecord, getInterviewRecords } from '@/lib/interviewRecordStorage';
@@ -46,7 +49,11 @@ export function InterviewRecordForm() {
   });
   // basicInfo はフィードバックAPIに同梱して、AIが受験方式・志望校全体を踏まえた助言を返せるようにする。
   const [basicInfo] = useState<BasicInfo | null>(() => loadBasicInfo());
+  // 自己分析（壁打ち）結果。API 側で toStudentProfile() を通して
+  // 面接向けの最小コンテキストへ変換される。未実施なら null のまま送り、AI 側でフォールバック。
+  const [wallHittingResult] = useState<WallHittingResult | null>(() => loadWallHittingResult());
   const [savedMessage, setSavedMessage] = useState('');
+  const [apiError, setApiError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // questionsAndAnswers が変わるたびに自動保存（初回レンダリングはスキップ）
@@ -76,6 +83,8 @@ export function InterviewRecordForm() {
 
   async function handleSubmit() {
     setIsSubmitting(true);
+    setApiError('');
+    setSavedMessage('');
 
     // Deprecated: questionsAsked / myAnswers は旧形式の文字列。
     // StoredInterviewRecord の互換フィールドへ格納するために生成する。
@@ -106,9 +115,21 @@ export function InterviewRecordForm() {
       }
     })();
 
+    // 【canonical path】下流に渡るのは StudentProfile 経由のみ。
+    //   1. localStorage の canonical StudentProfile を最優先（getStudentProfileForFeature 内で読む）
+    //   2. 無ければ wallHittingResult から派生（後方互換）
+    //   3. どちらも無ければ null（自己分析未実施）
+    // wallHittingResult は server-side fallback 用に併送する（API 移行が済み次第削除可）。
+    // 新しい feature は wallHittingResult を直接送らず studentProfile を canonical input とする。
+    const studentProfile = getStudentProfileForFeature({ wallHittingResult });
+
     let improvementSummary: string;
     let feedbackJson: string | undefined;
     try {
+      // STEP2.1: difficultPoints / teacherFeedback / selfReflection はサーバ側 route.ts で
+      // 参照されていない dead input のため、payload から除外する。
+      // フォーム state（whatWentWrong / feedbackReceived / selfNoted）と入力 UI は維持し、
+      // ローカル記録 (NewInterviewRecord) への保存経路は変更しない。
       const response = await fetch('/api/interview-feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -120,13 +141,23 @@ export function InterviewRecordForm() {
           myAnswers,
           questionsAndAnswers: validQuestionsAndAnswers,
           previousFeedback,
-          difficultPoints: formData.whatWentWrong,
-          teacherFeedback: formData.feedbackReceived,
-          selfReflection: formData.selfNoted,
           basicInfo,
+          // canonical artifact。API はこれを最優先で読み、buildInterviewStudentProfileContext へ渡す。
+          studentProfile,
+          // LEGACY fallback。studentProfile が null のときに API が toStudentProfile() で派生する保険。
+          // canonical path への移行が完了次第このフィールドは削除可能。
+          wallHittingResult,
         }),
       });
       const data = await response.json();
+      // API が構造化エラー（AI_FEEDBACK_TRUNCATED / AI_FEEDBACK_PARSE_FAILED 等）を返した場合は、
+      // 既存のローカル fallback で「それっぽい改善コメント」を保存してしまうと事象が隠れるため、
+      // ユーザーにエラーを明示してこの送信は破棄する。
+      if (!response.ok && typeof data?.message === 'string') {
+        setApiError(data.message);
+        setIsSubmitting(false);
+        return;
+      }
       improvementSummary = response.ok && data.improvementSummary
         ? data.improvementSummary
         : generateInterviewFeedback(myAnswers);
@@ -307,6 +338,12 @@ export function InterviewRecordForm() {
       >
         {isSubmitting ? 'AIが改善点を作成中...' : '改善点を確認する'}
       </Button>
+
+      {apiError && (
+        <AlertBox variant="error" className="mb-8">
+          <p className="text-sm text-red-700">{apiError}</p>
+        </AlertBox>
+      )}
 
       {savedMessage && (
         <AlertBox variant="success" className="mb-8">
