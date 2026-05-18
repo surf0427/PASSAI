@@ -281,6 +281,27 @@ export function useActivityForm() {
       // SSRガードは不要（ユーザー操作時のみ実行される）。
       // safeStorage は localStorage 専用のため使用しない。
       sessionStorage.setItem('activityData', JSON.stringify(activityData));
+
+      // Phase1: Supabase へ best-effort mirror（fire-and-forget）.
+      // Submit-driven trigger — STEP-PHASE1M で確定した contract。
+      // **autosave 経路 (saveActivityData) には mirror dispatch を入れない**：
+      // per-keystroke autosave に直結させると 1000-5000 writes/session に
+      // 膨らみ、`mirror_events` の signal/noise を破壊するため。
+      //
+      // 動的 import を使う理由: hook が SSR 経路に静的 import される可能性
+      // (server component から `'use client'` hook を読む等) に備え、browser
+      // boundary file（"use client"）を server bundle に静的に引き込まない。
+      //
+      // mirror helper は契約上 throw / reject しないが、防御として .catch
+      // を付ける。outer try/catch は sessionStorage.setItem 失敗の検知に
+      // 専念し、mirror 失敗が canonical UX に波及しないよう独立。
+      void import('@/lib/supabase/mirrorActivityData')
+        .then((mod) =>
+          mod.mirrorActivityDataToSupabase({
+            payload: activityData as unknown as Record<string, unknown>,
+          }),
+        )
+        .catch(() => {});
     } catch (e) {
       console.error('useActivityForm: sessionStorage save failed', e);
       setErrors(['保存に失敗しました。入力内容をコピーしてから再読み込みしてください。']);

@@ -41,6 +41,28 @@ export function saveStudentProfile(profile: StudentProfile): void {
   const prev = loadStudentProfile();
   if (!shouldUpdateStudentProfile(prev, profile)) return;
   safeSetStorage(STUDENT_PROFILE_KEY, profile);
+
+  // Phase1: Supabase へ best-effort mirror（fire-and-forget）。
+  // canonical (localStorage) 書き込み成功後に発火。await しない / throw させない / UX を妨げない。
+  //
+  // 動的 import を使う理由: 本ファイルは API route.ts（server runtime）からも
+  // `isStudentProfile` 経由で import される。browser boundary file（"use client"）
+  // を server bundle に静的に引き込まないよう、Supabase 関連 import は呼び出し時に
+  // 解決する。route handler は `saveStudentProfile` を呼ばないため、この dynamic
+  // import は server で発火しない（boundary 安全性は実行時にも保たれる）。
+  //
+  // shouldUpdateStudentProfile による dedup が既に効いているため、同一 sourceHash
+  // の連続呼び出しではここに到達しない。helper は契約上 throw しないが、防御として
+  // .catch を付ける。
+  void import('@/lib/supabase/mirrorStudentProfile')
+    .then((mod) =>
+      mod.mirrorStudentProfileToSupabase({
+        sourceHash: profile.sourceHash,
+        schemaVersion: String(profile.version),
+        payload: profile as unknown as Record<string, unknown>,
+      }),
+    )
+    .catch(() => {});
 }
 
 export function loadStudentProfile(): StudentProfile | null {

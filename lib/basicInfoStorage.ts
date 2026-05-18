@@ -5,6 +5,25 @@ const STORAGE_KEY = 'basicFormData';
 
 export function saveBasicInfo(data: BasicInfo): void {
   safeSetStorage(STORAGE_KEY, data);
+
+  // Phase1: Supabase へ best-effort mirror（fire-and-forget）。
+  // canonical (localStorage) 書き込み成功後に発火。await しない /
+  // throw させない / UX を妨げない。
+  //
+  // 動的 import を使う理由: 本ファイル自体は他 feature / route から static
+  // import される可能性に備え、browser boundary file（"use client"）を
+  // server bundle に静的に引き込まない（mirrorStudentProfile.ts と同パターン）。
+  // mirror helper 側で `name` を strip するため、PII (raw user name) は
+  // browser を出ない。
+  //
+  // mirror helper は契約上 throw しないが、防御として .catch を付ける。
+  void import('@/lib/supabase/mirrorBasicInfo')
+    .then((mod) =>
+      mod.mirrorBasicInfoToSupabase({
+        payload: data as unknown as Record<string, unknown>,
+      }),
+    )
+    .catch(() => {});
 }
 
 export function loadBasicInfo(): BasicInfo | null {

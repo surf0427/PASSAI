@@ -135,6 +135,18 @@ key 名と保存形式の正本は [`lib/storage/README.md`](../../lib/storage/R
 
 ---
 
+## Supabase mirror boundary（Phase1 freeze）
+
+Supabase mirror layer（`lib/supabase/`）は Phase1 boundary が N=4 で frozen 状態にある。詳細契約は [`docs/supabase/phase1_boundary_freeze.md`](../supabase/phase1_boundary_freeze.md) を参照。アーキテクチャ判断の基準として以下を固定する。
+
+- **Mirror boundaries optimize for rollback safety over elegance.** mirror 配線は revert 1 commit で boundary を以前の状態に戻せる粒度を最優先する。「綺麗さ」「DRY」「pattern 統一」を rollback unit より優先しない。
+- **Per-feature mirror files are acceptable until abstraction threshold is reached.** `mirrorStudentProfile.ts` / `mirrorBasicInfo.ts` / `mirrorDiagnosis.ts` / `mirrorActivityData.ts` の per-feature 分割は意図された設計。`upsertMirror(table, payload)` 等の generic helper / `mirrors/index.ts` aggregator は abstraction threshold（[freeze §6](../supabase/phase1_boundary_freeze.md)）を満たすまで導入しない。
+- **Operational observability consistency is more important than DRY.** `mirror_events` 経由の observability 一貫性（`finalize(feature, result)` を唯一の exit point とする構造）は維持する。DRY 化を理由に observability の粒度を犠牲にしない。
+
+新規 mirror / 新規 abstraction は [freeze §5 Mirror Addition Gate](../supabase/phase1_boundary_freeze.md) / [freeze §6 Abstraction Threshold Rule](../supabase/phase1_boundary_freeze.md) を満たさない限り追加しない。判定変更は本ドキュメントではなく freeze 契約 PR で行う。
+
+---
+
 ## TODO（将来の整理対象）
 
 active 開発と衝突するため今は触らないが、いずれ着手すべき項目。

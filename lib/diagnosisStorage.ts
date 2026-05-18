@@ -20,6 +20,25 @@ const KEY = 'passai_diagnosis_result';
 
 export function saveDiagnosisResult(result: DiagnosisResult): void {
   safeSetStorage(KEY, result);
+
+  // Phase1: Supabase へ best-effort mirror（fire-and-forget）。
+  // canonical (localStorage) 書き込み成功後に発火。await しない /
+  // throw させない / UX を妨げない。
+  //
+  // 動的 import を使う理由: 本ファイルが将来 server-side から import される
+  // 可能性に備え、browser boundary file（"use client"）を server bundle に
+  // 静的に引き込まない（mirrorStudentProfile.ts / mirrorBasicInfo.ts と同パターン）。
+  // diagnosis payload は user 自由記述を一切含まないため strip 不要 — mirror
+  // helper 側で source_hash を derive するのみ。
+  //
+  // mirror helper は契約上 throw しないが、防御として .catch を付ける。
+  void import('@/lib/supabase/mirrorDiagnosis')
+    .then((mod) =>
+      mod.mirrorDiagnosisToSupabase({
+        payload: result as unknown as Record<string, unknown>,
+      }),
+    )
+    .catch(() => {});
 }
 
 export function loadDiagnosisResult(): DiagnosisResult | null {
