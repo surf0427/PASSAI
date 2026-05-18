@@ -105,7 +105,13 @@ export async function POST(req: Request) {
       const result = JSON.parse(extractJson(raw));
       questions = result.questions as string[];
     } catch {
-      console.error('additional questions parse failed', { rawTextTail: raw.slice(-200) });
+      console.error('additional questions parse failed', {
+        stopReason: message.stop_reason,
+        rawLength: raw.length,
+        rawTextHead: raw.slice(0, 200),
+        rawTextTail: raw.slice(-200),
+        outputTokens: message.usage?.output_tokens,
+      });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
       return Response.json(
         {

@@ -123,7 +123,13 @@ export async function POST(req: Request) {
     try {
       parsed = JSON.parse(extractJson(raw)) as WallHittingResult;
     } catch {
-      console.error('analysis parse failed', { rawTextTail: raw.slice(-200) });
+      console.error('analysis parse failed', {
+        stopReason: message.stop_reason,
+        rawLength: raw.length,
+        rawTextHead: raw.slice(0, 200),
+        rawTextTail: raw.slice(-200),
+        outputTokens: message.usage?.output_tokens,
+      });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
       return Response.json(
         {
