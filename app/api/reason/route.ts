@@ -19,18 +19,32 @@ export async function POST(req: Request) {
   try {
     const message = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 500,
+      max_tokens: 1500,
       temperature: 0.5,
       messages: [{ role: 'user', content: buildReasonPrompt(text) }],
     });
 
     const result = message.content[0].type === 'text' ? message.content[0].text : '';
-    logAiUsage({
-      route: ROUTE,
-      model: MODEL,
-      status: message.stop_reason === 'max_tokens' ? 'truncated' : 'success',
-      usage: message.usage,
-    });
+
+    // max_tokens で途中終了した出力は plain text 経路の本 route ではそのまま画面に
+    // 表示されてしまう（self-pr 側で setResult される）。/api/essay-chat と同じ
+    // パターンで 502 + ユーザー向けメッセージで弾く。
+    if (message.stop_reason === 'max_tokens') {
+      console.error('reason truncated', {
+        stopReason: message.stop_reason,
+        rawTextTail: result.slice(-200),
+      });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      return Response.json(
+        {
+          error: 'AI_REPLY_TRUNCATED',
+          message: 'AIの返答が途中で終了しました。もう一度お試しください。',
+        },
+        { status: 502 },
+      );
+    }
+
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
     return Response.json({ result });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
