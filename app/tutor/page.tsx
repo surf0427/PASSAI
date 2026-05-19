@@ -30,7 +30,6 @@ import { detectTutorStabilization } from '@/lib/tutor/detectTutorStabilization';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { TutorIntent } from '@/lib/tutor/types';
 import { TutorBubble } from './components/TutorBubble';
-import { TutorChipSuggestions } from './components/TutorChipSuggestions';
 import { TutorInput } from './components/TutorInput';
 import { TutorRemainingCount } from './components/TutorRemainingCount';
 
@@ -46,9 +45,6 @@ type TutorMessage = {
 // tutorLimit の limit 値を closure から取り出す（count=0 の getRemainingCount は limit 値そのもの）。
 // dailyLimit.ts に直値が露出していないため、ここで安全に派生させる。
 const TUTOR_DAILY_LIMIT = tutorLimit.getRemainingCount({ date: '', count: 0 });
-
-const INITIAL_ASSISTANT_MESSAGE =
-  '受験まわりで今ひっかかってることを、そのまま書いて大丈夫です。\n軽く整理して、次に何をするか一緒に見ます。';
 
 // 危険語 client-side 1 次 block 用パターン。route 側の EMERGENCY_PATTERN と同じ。
 // 三層防御（client UI / server route / SYSTEM PROMPT）の 1 層目を担う。
@@ -73,9 +69,10 @@ export default function TutorPage() {
     getMountedServerSnapshot,
   );
 
-  const [messages, setMessages] = useState<TutorMessage[]>([
-    { role: 'assistant', text: INITIAL_ASSISTANT_MESSAGE },
-  ]);
+  // 初期メッセージは出さない（ChatGPT 的余白型 UI）。
+  // 灰色の「相談フォーム感」を作っていた assistant bubble を除去し、
+  // ユーザーが自分の意思で書き始められる空気を優先する。
+  const [messages, setMessages] = useState<TutorMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -273,16 +270,12 @@ export default function TutorPage() {
     }
   }
 
-  function handleChipSelect(text: string) {
-    setInput(text);
-  }
-
   return (
     <main className="mx-auto max-w-2xl px-4 py-8">
       <header className="mb-6">
         <h1 className="text-xl font-semibold text-gray-800 mb-2">受験チューターAI</h1>
         <p className="text-sm text-gray-600 leading-relaxed">
-          受験まわりで気になってることを、そのまま書いて大丈夫です。整理して、次の一歩を一緒に見ます。
+          気になってることを、そのまま書いて大丈夫です。
         </p>
       </header>
 
@@ -311,10 +304,6 @@ export default function TutorPage() {
           {error}
         </p>
       )}
-
-      <div className="mb-3">
-        <TutorChipSuggestions onSelect={handleChipSelect} disabled={loading || !canUse} />
-      </div>
 
       <TutorInput
         value={input}
