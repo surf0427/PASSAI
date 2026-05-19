@@ -382,7 +382,23 @@ export function hashInterviewQuestionsInput(input: HashInterviewQuestionsInput):
 //             few-shot は 3 例維持(v1.3 OK 例は [T] block 内に inline 配置)。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             規律として bump 履歴を残す。
-export const TUTOR_PROMPT_VERSION = 4;
+//   v4 → v5 : v1.4 初動の解像度緩和 — [U] 1 block added。
+//             SYSTEM PROMPT に「初動の解像度（first-turn analytical restraint）」を追加。
+//             一言 / ラフ / 抽象的 / 未言語化の初動 turn では [C] 共感の作り方の
+//             「観察+命名+確認」3 点セットを 1 turn 目でフル適用せず、「軽く受け止める
+//             → 小さく確認する → そこから整理する」を優先する。
+//             禁止: 「"〜できない不安" に近そうです」型の即時心理命名、「本当は〜ですよね」
+//             型の即断定、「根本原因は〜」型の即構造化、1 turn 目での命名しきり。
+//             思想: PASSAI Chat は「ユーザーを分析する AI」ではなく
+//             「ユーザーと一緒に整理する AI」。輪郭が出てから整理に進む。
+//             few-shot に 例 4（法政・初動一言）/ 例 5（やる気・疲労系一言）を追加して
+//             5 例構成へ。
+//             不変: [G][F][Q] は引き続き [U] より上位（first turn でも危険語 / メルト
+//             ダウン / 重相談の優先は変わらない）。[C] は first turn 以降の通常 turn で
+//             引き続き適用。[N][P][S] 雑味・normalize 上限は first turn でも適用。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             規律として bump 履歴を残す。
+export const TUTOR_PROMPT_VERSION = 5;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
 
 // ── 内部ヘルパ ─────────────────────────────────────────────────────
