@@ -23,6 +23,9 @@
 
 import type { StudentProfile } from '@/types/studentProfile';
 import { formatBulletList, formatInlineList } from '@/lib/contextBuilders/common';
+// STEP E: applicantType（5 種）由来の「傾向」1 行 helper。
+// interview-questions と同じ hint table（lib/interview/applicantTypeHint.ts）を共有する。
+import { formatInterviewApplicantTypeHint } from '@/lib/interview/applicantTypeHint';
 
 const STRENGTHS_MAX = 3;
 const FUTURE_CONNECTIONS_MAX = 2;
@@ -60,6 +63,15 @@ export function buildInterviewStudentProfileContext(
       .map((e) => `・${e.title}：${e.summary}`)
       .join('\n');
     parts.push(`代表エピソード:\n${eps}`);
+  }
+
+  // STEP E: applicantType（5 種 enum）由来の「傾向」1 行を末尾に optional 注入。
+  // 旧 StudentProfile（applicantType undefined）では追加されず prompt 文字列従来と同一。
+  // interview-questions と同じ hint table を共有しているため両 route で薄く整合した
+  // 傾向情報が流れる（interview-feedback には input cache 機構がないので bump 対象外だが、
+  // 出力挙動は副作用として変わる）。
+  if (profile.applicantType) {
+    parts.push(formatInterviewApplicantTypeHint(profile.applicantType));
   }
 
   return parts.join('\n');

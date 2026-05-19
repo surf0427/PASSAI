@@ -78,6 +78,12 @@ export default function Page() {
   const [text, setText] = useState('');
   const [followupText, setFollowupText] = useState('');
   const [result, setResult] = useState('');
+  // 今セッションで /api/reason から fetch した直後の result かどうかを示す。
+  // 過去 PR を開いて saveResult を hydrate しただけのときは false。
+  // followup フォームは「今 fetch した result」に対してだけ意味があるため、
+  // この flag が true のときだけ表示する（保存済み result に followup を被せると
+  // 古い分析結果を combined prompt に含めて再課金する経路に入ってしまうため）。
+  const [freshlyFetched, setFreshlyFetched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -229,7 +235,8 @@ export default function Page() {
     setSelectedId(pr.id);
     setTitle(pr.title ?? '');
     setText(pr.text);
-    setResult('');
+    setResult(pr.latestResult ?? '');
+    setFreshlyFetched(false);
     setFollowupText('');
     setError('');
   }
@@ -285,6 +292,7 @@ export default function Page() {
         setError('AIの処理に失敗しました。時間をおいてもう一度お試しください。');
       } else {
         setResult(data.result);
+        setFreshlyFetched(true);
         updateCurrentPR({ title, text: prText, latestResult: data.result });
       }
     } catch {
@@ -514,11 +522,21 @@ export default function Page() {
           disabled={loading}
           className="mt-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
         >
-          {loading ? '送信中...' : '添削する'}
+          {loading ? '送信中...' : selectedPR?.latestResult ? '再添削する' : '添削する'}
         </button>
       </section>
 
       {error && <p className="text-red-600 text-sm mb-6">{error}</p>}
+
+      {/* 保存済み result を表示中に textarea を編集したとき、画面上の result は
+          旧本文に対する評価のまま。再添削で最新評価が取れることを inline で促す。
+          freshlyFetched=false（保存済み result 表示中）かつ text が selectedPR.text と
+          乖離したときだけ出すので、新規添削直後 / 再添削直後の正常 UX には現れない。 */}
+      {result && !freshlyFetched && text !== selectedPR?.text && (
+        <p className="text-xs text-amber-600 mb-2">
+          本文を編集しました。「再添削する」を押すと最新の評価を確認できます。
+        </p>
+      )}
 
       {/* 添削結果 */}
       {result && (
@@ -532,8 +550,12 @@ export default function Page() {
         </section>
       )}
 
-      {/* 追加回答入力 */}
-      {result && (
+      {/* 追加回答入力
+          freshlyFetched が true のとき（= 今セッションで /api/reason から返ってきた
+          result を表示しているとき）にだけ出す。openPR で過去 PR の latestResult を
+          hydrate した経路では false に倒れるため、保存済み result に followup を
+          被せて combined prompt で再課金する事故を構造的に防ぐ。 */}
+      {result && freshlyFetched && (
         <section className="border border-blue-300 rounded-xl overflow-hidden">
           <div className="bg-blue-600 px-6 py-4">
             <h2 className="text-base font-bold text-white">
@@ -563,7 +585,7 @@ export default function Page() {
         </section>
       )}
 
-      {result && (
+      {result && freshlyFetched && (
         <div className="mt-6">
           <button
             type="button"

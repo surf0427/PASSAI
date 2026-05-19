@@ -29,6 +29,7 @@
 
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
+import { isApplicantType } from '@/types/applicantType';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { UniversityContext } from '@/types/universityContext';
 import { formatActivityData } from '@/lib/formatActivity';
@@ -145,7 +146,17 @@ export async function POST(req: Request) {
     // 将来 API 分割時は profileMaterial と initialQuestions を別エンドポイントで返す。
     const profileMaterial = extractProfileMaterial(parsed);
     const initialQuestions = extractInitialQuestions(parsed);
-    const result: WallHittingResult = { ...profileMaterial, questions: initialQuestions };
+    // STEP B: applicantType は optional 出力。AI が 5 種 enum 以外（null / 未定義 /
+    // 想定外の文字列）を返したケースは drop し、result の key 自体を出さない。
+    // extractProfileMaterial は applicantType を picked field に含めないため、
+    // ここで明示的に conditional spread で乗せる（責務分離ヘルパは触らない）。
+    const rawApplicantType: unknown = (parsed as { applicantType?: unknown }).applicantType;
+    const validApplicantType = isApplicantType(rawApplicantType) ? rawApplicantType : undefined;
+    const result: WallHittingResult = {
+      ...profileMaterial,
+      questions: initialQuestions,
+      ...(validApplicantType ? { applicantType: validApplicantType } : {}),
+    };
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
     return Response.json({ result });

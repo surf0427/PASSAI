@@ -31,7 +31,16 @@ import { djb2 } from '@/lib/hash/djb2';
 //             qualifier では「評定値・欠席日数を strengths/weaknesses/futureConnections/summary
 //             に残さない」を最重要制約として明示している。既存 cache の意味的妥当性が変わるため
 //             lane を分離する必要があり bump 必須。
-export const ANALYSIS_PROMPT_VERSION = 2;
+//   v2 → v3 : STEP B（applicantType）で ANALYSIS_SYSTEM_PROMPT に「6. 受験生タイプの推定」
+//             セクションと JSON 出力 schema の applicantType field（5 種 enum）を追加。
+//             受験生側の「型（傾向）」を AI に推定させ、route 側で validate → StudentProfile
+//             に passthrough する。内部 context 用ラベルで UI には強く露出しない。
+//             hash 入力構造（HashAnalysisInput の signature）は不変だが、AI 出力 schema が
+//             optional field 増分で変わるため既存 v2 cache の意味的妥当性が変わる。
+//             旧 v2 cache が新コードに hit すると applicantType を欠いた WallHittingResult が
+//             下流に流れるため lane 分離が必要で bump 必須（intentional 1 回 cache miss）。
+//             user prompt（buildWallHittingPrompt の戻り値）は byte-identical。
+export const ANALYSIS_PROMPT_VERSION = 3;
 
 // /api/analysis が使用するモデル。server route.ts 側の MODEL 定数と一致させること。
 // モデル変更は cache invalidation の主因なので hash 入力に必ず含める。
@@ -182,7 +191,18 @@ export function hashSummarizeInput(input: HashSummarizeInput): string {
 //             落ちない。bump によって旧 v4 cache は一律 miss になる（intentional 1 回損失）。
 //             STEP-F は minimum migration。studentProfile.generatedAt drift の完全解消は
 //             別 STEP（hash 入力を sourceHash 一本に絞る等）として残す。
-export const STATEMENT_REVIEW_PROMPT_VERSION = 5;
+//   v5 → v6 : STEP C（applicantType）で buildStatementStudentProfileContext に
+//             applicantType（5 種 enum）から派生する「傾向: ラベル — ヒント」1 行を
+//             optional context として注入。APPLICANT_TYPE_LABELS と statement-review
+//             ローカルの hint table から日本語ラベル + 短い AI 向けヒントを「断定ではない
+//             参考情報」として 1 行追加する。scoring rule（5 軸 8〜20）には踏み込まない。
+//             hash 入力構造（HashStatementReviewInput の signature）は不変。
+//             studentProfile field は STEP A/B で applicantType を持つ形に拡張済みのため、
+//             applicantType を持つ profile は studentProfile JSON の差で hash が変わる
+//             （applicantType=undefined の旧 profile は hash 等価のまま）。bump によって
+//             旧 v5 cache が新 prompt 出力契約に流入することを防ぐ（intentional 1 回 miss）。
+//             user prompt（buildStatementReviewPrompt の戻り値）の組み立て関数は byte-identical。
+export const STATEMENT_REVIEW_PROMPT_VERSION = 6;
 export const STATEMENT_REVIEW_MODEL = 'claude-sonnet-4-6';
 
 // hash と prompt body の input source は STEP-F 以降 intentional に非対称:
@@ -269,7 +289,21 @@ export function hashEssayReviewInput(input: HashEssayReviewInput): string {
 //             INTERVIEW_QUESTIONS_SUBJECT_GRADES_QUALIFIER を SYSTEM_PROMPT に接続。
 //             user prompt（buildInterviewQuestionUserPrompt / buildInterviewQuestionMaterials の
 //             戻り値）は byte-identical。既存 cache の意味的妥当性が変わるため lane を分離。
-export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 2;
+//   v2 → v3 : STEP E（applicantType）で buildInterviewQuestionMaterials に optional
+//             applicantType field を追加し、buildInterviewQuestionUserPrompt 内の
+//             【自己分析サマリー】セクション末尾に「傾向（参考情報・断定ではない）:
+//             ラベル — ヒント」1 行を optional 注入。INTERVIEW_QUESTION_SYSTEM_PROMPT /
+//             TwoLayerInterviewQuestions schema / 質問数 10 / general 5 + personalized 5
+//             ルールには 1 字も踏み込まない。
+//             hash 入力構造（HashInterviewQuestionsInput の signature）は不変。
+//             studentProfile field は STEP A/B で applicantType を持つ形に拡張済みのため、
+//             applicantType を持つ profile は studentProfile JSON の差で hash が分岐する
+//             （applicantType=undefined の旧 profile は hash 等価のまま）。bump によって
+//             旧 v2 cache が新 prompt 出力契約に流入することを防ぐ（intentional 1 回 miss）。
+//             buildInterviewStudentProfileContext（interview-feedback 専用）も同 hint table
+//             を共有するため出力挙動には副作用として影響あり。interview-feedback には input
+//             cache 機構が無いため bump 対象外。
+export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 3;
 export const INTERVIEW_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashInterviewQuestionsInput = {

@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "qa:step15": "npx tsx scripts/step15-qa.ts",
-    "qa:step15:dry": "npx tsx scripts/step15-qa.ts --dry"
+    "qa:step15:dry": "npx tsx scripts/step15-qa.ts --dry",
+    "qa:applicantType": "npx tsx scripts/step-applicant-type-qa.ts",
+    "qa:applicantType:dry": "npx tsx scripts/step-applicant-type-qa.ts --dry",
+    "qa:interviewApplicantType": "npx tsx scripts/step-interview-applicant-type-qa.ts",
+    "qa:interviewApplicantType:dry": "npx tsx scripts/step-interview-applicant-type-qa.ts --dry"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",

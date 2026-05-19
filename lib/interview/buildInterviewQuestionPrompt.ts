@@ -21,6 +21,10 @@ import {
   SUBJECT_GRADES_SHARED_INSTRUCTION,
   SUBJECT_GRADES_ASYMMETRY_RULE,
 } from '@/lib/prompts';
+// STEP E: applicantType（5 種）由来の「傾向」1 行 helper。
+// SYSTEM_PROMPT は本 STEP では 1 文字も変えない。user prompt 内の【自己分析サマリー】
+// セクション末尾に optional 注入する。
+import { formatInterviewApplicantTypeHint } from '@/lib/interview/applicantTypeHint';
 
 // 出力 JSON schema と件数ルール・許可値を固定化する system prompt。
 // 毎回不変なので将来 Anthropic prompt caching の cache_control 対象にできる構造に合わせる。
@@ -241,25 +245,35 @@ export function buildInterviewQuestionUserPrompt(input: {
 // ── 内部 helper ───────────────────────────────────────────────────
 
 function buildSelfAnalysisSection(materials: InterviewQuestionMaterials): string {
-  const { strengths, interests, futureGoals } = materials;
+  const { strengths, interests, futureGoals, applicantType } = materials;
   const lines: string[] = ['【自己分析サマリー】'];
 
-  if (strengths.length === 0 && interests.length === 0 && futureGoals.length === 0) {
+  const hasAnyAnalysis =
+    strengths.length > 0 || interests.length > 0 || futureGoals.length > 0;
+  if (!hasAnyAnalysis) {
     lines.push('自己分析サマリーなし');
-    return lines.join('\n');
+  } else {
+    if (strengths.length > 0) {
+      lines.push('強み:');
+      for (const s of strengths) lines.push(`・${s}`);
+    }
+    if (interests.length > 0) {
+      lines.push('興味・関心タグ:');
+      for (const s of interests) lines.push(`・${s}`);
+    }
+    if (futureGoals.length > 0) {
+      lines.push('将来とのつながり:');
+      for (const s of futureGoals) lines.push(`・${s}`);
+    }
   }
 
-  if (strengths.length > 0) {
-    lines.push('強み:');
-    for (const s of strengths) lines.push(`・${s}`);
-  }
-  if (interests.length > 0) {
-    lines.push('興味・関心タグ:');
-    for (const s of interests) lines.push(`・${s}`);
-  }
-  if (futureGoals.length > 0) {
-    lines.push('将来とのつながり:');
-    for (const s of futureGoals) lines.push(`・${s}`);
+  // STEP E: applicantType（5 種 enum）由来の「傾向」1 行を末尾に optional 注入。
+  // 自己分析が「なし」のケースでも applicantType だけは存在しうるため、
+  // hasAnyAnalysis の判定とは独立に append する。
+  // applicantType=undefined の旧 StudentProfile では本ブロックを skip するため
+  // prompt 文字列は従来と byte-identical。
+  if (applicantType) {
+    lines.push(formatInterviewApplicantTypeHint(applicantType));
   }
 
   return lines.join('\n');

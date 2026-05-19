@@ -144,6 +144,20 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
    - 各質問に【カテゴリ】を付ける（例：【動機】【課題】【行動】【成果】【将来】）
    - 「なぜ」「どのように」「その経験から何を得たか」を問う具体的な質問
 
+6. 受験生タイプの推定（applicantType）
+   - 自己分析素材から「最も強い傾向」を以下の 5 種から 1 つだけ選ぶ
+   - これは UI で本人に強く見せるためのものではなく、後続機能（志望理由書・面接・小論文 等）の
+     添削方向を調整するための内部 context ラベル
+   - 断定ではなく「現時点で最も近いもの」を 1 つ選ぶ。複数の傾向が混ざる場合でも単一値で返す
+   - 本人を型に閉じ込めないこと。あくまで参考傾向であり、性格や能力の決め打ちではない
+   - 値は必ず英語 enum 文字列で返す（日本語ラベルにしない / 配列にしない / 複数併記しない）
+   - 5 種の意味:
+     ・"activity_driven" : 活動・実績・リーダー経験・運営・成果・主体性が中心
+     ・"issue_driven"    : 社会問題・課題意識・違和感・解決したいテーマ・社会貢献が中心
+     ・"academic_driven" : 学問的関心・知的好奇心・探究・研究・「なぜ？」への興味が中心
+     ・"growth_driven"   : 挑戦・克服・変化・自己成長・自分を変えたい気持ちが中心
+     ・"value_driven"    : 原体験・人との関わり・価値観・感情的経験・人生経験が中心
+
 【出力ルール（厳守）】
 ・出力は純粋なJSONのみ
 ・最初の文字は { でなければならない
@@ -175,7 +189,8 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
     "【カテゴリ】具体的な質問文",
     "【カテゴリ】具体的な質問文",
     "【カテゴリ】具体的な質問文"
-  ]
+  ],
+  "applicantType": "activity_driven | issue_driven | academic_driven | growth_driven | value_driven のいずれか1つ"
 }`;
 
 export function buildWallHittingPrompt(opts: BuildWallHittingOptions): string {

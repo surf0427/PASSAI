@@ -1,3 +1,5 @@
+import type { ApplicantType } from './applicantType';
+
 export type AnalysisResult = {
   strengths: string[];
   interests: string[];
@@ -11,6 +13,9 @@ export type WallHittingResult = {
   weaknesses: string[];
   futureConnections: string[];
   questions: string[];
+  // 受験生側の「型（傾向）」。AI が未推定なら undefined。
+  // 推定経路の実装は別 STEP（STEP B 以降）。型のみ optional で先行追加。
+  applicantType?: ApplicantType;
 };
 
 // /api/summarize の出力。「自己分析の簡潔な要約」のみを返す。

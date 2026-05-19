@@ -15,6 +15,8 @@
 //
 // 設計詳細: docs に追加予定（StudentProfile の責務境界）。
 
+import type { ApplicantType } from './applicantType';
+
 export type SignatureEpisode = {
   // 「探究：仮説修正の粘り強さ」のような短い見出し（最大 20 字程度）
   title: string;
@@ -45,4 +47,9 @@ export type StudentProfile = {
   // 下流の prompt で「具体例を 1 つだけ引きたい」ときの参照源
   // 全件渡すのではなく、strengths と整合する形で 1〜3 件だけ持つ
   signatureEpisodes: SignatureEpisode[];
+
+  // 受験生側の「型（傾向）」。AI が未推定なら undefined。
+  // 推定経路（analysis prompt 改修 + toStudentProfile passthrough）は別 STEP。
+  // 旧 profile との後方互換のため optional で先行追加する。
+  applicantType?: ApplicantType;
 };

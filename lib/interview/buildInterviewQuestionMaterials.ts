@@ -16,6 +16,7 @@
 
 import type { BasicInfo } from '@/types/basicInfo';
 import type { StudentProfile } from '@/types/studentProfile';
+import type { ApplicantType } from '@/types/applicantType';
 import type { StatementDraft } from '@/lib/statement/review/statementStorage';
 import { buildSubjectGradesPromptLines } from '@/lib/buildBasicInfoPromptSection';
 
@@ -51,6 +52,12 @@ export type InterviewQuestionMaterials = {
   strengths: string[];
   interests: string[];
   futureGoals: string[];
+
+  // STEP E: StudentProfile.applicantType を passthrough する optional field。
+  // route 側で validate 済みの値しか入らない想定（analysis route で isApplicantType を通過済み）。
+  // ここでは validation を再実行しない（responsibility separation）。
+  // applicantType を持たない StudentProfile では undefined のまま流す。
+  applicantType?: ApplicantType;
 };
 
 export function buildInterviewQuestionMaterials(
@@ -86,6 +93,9 @@ export function buildInterviewQuestionMaterials(
       studentProfile?.futureConnections,
       STUDENT_PROFILE_LIST_MAX,
     ),
+    // STEP E: applicantType をそのまま passthrough。undefined はそのまま undefined。
+    // prompt builder 側で if (materials.applicantType) push で取り扱う。
+    applicantType: studentProfile?.applicantType,
   };
 }
 

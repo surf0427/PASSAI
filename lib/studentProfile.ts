@@ -53,6 +53,9 @@ export function toStudentProfile(
       // hash の入力は profile に含まれる素材＋呼び出し側が指定した追加素材。
       // questions / answers は profile に含めないが、呼び出し側が
       // extraSource として渡せば hash に反映できる（再生成判定用）。
+      // applicantType は hash 入力に含めない（STEP B の最小 passthrough 方針）。
+      // AI 出力の同一 input は同一 applicantType を返す前提で、redundant 再保存より
+      // hash 入力構造の安定を優先する。将来 mismatch が観測されたら別 STEP で見直す。
       summary,
       strengths,
       weaknesses,
@@ -66,6 +69,9 @@ export function toStudentProfile(
     futureConnections,
     valueKeywords,
     signatureEpisodes,
+    // STEP B: WallHittingResult.applicantType（route 側で validate 済み）をそのまま流す。
+    // undefined はそのまま undefined のまま保持される。
+    applicantType: wallHitting.applicantType,
   };
 }
 
