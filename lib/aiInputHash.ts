@@ -319,6 +319,43 @@ export function hashInterviewQuestionsInput(input: HashInterviewQuestionsInput):
   return djb2(stableStringify(input));
 }
 
+// ── /api/tutor 用（STEP-Tutor-1） ─────────────────────────────────
+//
+// 受験チューターAI route の version / model 定数。
+// v1 では input hash cache を使わないため Hash type / 関数は作らない:
+//   - tutor は plain text 自由文応答で hash 一致率が極めて低い
+//   - 仮に一致しても「異なる受験生に同じ応答」となり違和感が出る
+//   - cache 化の複雑度に見合うメリットがない
+//
+// VERSION 定数だけを置く理由:
+//   - SYSTEM PROMPT 文言・温度判定・安定化モード等を変更したら必ず bump する
+//     規律を残すため
+//   - 将来 input hash cache を導入する場合の足場
+//
+// PROMPT_VERSION bump 条件:
+//   - lib/tutor/tutorPrompt.ts:TUTOR_SYSTEM_PROMPT の文言変更
+//   - few-shot example の追加・修正
+//   - 禁止語彙リスト / 推奨表現リスト の変更
+//   - 温度判定 signal の変更
+//   - 安定化モードの動作変更
+//   - 危険語パターンの変更
+//   - 機能接続候補（4 機能）の変更
+//
+// bump しない条件:
+//   - lib/contextBuilders/tutor/*.ts のロジック変更（出力 string が変わらない場合）
+//   - UI 側変更
+//   - rate limit / daily limit の数値変更
+//
+// PROMPT_VERSION bump 履歴:
+//   v1 → v2 : v1.1 STEP17 で buildTutorStudentProfileContext.ts に signatureEpisodes
+//             section（「経験テーマ: <title>」1 件のみ）を追加。SYSTEM PROMPT / few-shot /
+//             禁止語彙は不変だが、context builder の出力 string が変わり同入力でも
+//             prompt body が変化するため bump。v1 では input hash cache を使わないため
+//             cache miss は発生しないが、規律として bump 履歴を残す。client 側 page.tsx も
+//             signatureEpisodes を送るよう拡張済み。
+export const TUTOR_PROMPT_VERSION = 2;
+export const TUTOR_MODEL = 'claude-sonnet-4-6';
+
 // ── 内部ヘルパ ─────────────────────────────────────────────────────
 
 // 正規化方針:

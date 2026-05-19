@@ -277,7 +277,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* 機能カード一覧 */}
+      {/* 機能カード一覧（PASSAI のメイン 6 機能。順序が学習フロー） */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {FEATURES.map((feature) => {
           const status = getStatus(statuses, feature.href);
@@ -326,6 +326,29 @@ export default function HomePage() {
           );
         })}
       </div>
+
+      {/* 受験チューターAI（詰まった時の整理役、メイン 6 機能とは別の支援的役割）
+          配置方針: メイン機能 grid の下に soft Card で分離。Header の nav には
+          載せない（app/components/Header.tsx の方針: 上部ナビは Home / 基本情報のみ）。
+          視覚的に primary CTA を避けるため LinkButton variant='outline' を採用。 */}
+      <section className="mt-10">
+        <p className="text-xs text-gray-500 mb-3 px-1">詰まった時の整理</p>
+        <Card variant="soft" padding="md">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="flex-1">
+              <h2 className="text-base font-bold text-gray-800 mb-1.5">受験チューターAI</h2>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                志望理由書・面接・不安など、今引っかかっていることを軽く整理して、次に何を進めるか一緒に見ます。
+              </p>
+            </div>
+            <div className="shrink-0 sm:self-end">
+              <LinkButton href="/tutor" variant="outline" size="md">
+                整理してみる
+              </LinkButton>
+            </div>
+          </div>
+        </Card>
+      </section>
 
     </div>
   );

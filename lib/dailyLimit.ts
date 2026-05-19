@@ -46,3 +46,10 @@ export function createDailyLimit(storageKey: string, limit: number) {
 export const deepDiveLimit            = createDailyLimit('deepDiveUsage',            4);
 export const selfAnalysisLimit        = createDailyLimit('selfAnalysisUsage',        3);
 export const additionalQuestionsLimit = createDailyLimit('additionalQuestionsUsage', 3);
+
+// 受験チューターAI（app/api/tutor、STEP5 で導入）用の日次回数上限（実装 STEP7）。
+// tutor は会話系で使われやすいが、3 ターン以内着地の設計と API cost 上限のため
+// 1 日 20 回に制限する（v1）。free / paid プラン差は v1 では設けない。
+// 危険語経路・rate limit hit は AI を呼ばないため、client 側で本 limit を消費させない
+// （STEP8 で UI 連携時に取り扱い）。
+export const tutorLimit               = createDailyLimit('tutorUsage',               20);
