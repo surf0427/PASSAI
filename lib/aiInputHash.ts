@@ -353,7 +353,21 @@ export function hashInterviewQuestionsInput(input: HashInterviewQuestionsInput):
 //             prompt body が変化するため bump。v1 では input hash cache を使わないため
 //             cache miss は発生しないが、規律として bump 履歴を残す。client 側 page.tsx も
 //             signatureEpisodes を送るよう拡張済み。
-export const TUTOR_PROMPT_VERSION = 2;
+//   v2 → v3 : v1.2 tone redesign — [N][O][P][Q][R][S] 6 blocks added.
+//             SYSTEM PROMPT に「雑味の温度設計」「名前呼びプロトコル」「雑味優先順位」
+//             「Emotional gravity control」「Artificial youth tone prohibition」
+//             「Normalize saturation control」の 6 ブロックを追加。
+//             [B][D][E][L] の既存ブロックも新仕様に整合させて update。
+//             few-shot を旧 9 例 → 新 3 例（雑味なし / 軽雑味 / [Q] 重相談）に差し替え。
+//             条件付き許可: ガチ / マジ / ワンチャン / 沼る / 詰む / メンタル削られる /
+//             しんどい / バグる / 笑 / w / 名前呼び（姓+さん）。
+//             新規完全禁止（[R]）: エグい / 界隈 / 解像度高い / 刺さる / 情緒 / 優勝 /
+//             案件 / アツい / バチバチ / メロい / しか勝たん / 尊い / わかりみ /
+//             すぎて草 / きゅん / 泣ける / エモい / アガる / (笑) / （笑） 等。
+//             三層防御・危険語対応・受験領域限定・雑談 redirect は不変。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             規律として bump 履歴を残す。
+export const TUTOR_PROMPT_VERSION = 3;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
 
 // ── 内部ヘルパ ─────────────────────────────────────────────────────

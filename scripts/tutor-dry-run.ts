@@ -52,6 +52,15 @@
  *   #   実 AI 呼び出し（推定 ~$0.02、4 cases: FutureUnknown / FacultyChoice / Casual / InterviewFuture）:
  *   npx tsx scripts/tutor-dry-run.ts --run --with-basic-info --with-future-connections
  *
+ *   # v1.2 STEP18-b: tone redesign 検証ルール追加。
+ *   #   - FORBIDDEN_WORDS から「ガチ / マジ / ワンチャン」を [N] の条件付き許可へ移管
+ *   #   - 新規 FAIL detector: 雑味 3 種類以上 / 名前呼び+w / 強調語複数 /
+ *   #                          ネット語彙 2 種以上 / normalize 2 回 / [Q] gravity violation
+ *   #   - 新規 WARN detector: normalize 3 turn 連続（session-level）
+ *   #   - 新規 CASES 19/20/21: Q-EmotionalGravity / LightDoubt / PlainOrganization
+ *   #   - 新規 SESSION_CASES s1-s4: detectNormalizeSaturation の fixture 検証
+ *   # 実 AI 呼び出しは STEP18-c で別途承認を得てから行う。本 step では --dry のみ。
+ *
  *   ANTHROPIC_API_KEY は .env.local から自動 load。
  */
 
@@ -130,6 +139,9 @@ if ((!IS_DRY && !IS_RUN) || (IS_DRY && IS_RUN)) {
   console.error('  --with-future-connections sample + strengths/weaknesses/futureConnections を同梱、4 cases のみ実行');
   console.error('  --with-value-keywords     sample + strengths/weaknesses/futureConnections/valueKeywords を同梱、4 cases のみ実行');
   console.error('  --with-signature-episodes sample + 上記 + signatureEpisodes(title only) を同梱、4 cases のみ実行');
+  console.error('');
+  console.error('STEP18-b 注: detector 群（雑味 3 種類以上 / 名前+w / [Q] gravity / normalize 飽和等）は');
+  console.error('  CLI flag 不要で常時有効。session fixture (s1-s4) は main 冒頭で常に検証実行する。');
   process.exit(1);
 }
 
@@ -292,9 +304,17 @@ function buildSampleStudentProfilePayload(): unknown {
   return null;
 }
 
-// 禁止語彙（SYSTEM PROMPT [L] と整合）。検出時 WARN または FAIL。
+// 禁止語彙（SYSTEM PROMPT [L][R] と整合）。検出時 FAIL。
+//
+// STEP18-b 改訂方針（v1.2 tone redesign に追従）:
+//   - 削除: ガチ / マジ / ワンチャン  → [N] により 1 reply 1 語の条件付き許可へ移管
+//   - 削除候補だったが現状未収録: 沼る / 詰む / メンタル削られる / しんどい / バグる / 笑 / w
+//     （いずれも元から未収録。条件付き許可なので追加もしない）
+//   - 追加: SNS 人格化・若者演技帯域の 17 語＋既存帯域強化（草 / www / 笑笑 等）
+//   - 「ガチ / マジ / ワンチャン の複数同時使用」「ネット語彙 2 種以上」「名前呼び + w」
+//     「雑味 3 種類以上」「normalize 2 回」は別 detector で FAIL する（後段参照）
 const FORBIDDEN_WORDS: readonly string[] = [
-  // 浅い励まし
+  // 浅い励まし（[D] と整合）
   '絶対',
   'きっと',
   '必ず',
@@ -303,19 +323,42 @@ const FORBIDDEN_WORDS: readonly string[] = [
   '心配しないで',
   '自信を持って',
   '諦めないで',
-  // ネット・SNS 起源
-  'ガチ',
-  'マジ',
-  '草',
-  'ぴえん',
-  '神対応',
-  'ワンチャン',
-  'それな',
-  'めっちゃ',
-  // タメ口語尾（部分一致しやすいので末尾近辺を狙う）
+  // タメ口語尾（[B] と整合・部分一致しやすいので末尾近辺を狙う）
   'だね。',
   'だよ。',
   'じゃん',
+  // 既存ネット・SNS 起源（[R] と整合）
+  'ぴえん',
+  '神対応',
+  'それな',
+  'めっちゃ',
+  // STEP18-b 追加: SNS 人格化・若者演技禁止帯域（[R] と整合・絶対禁止）
+  '草',
+  'www',
+  'wwww',
+  '笑笑',
+  '(笑)',
+  '（笑）',
+  'それな〜',
+  'きゅん',
+  '泣ける',
+  'エモい',
+  'アガる',
+  'エグい',
+  'えぐ',
+  '界隈',
+  '解像度高い',
+  '刺さる',
+  '情緒',
+  '優勝',
+  '案件',
+  'アツい',
+  'バチバチ',
+  'メロい',
+  'しか勝たん',
+  '尊い',
+  'わかりみ',
+  'すぎて草',
   // applicantType ラベル（[H] 厳禁）
   '活動実績型',
   '社会課題型',
@@ -539,7 +582,135 @@ const CASES: readonly TestCase[] = [
       '「経験不足」より「経験の整理 / 意味づけ」として再構築',
     ],
   },
+  // STEP18-b で追加: v1.2 tone redesign baseline case。--run 時に全実行 / --dry でも prompt 確認可。
+  // [Q] 重相談: 雑味ゼロ・normalize + 整理支援のみが許される境界。
+  {
+    id: 19,
+    name: 'Q-EmotionalGravity',
+    input: 'もう無理かも、メンタル削られすぎて志望理由書も書けない',
+    expect: [
+      '[Q] emotional gravity violation が出ない',
+      '笑 / w / 軽ツッコミ / 名前呼び / 軽賞賛 / ネット語彙のいずれも出ない',
+      '雑味ゼロでも PASS（normalize と整理支援のみ）',
+      '安定化モード（[F]）相当の応答で suggestion なし',
+    ],
+  },
+  // 軽迷い: 軽雑味 1 種類以内が望ましい。[P] 上限超過 / ネット語彙 2 種以上で FAIL。
+  {
+    id: 20,
+    name: 'LightDoubt',
+    input: '志望理由書、何回も直してるうちに沼ってる気がする',
+    expect: [
+      '雑味 1 種類以内が望ましい',
+      '雑味 3 種類以上 → FAIL（[P]）',
+      'ネット語彙 2 種類以上 → FAIL（[P]）',
+      'ガチ/マジ/ワンチャンの複数同時使用 → FAIL（[P]）',
+      '志望理由書 suggestion 出現は許容',
+    ],
+  },
+  // 普通の整理依頼: 雑味なしでも PASS（盛らないことの検証）。
+  // normalize を無理に入れる必要はない。冷静な質問に対しては整理回答に徹する。
+  {
+    id: 21,
+    name: 'PlainOrganization',
+    input: '第一志望と第二志望で志望理由書をどう書き分ければいいですか?',
+    expect: [
+      '雑味なしでも PASS',
+      'normalize を無理に入れない',
+      '整理 / 切り分け回答が自然',
+      '志望理由書 suggestion は optional',
+    ],
+  },
 ];
+
+// ─────────────────────────────────────────────────────────────
+// STEP18-b: session-level fixtures
+//
+// detectNormalizeSaturation の検証用 fixture。
+// 実 AI を呼ばず、replies 配列を直接 detector に渡して挙動を確認する。
+// session-level 検証構造を将来拡張する場合は、ここに新しい fixture を追加し、
+// runSessionFixtureValidation() を実行する。
+// ─────────────────────────────────────────────────────────────
+
+type SessionFixture = {
+  id: string;
+  name: string;
+  replies: readonly string[];
+  expectSaturationWarn: boolean;
+  description: string;
+};
+
+const SESSION_CASES: readonly SessionFixture[] = [
+  {
+    id: 's1',
+    name: 'normalize-saturation-NG',
+    replies: [
+      'それ結構あるやつですね。',
+      'みんな一回そこ悩みます。',
+      '普通のことです。',
+    ],
+    expectSaturationWarn: true,
+    description: 'normalize 3 turn 連続 → WARN 検出されるべき（[S] 違反パターン）',
+  },
+  {
+    id: 's2',
+    name: 'normalize-legit',
+    replies: [
+      'それ結構あるやつですね。',
+      '今って、"方向性はあるけど自信がない" 状態に近いですか?',
+    ],
+    expectSaturationWarn: false,
+    description: 'normalize 1 回のみ → WARN なし',
+  },
+  {
+    id: 's3',
+    name: 'organization-phase-suppress',
+    replies: [
+      'それ結構あるやつですね。',
+      '今は、"方向性の迷い" と "表現の迷い" が混ざっている状態です。',
+      'まずは第一志望で共通軸を作って、第二志望では差し替える部分を決めましょう。',
+    ],
+    expectSaturationWarn: false,
+    description: '整理フェーズで normalize を抑制 → WARN なし',
+  },
+  {
+    id: 's4',
+    name: 'night-anxiety-normalize-once',
+    replies: [
+      '夜になると重く感じることはありますね。',
+      '今日は全部決めなくていいので、"明日見るメモ" だけ残しましょう。',
+    ],
+    expectSaturationWarn: false,
+    description: '夜系不安で normalize 1 回のみ → WARN なし',
+  },
+];
+
+type SessionValidationResult = {
+  id: string;
+  name: string;
+  expected: boolean;
+  actualWarn: boolean;
+  consecutiveCount: number;
+  firstTurnIndex: number;
+  pass: boolean;
+};
+
+// session fixture を順に走らせ、expectSaturationWarn と detector の結果を比較する。
+// 実 AI 不要なため、--dry / --run / どちらでも常に main() の冒頭で実行する。
+function runSessionFixtureValidation(): SessionValidationResult[] {
+  return SESSION_CASES.map((s) => {
+    const r = detectNormalizeSaturation(s.replies);
+    return {
+      id: s.id,
+      name: s.name,
+      expected: s.expectSaturationWarn,
+      actualWarn: r.warn,
+      consecutiveCount: r.consecutiveCount,
+      firstTurnIndex: r.firstTurnIndex,
+      pass: r.warn === s.expectSaturationWarn,
+    };
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // helpers
@@ -633,6 +804,255 @@ function countSuggestionLines(reply: string): number {
   return reply.split('\n').filter((line) => /^→/.test(line.trim())).length;
 }
 
+// ─────────────────────────────────────────────────────────────
+// STEP18-b: v1.2 tone redesign 用 detector 群
+//
+// SYSTEM PROMPT [N][O][P][Q][R][S] と整合する追加検証層。
+// 既存の FORBIDDEN_WORDS（完全禁止）とは別軸で「条件付き許可の境界違反」を検出する。
+// FAIL: detector A〜F / WARN: detectNormalizeSaturation
+// ─────────────────────────────────────────────────────────────
+
+// 雑味カテゴリ別の検出 regex（[P] の優先順位カテゴリと一対一対応）。
+// 検出は「字面マッチ」優先で意味解釈はしない。境界事例は WARN で吸い上げる方針。
+const NOISE_HALF_KEIGO_PATTERNS: readonly RegExp[] = [
+  /なんよね/,
+  /なんやけど/,
+  /だったりする/,
+  /やつですね/,
+  /あるある/,
+];
+
+const NOISE_NORMALIZE_PATTERNS: readonly RegExp[] = [
+  /結構ある/,
+  /みんなそう/,
+  /みんな.{0,5}悩/,
+  /普通(?:です|のこと)?/,
+  /あるある/,
+  /よくある/,
+  /かなり多い/,
+  /珍しくない/,
+  /一回.{0,5}そうなる/,
+  /誰でも.{0,5}通る/,
+];
+
+const NOISE_LIGHT_TSUKKOMI_PATTERNS: readonly RegExp[] = [
+  /流石に/,
+  /詰め込みすぎ/,
+  /欲張りすぎ/,
+  /やりすぎ/,
+];
+
+// [N] で条件付き許可となった軽ネット語彙。1 reply 1 語ルール / 2 種以上 NG ルールは
+// 別 detector（detectMultipleEmphasis / detectMultipleNetVocab）で個別に検証する。
+const NET_VOCAB_TERMS: readonly string[] = [
+  'ガチ',
+  'マジ',
+  'ワンチャン',
+  '沼る',
+  '詰む',
+  'メンタル削られる',
+  'しんどい',
+  'バグる',
+];
+
+// 強調系（複数同時使用が NG な subset）。「ガチ」「マジ」「ワンチャン」の併用検出用。
+const EMPHASIS_NET_VOCAB_TERMS: readonly string[] = [
+  'ガチ',
+  'マジ',
+  'ワンチャン',
+];
+
+// 笑 / w（[N] により文末 1 回まで条件付き許可）。
+// w は ASCII boundary を取り、英単語内 (e.g. "well") に誤当たりしないようにする。
+const NOISE_WARAI_REGEX = /笑|(?<![a-zA-Z])w(?![a-zA-Z])/;
+
+// 名前呼びの簡易検出。
+// 仕様: 「<姓>さん、」「<姓>さん。」型を簡易マッチ。
+// TODO: SAMPLE_BASIC_INFO に lastName が入った時点で姓を実値マッチに切り替える。
+//       現状は「さん、」「さん。」共通の文字列マッチで誤検知 ≒ 受験生敬称呼びの可能性あり。
+const NAME_CALL_REGEX = /[一-龥々]さん[、。]/;
+
+// 軽賞賛検出（[Q] 重相談時に出てきたら FAIL）。
+const LIGHT_PRAISE_PATTERNS: readonly RegExp[] = [
+  /(?<![一-龥])強い/,
+  /普通にいい/,
+  /デカい/,
+  /偉い/,
+];
+
+// [Q] Emotional gravity 検知語（user message 側）。
+// [G] 危険語プロトコルは route 側で早期 return するため、ここでは扱わない。
+const EMOTIONAL_GRAVITY_TERMS: readonly string[] = [
+  '泣く',
+  '無理',
+  '限界',
+  '消えたい',
+  '不合格',
+  '親',
+  '病む',
+  'メンタル',
+  'しんどすぎる',
+  '自己否定',
+];
+
+// detector A: 雑味カテゴリ数を数える。3 種類以上で FAIL。
+// 各カテゴリは「1 つでも該当 regex に match したら 1」としてカウント。
+function countNoiseTypes(reply: string): {
+  total: number;
+  hits: { category: string; sample: string }[];
+} {
+  const hits: { category: string; sample: string }[] = [];
+
+  const matchAny = (patterns: readonly RegExp[]): string | null => {
+    for (const p of patterns) {
+      const m = reply.match(p);
+      if (m) return m[0];
+    }
+    return null;
+  };
+
+  const halfKeigo = matchAny(NOISE_HALF_KEIGO_PATTERNS);
+  if (halfKeigo) hits.push({ category: '半敬体崩し', sample: halfKeigo });
+
+  const normalize = matchAny(NOISE_NORMALIZE_PATTERNS);
+  if (normalize) hits.push({ category: 'normalize', sample: normalize });
+
+  const tsukkomi = matchAny(NOISE_LIGHT_TSUKKOMI_PATTERNS);
+  if (tsukkomi) hits.push({ category: '軽ツッコミ', sample: tsukkomi });
+
+  const netVocab = NET_VOCAB_TERMS.find((t) => reply.includes(t));
+  if (netVocab) hits.push({ category: '軽ネット語彙', sample: netVocab });
+
+  const warai = reply.match(NOISE_WARAI_REGEX);
+  if (warai) hits.push({ category: '笑/w', sample: warai[0] });
+
+  const nameCall = reply.match(NAME_CALL_REGEX);
+  if (nameCall) hits.push({ category: '名前呼び', sample: nameCall[0] });
+
+  return { total: hits.length, hits };
+}
+
+// detector B: 名前呼び + w の同居を検出（[P] 禁止組み合わせ）。
+function detectNameAndW(reply: string): boolean {
+  return NAME_CALL_REGEX.test(reply) && NOISE_WARAI_REGEX.test(reply);
+}
+
+// detector C: ガチ / マジ / ワンチャン の複数同時使用を検出（[P] 禁止）。
+function detectMultipleEmphasis(reply: string): {
+  violated: boolean;
+  hits: string[];
+} {
+  const hits = EMPHASIS_NET_VOCAB_TERMS.filter((t) => reply.includes(t));
+  return { violated: hits.length >= 2, hits };
+}
+
+// detector D: 異なるネット語彙 2 種類以上を検出（[P] 禁止）。
+// unique count（同一語の複数回出現は 1 種類扱い）。
+function detectMultipleNetVocab(reply: string): {
+  violated: boolean;
+  hits: string[];
+} {
+  const hits = NET_VOCAB_TERMS.filter((t) => reply.includes(t));
+  return { violated: hits.length >= 2, hits };
+}
+
+// detector E: 1 reply 内の normalize 系出現回数を数える。2 回以上で FAIL（[S]）。
+// regex の重複や互いの包含関係（「あるある」が「結構ある」を内包する等）を雑に許容し、
+// 「detect された normalize パターン数」を count する。意味的二重カウントは多少残るが
+// 「同 reply で 2 個の normalize 句」を確実に拾う目的では十分。
+function countNormalizeInReply(reply: string): {
+  count: number;
+  matches: string[];
+} {
+  const matches: string[] = [];
+  for (const p of NOISE_NORMALIZE_PATTERNS) {
+    const all = reply.match(new RegExp(p.source, 'g'));
+    if (all) matches.push(...all);
+  }
+  return { count: matches.length, matches };
+}
+
+// detector F: [Q] Emotional gravity violation。
+// user message に [Q] 検知語が含まれる場合、AI reply に以下のいずれかが出現したら FAIL:
+//   笑 / w / 軽ツッコミ / 名前呼び / 軽賞賛 / ガチ / マジ / ワンチャン /
+//   沼る / 詰む / バグる / メンタル削られる
+function detectEmotionalGravityViolation(
+  userMessage: string,
+  reply: string,
+): { violated: boolean; reasons: string[] } {
+  const gravityHit = EMOTIONAL_GRAVITY_TERMS.find((t) => userMessage.includes(t));
+  if (!gravityHit) return { violated: false, reasons: [] };
+
+  const reasons: string[] = [];
+
+  if (NOISE_WARAI_REGEX.test(reply)) {
+    const m = reply.match(NOISE_WARAI_REGEX);
+    reasons.push(`笑/w 出現: "${m?.[0]}"`);
+  }
+  for (const p of NOISE_LIGHT_TSUKKOMI_PATTERNS) {
+    const m = reply.match(p);
+    if (m) {
+      reasons.push(`軽ツッコミ出現: "${m[0]}"`);
+      break;
+    }
+  }
+  if (NAME_CALL_REGEX.test(reply)) {
+    const m = reply.match(NAME_CALL_REGEX);
+    reasons.push(`名前呼び出現: "${m?.[0]}"`);
+  }
+  for (const p of LIGHT_PRAISE_PATTERNS) {
+    const m = reply.match(p);
+    if (m) {
+      reasons.push(`軽賞賛出現: "${m[0]}"`);
+      break;
+    }
+  }
+  const emphasis = EMPHASIS_NET_VOCAB_TERMS.find((t) => reply.includes(t));
+  if (emphasis) reasons.push(`ネット強調語出現: "${emphasis}"`);
+  const lightNet = ['沼る', '詰む', 'バグる', 'メンタル削られる'].find((t) =>
+    reply.includes(t),
+  );
+  if (lightNet) reasons.push(`軽ネット語彙出現: "${lightNet}"`);
+
+  return {
+    violated: reasons.length > 0,
+    reasons: reasons.length > 0 ? [`gravity語 "${gravityHit}" 検知時に: ${reasons.join(' / ')}`] : [],
+  };
+}
+
+// session-level WARN: normalize 系が 3 turn 連続出現したら WARN。
+// 受験生 turn は無視し、AI reply の配列のみを取る。
+function detectNormalizeSaturation(replies: readonly string[]): {
+  warn: boolean;
+  consecutiveCount: number;
+  firstTurnIndex: number;
+} {
+  let consecutive = 0;
+  let maxConsecutive = 0;
+  let firstIdx = -1;
+  let runStart = -1;
+
+  replies.forEach((r, i) => {
+    const hit = NOISE_NORMALIZE_PATTERNS.some((p) => p.test(r));
+    if (hit) {
+      if (consecutive === 0) runStart = i;
+      consecutive += 1;
+      if (consecutive > maxConsecutive) {
+        maxConsecutive = consecutive;
+        firstIdx = runStart;
+      }
+    } else {
+      consecutive = 0;
+    }
+  });
+
+  return {
+    warn: maxConsecutive >= 3,
+    consecutiveCount: maxConsecutive,
+    firstTurnIndex: firstIdx,
+  };
+}
+
 function judgeCase(
   c: TestCase,
   reply: string,
@@ -666,6 +1086,57 @@ function judgeCase(
   if (checkBulletEnumeration(reply)) {
     verdict = 'FAIL';
     reasons.push('箇条書き列挙を検出（SYSTEM [J] 「箇条書きを使わない」違反）');
+  }
+
+  // STEP18-b: v1.2 tone redesign detector 群
+  //   A. 雑味 3 種類以上 → FAIL（[P]）
+  //   B. 名前呼び + w   → FAIL（[P]）
+  //   C. ガチ/マジ/ワンチャン の複数同時使用 → FAIL（[P]）
+  //   D. ネット語彙 2 種類以上 → FAIL（[P]）
+  //   E. normalize 2 回 in reply → FAIL（[S]）
+  //   F. [Q] Emotional gravity violation → FAIL（[Q]）
+  const noise = countNoiseTypes(reply);
+  if (noise.total >= 3) {
+    verdict = 'FAIL';
+    const sample = noise.hits
+      .map((h) => `${h.category}="${h.sample}"`)
+      .join(' / ');
+    reasons.push(`雑味 ${noise.total} 種類検出（[P] 上限 2 超過）: ${sample}`);
+  }
+
+  if (detectNameAndW(reply)) {
+    verdict = 'FAIL';
+    reasons.push('名前呼び + w/笑 の同居を検出（[P] 禁止組み合わせ）');
+  }
+
+  const emphasis = detectMultipleEmphasis(reply);
+  if (emphasis.violated) {
+    verdict = 'FAIL';
+    reasons.push(
+      `ガチ/マジ/ワンチャン の複数同時使用を検出（[P]）: ${emphasis.hits.join(', ')}`,
+    );
+  }
+
+  const multiNet = detectMultipleNetVocab(reply);
+  if (multiNet.violated) {
+    verdict = 'FAIL';
+    reasons.push(
+      `異なるネット語彙 ${multiNet.hits.length} 種類検出（[P] 上限 1）: ${multiNet.hits.join(', ')}`,
+    );
+  }
+
+  const normalizeInReply = countNormalizeInReply(reply);
+  if (normalizeInReply.count >= 2) {
+    verdict = 'FAIL';
+    reasons.push(
+      `normalize ${normalizeInReply.count} 回 in reply（[S] 上限 1 超過）: ${normalizeInReply.matches.join(', ')}`,
+    );
+  }
+
+  const gravity = detectEmotionalGravityViolation(c.input, reply);
+  if (gravity.violated) {
+    verdict = 'FAIL';
+    reasons.push(`[Q] Emotional gravity violation: ${gravity.reasons.join(' / ')}`);
   }
 
   // length check
@@ -998,6 +1469,26 @@ async function main(): Promise<void> {
   console.log(`Model: ${TUTOR_MODEL}`);
   console.log(`Cases: ${targetCases.length}${casesNote}`);
   console.log(SEP);
+  console.log('');
+
+  // STEP18-b: session-level fixture validation（実 AI 不要 / 常に実行）。
+  // detectNormalizeSaturation の挙動を SESSION_CASES で確認する。
+  const sessionResults = runSessionFixtureValidation();
+  console.log(SUB);
+  console.log('Session-level fixture validation (detectNormalizeSaturation)');
+  console.log(SUB);
+  for (const sr of sessionResults) {
+    const status = sr.pass ? 'PASS' : 'FAIL';
+    console.log(
+      `  [${status}] ${sr.id} ${sr.name}: expected=${sr.expected}, actual=${sr.actualWarn} (consecutive=${sr.consecutiveCount}, firstIdx=${sr.firstTurnIndex})`,
+    );
+  }
+  const sessionFail = sessionResults.filter((s) => !s.pass).length;
+  if (sessionFail > 0) {
+    console.log(`  → ${sessionFail} session fixture(s) FAILED — detector 修正が必要`);
+  } else {
+    console.log('  → all session fixtures PASS');
+  }
   console.log('');
 
   let anthropic: Anthropic | null = null;
