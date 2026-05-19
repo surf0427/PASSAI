@@ -358,16 +358,31 @@ export function hashInterviewQuestionsInput(input: HashInterviewQuestionsInput):
 //             「Emotional gravity control」「Artificial youth tone prohibition」
 //             「Normalize saturation control」の 6 ブロックを追加。
 //             [B][D][E][L] の既存ブロックも新仕様に整合させて update。
-//             few-shot を旧 9 例 → 新 3 例（雑味なし / 軽雑味 / [Q] 重相談）に差し替え。
+//             few-shot を旧 9 例 → 新 3 例(雑味なし / 軽雑味 / [Q] 重相談)に差し替え。
 //             条件付き許可: ガチ / マジ / ワンチャン / 沼る / 詰む / メンタル削られる /
-//             しんどい / バグる / 笑 / w / 名前呼び（姓+さん）。
-//             新規完全禁止（[R]）: エグい / 界隈 / 解像度高い / 刺さる / 情緒 / 優勝 /
+//             しんどい / バグる / 笑 / w / 名前呼び(姓+さん)。
+//             新規完全禁止([R]): エグい / 界隈 / 解像度高い / 刺さる / 情緒 / 優勝 /
 //             案件 / アツい / バチバチ / メロい / しか勝たん / 尊い / わかりみ /
-//             すぎて草 / きゅん / 泣ける / エモい / アガる / (笑) / （笑） 等。
+//             すぎて草 / きゅん / 泣ける / エモい / アガる / (笑) / (笑) 等。
 //             三層防御・危険語対応・受験領域限定・雑談 redirect は不変。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             規律として bump 履歴を残す。
-export const TUTOR_PROMPT_VERSION = 3;
+//   v3 → v4 : v1.3 受験外受け止め拡張 — [T] 1 block added。
+//             SYSTEM PROMPT に「受験に直接関係ない話題の扱い + 会話スタイル補足」を追加。
+//             部活 / 人間関係 / バイト / 留学 / 趣味 / 挫折 / 価値観 / 将来不安 等を
+//             「機械的に拒否しない」「受け止め→整理→自然に受験・進路・自己理解へ接続」
+//             する方針を明文化。同時に [A] 役割の 4 つ目を「PASSAI 内機能に 1 つだけ繋ぐ」
+//             から「受験・進路・自己理解の整理に必要があれば 4 機能のうち 1 つに自然に
+//             繋ぐ」へ書き換え、受験外トピックの受け止めを許容する形へ調整。
+//             不変: [I] 4 機能限定 / [G] 危険語プロトコル / [Q] Emotional gravity /
+//             [S] Normalize saturation 上限 / [N][O][P][R] 雑味制約 / 三層防御。
+//             新規禁止: 「PASSAI は受験専用 AI です」「対応できません」型の機械的拒否、
+//             無限深掘り「もっと詳しく話してください」、過剰共感、長文カウンセリング、
+//             感情依存形成。
+//             few-shot は 3 例維持(v1.3 OK 例は [T] block 内に inline 配置)。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             規律として bump 履歴を残す。
+export const TUTOR_PROMPT_VERSION = 4;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
 
 // ── 内部ヘルパ ─────────────────────────────────────────────────────

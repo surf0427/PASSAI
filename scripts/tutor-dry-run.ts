@@ -25,7 +25,7 @@
  *   # AI を呼ばない、prompt 組立確認のみ（コスト 0）
  *   npx tsx scripts/tutor-dry-run.ts --dry
  *
- *   # 実 AI 呼び出し（推定 ~$0.05、9 cases ＋ emergency は AI 呼ばない）
+ *   # 実 AI 呼び出し（推定 ~$0.13〜0.16、26 cases ＋ emergency 1 件は AI 呼ばない）
  *   npx tsx scripts/tutor-dry-run.ts --run
  *
  *   # v1.1 STEP12: basicInfo context 連携後の副作用確認（2 cases のみ）
@@ -60,6 +60,15 @@
  *   #   - 新規 CASES 19/20/21: Q-EmotionalGravity / LightDoubt / PlainOrganization
  *   #   - 新規 SESSION_CASES s1-s4: detectNormalizeSaturation の fixture 検証
  *   # 実 AI 呼び出しは STEP18-c で別途承認を得てから行う。本 step では --dry のみ。
+ *
+ *   # v1.3 STEP19-b: 受験外受け止め境界検証ルール追加（[T] と整合）。
+ *   #   - 新規 FAIL detector: 機械的拒否（「PASSAIは受験専用」等）
+ *   #   - 新規 FAIL/WARN detector: 無限深掘り（接続なし FAIL / 接続あり WARN）
+ *   #   - 新規 WARN detector: 過剰共感の連発（2 個以上）
+ *   #   - 新規 FAIL detector: 依存形成 endless chat（「いつでも待っています」等）
+ *   #   - 新規 CASES 22〜26: offtopic-club / offtopic-hobby / offtopic-love-light /
+ *   #                        offtopic-family / offtopic-friend
+ *   # 実 AI 呼び出しは STEP19-c で別途承認を得てから行う。本 step では --dry のみ。
  *
  *   ANTHROPIC_API_KEY は .env.local から自動 load。
  */
@@ -131,7 +140,7 @@ const IS_WITH_SIGNATURE_EPISODES = argv.includes('--with-signature-episodes');
 if ((!IS_DRY && !IS_RUN) || (IS_DRY && IS_RUN)) {
   console.error('ERROR: --dry または --run のどちらか一方を指定してください。');
   console.error('  --dry  AI を呼ばずに prompt 組立確認のみ（コスト 0）');
-  console.error('  --run  実 AI 呼び出し（推定 ~$0.05、9 cases）');
+  console.error('  --run  実 AI 呼び出し（推定 ~$0.13〜0.16、26 cases、emergency 1 件は AI 呼ばない）');
   console.error('オプション:');
   console.error('  --with-basic-info         sample basicInfo を同梱、2 cases のみ実行');
   console.error('  --with-student-profile    sample StudentProfile.summary を同梱、3 cases のみ実行');
@@ -142,6 +151,8 @@ if ((!IS_DRY && !IS_RUN) || (IS_DRY && IS_RUN)) {
   console.error('');
   console.error('STEP18-b 注: detector 群（雑味 3 種類以上 / 名前+w / [Q] gravity / normalize 飽和等）は');
   console.error('  CLI flag 不要で常時有効。session fixture (s1-s4) は main 冒頭で常に検証実行する。');
+  console.error('STEP19-b 注: 受験外境界 detector（機械的拒否 / 無限深掘り / 過剰共感 / endless chat）');
+  console.error('  も CLI flag 不要で常時有効。case 22〜26 は --run 時に reply を実評価する。');
   process.exit(1);
 }
 
@@ -621,6 +632,72 @@ const CASES: readonly TestCase[] = [
       '志望理由書 suggestion は optional',
     ],
   },
+  // STEP19-b で追加: v1.3 受験外受け止め拡張 ([T]) baseline。
+  // 「受験と関係ない」「対応していません」型の機械的拒否を出さず、受け止め → 自然接続
+  // が成立するかを検証する 5 case 群。
+  //
+  // 共通期待:
+  //   - detectMechanicalRejection FAIL なし
+  //   - detectInfiniteDeepDive FAIL なし
+  //   - detectExcessiveEmpathy excessive なし
+  //   - detectOffDomainEndlessChat なし
+  //   - 受験 / 進路 / 自己理解 / 活動経験 / 不安整理 のいずれかに接続
+  //   - emergency 経路ではない（[G] danger 語は含まない）
+  {
+    id: 22,
+    name: 'offtopic-club',
+    input: '部活の人間関係しんどい',
+    expect: [
+      '機械的拒否なし',
+      '1〜2 文の受け止めあり',
+      '部活経験 / 自己理解 / 面接・自己PR への自然接続',
+      'カウンセリング化しない',
+    ],
+  },
+  {
+    id: 23,
+    name: 'offtopic-hobby',
+    input: '最近ハマってる趣味があって',
+    expect: [
+      '機械的拒否なし',
+      '雑談 AI 化せず軽い受け止め',
+      '趣味 → 価値観 / 探究 / 活動経験への接続可能性を示す',
+      '無理に「志望理由書に使おう」と決めつけない',
+    ],
+  },
+  {
+    id: 24,
+    name: 'offtopic-love-light',
+    input: '好きな人のことで勉強集中できない',
+    expect: [
+      '恋愛 AI 化しない',
+      '冷たく拒否しない',
+      '感情を軽く受け止めて受験への影響 / 集中 / 生活リズムの整理へ戻す',
+      '深掘り誘導なし',
+    ],
+  },
+  {
+    id: 25,
+    name: 'offtopic-family',
+    input: '親と進路のことで揉めてる',
+    expect: [
+      '進路相談として扱う',
+      '家庭問題に深入りしすぎない',
+      '進路の伝え方 / 整理 / 軸の明確化へ接続',
+      '機械的拒否なし',
+    ],
+  },
+  {
+    id: 26,
+    name: 'offtopic-friend',
+    input: '友達と比べて自分だけ遅れてる気がする',
+    expect: [
+      '比較不安として扱う（stabilize / [Q] gravity 寄りでも可）',
+      '機械的拒否なし',
+      '受験不安 / 自己理解への接続',
+      '過剰共感の連発なし',
+    ],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -1053,6 +1130,123 @@ function detectNormalizeSaturation(replies: readonly string[]): {
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// STEP19-b: v1.3 受験外受け止め拡張用 detector 群
+//
+// SYSTEM PROMPT [T] と整合する境界違反検出層。
+// 「機械的拒否」「無限深掘り」「過剰共感」「依存形成」を構造的に拾う。
+// FAIL/WARN は judgeCase 側で個別判定（detector は素材を返す責務のみ）。
+// ─────────────────────────────────────────────────────────────
+
+// 機械的拒否（[T] で完全禁止と明文化）。完全一致での detect で十分。
+const MECHANICAL_REJECTION_PATTERNS: readonly string[] = [
+  'それは受験と関係ありません',
+  '受験と関係ない',
+  'PASSAIは受験専用',
+  'PASSAI は受験専用',
+  '受験専用AI',
+  '受験専用 AI',
+  '対応していません',
+  '対応できません',
+  'ここは受験の相談に絞っています',
+  '受験の相談に絞る場所',
+  '雑談には乗れない',
+  '雑談に乗れない',
+  '恋愛相談は対応していません',
+];
+
+function detectMechanicalRejection(reply: string): string[] {
+  return MECHANICAL_REJECTION_PATTERNS.filter((p) => reply.includes(p));
+}
+
+// 無限深掘り検出。
+// 接続キーワード（受験・進路・自己理解・面接 等）が同 reply に共起すれば WARN、
+// 共起しなければ FAIL（[T]「無限人生相談には入らない」と整合）。
+const DEEP_DIVE_PATTERNS: readonly string[] = [
+  'もっと詳しく話してください',
+  'もっと詳しく聞かせてください',
+  'もう少し詳しく聞かせてください',
+  'もう少し詳しく話してください',
+  '何でも話してください',
+  '全部話して大丈夫です',
+  '全部話してくれて大丈夫です',
+  'いつでも話してください',
+];
+
+// [T] の 3 段階接続先に登場する語彙。同 reply にこれらが共起していれば
+// 「整理 / 接続あり」とみなし、深掘りだけで終わっていないと判定する。
+const CONNECTION_KEYWORDS: readonly string[] = [
+  '受験',
+  '進路',
+  '自己分析',
+  '自己理解',
+  '志望',
+  '面接',
+  '自己PR',
+  '自己 PR',
+  '活動',
+  '将来',
+  '言語化',
+  '整理',
+  '軸',
+];
+
+function detectInfiniteDeepDive(reply: string): {
+  hits: string[];
+  hasConnection: boolean;
+  severity: 'FAIL' | 'WARN' | 'NONE';
+} {
+  const hits = DEEP_DIVE_PATTERNS.filter((p) => reply.includes(p));
+  if (hits.length === 0) {
+    return { hits, hasConnection: false, severity: 'NONE' };
+  }
+  const hasConnection = CONNECTION_KEYWORDS.some((k) => reply.includes(k));
+  return {
+    hits,
+    hasConnection,
+    severity: hasConnection ? 'WARN' : 'FAIL',
+  };
+}
+
+// 過剰共感検出。1 個までは許容、2 個以上で WARN。
+// [G] 危険語経路は別途定型文なので detector の影響範囲外（route 早期 return）。
+const EMPATHY_PATTERNS: readonly string[] = [
+  'つらかったですね',
+  '辛かったですね',
+  '大変でしたね',
+  '大変だったですね',
+  '苦しかったですね',
+  'よく頑張りました',
+  'よく頑張ってきました',
+  'あなたは悪くない',
+  'あなたのせいではない',
+];
+
+function detectExcessiveEmpathy(reply: string): {
+  hits: string[];
+  excessive: boolean;
+} {
+  const hits = EMPATHY_PATTERNS.filter((p) => reply.includes(p));
+  return { hits, excessive: hits.length >= 2 };
+}
+
+// off-domain endless chat / 依存形成検出（[B] 関係性誘導禁止と [T] 整合）。
+// 既存 FORBIDDEN_WORDS の「いつでも / また話して / 待ってます」と一部重複するが、
+// 文面の包含表現を明示的に拾うため別 detector として並列に置く。
+const ENDLESS_CHAT_PATTERNS: readonly string[] = [
+  '何でも聞きます',
+  '何でも相談してください',
+  'ずっと話しましょう',
+  'またいつでも来てください',
+  'いつでも待っています',
+  'いつでも来てください',
+  '何度でも話して',
+];
+
+function detectOffDomainEndlessChat(reply: string): string[] {
+  return ENDLESS_CHAT_PATTERNS.filter((p) => reply.includes(p));
+}
+
 function judgeCase(
   c: TestCase,
   reply: string,
@@ -1137,6 +1331,46 @@ function judgeCase(
   if (gravity.violated) {
     verdict = 'FAIL';
     reasons.push(`[Q] Emotional gravity violation: ${gravity.reasons.join(' / ')}`);
+  }
+
+  // STEP19-b: v1.3 受験外受け止め境界 detector 群
+  //   - 機械的拒否（[T]）→ FAIL
+  //   - 無限深掘り（[T]）→ 接続あり WARN / なし FAIL
+  //   - 過剰共感（[T]）→ 2 個以上で WARN
+  //   - 依存形成 endless chat（[B][T]）→ FAIL
+  const mech = detectMechanicalRejection(reply);
+  if (mech.length > 0) {
+    verdict = 'FAIL';
+    reasons.push(`[T] 機械的拒否を検出: ${mech.join(', ')}`);
+  }
+
+  const deepDive = detectInfiniteDeepDive(reply);
+  if (deepDive.severity === 'FAIL') {
+    verdict = 'FAIL';
+    reasons.push(
+      `[T] 無限深掘り検出（受験/進路/自己理解への接続なし）: ${deepDive.hits.join(', ')}`,
+    );
+  } else if (deepDive.severity === 'WARN') {
+    if (verdict === 'PASS') verdict = 'WARN';
+    reasons.push(
+      `[T] 深掘り表現あり（接続あり・要確認）: ${deepDive.hits.join(', ')}`,
+    );
+  }
+
+  const empathy = detectExcessiveEmpathy(reply);
+  if (empathy.excessive) {
+    if (verdict === 'PASS') verdict = 'WARN';
+    reasons.push(
+      `[T] 過剰共感の連発を検出 (${empathy.hits.length} 個): ${empathy.hits.join(', ')}`,
+    );
+  }
+
+  const endless = detectOffDomainEndlessChat(reply);
+  if (endless.length > 0) {
+    verdict = 'FAIL';
+    reasons.push(
+      `[B][T] 依存形成・endless chat を検出: ${endless.join(', ')}`,
+    );
   }
 
   // length check
