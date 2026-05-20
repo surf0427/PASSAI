@@ -33,6 +33,23 @@ export function getLatestStatementScore(): StatementScoreResult | null {
   return statementResultToScore(latest.result);
 }
 
+// 最新と前回の total 差分。履歴が 2 件未満なら null。
+// total の導出は getLatestStatementScore と同じく statementResultToScore に委ねる
+// （ページ側で個別 sum を取らせないルール: lib/statement/score/statementScore.ts 冒頭参照）。
+export function getStatementScoreDelta(): number | null {
+  const history = loadReviewHistory();
+  if (history.length < 2) return null;
+
+  const latestResult = history[0]?.result;
+  const previousResult = history[1]?.result;
+  if (!Array.isArray(latestResult?.evaluations)) return null;
+  if (!Array.isArray(previousResult?.evaluations)) return null;
+
+  const latest = statementResultToScore(latestResult).total;
+  const previous = statementResultToScore(previousResult).total;
+  return latest - previous;
+}
+
 // 合格ライン比較・改善提案系（passLineComparison / improvementSuggestions）の入力形式へ。
 export function breakdownToPassLineItems(
   breakdown: StatementScoreBreakdown,

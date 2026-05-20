@@ -4,7 +4,9 @@
 // ハードコード EVALUATIONS は撤去し、lib/statementScoreSource から取得する。
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
+import { Card } from '@/components/ui/Card';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
@@ -45,50 +47,71 @@ export default function StatementScorePage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 pb-28 sm:pb-12">
-      <StepHeader
-        currentStep={2}
-        totalSteps={5}
-        title="完成度を確認"
-        description="あなたの志望理由書の現在地を可視化します。弱点を把握したら、次のステップで合格ライン目安と比べましょう。"
-        backHref="/statement/edit"
-        nextHref="/statement/compare"
-        nextLabel="差分を見る"
-      />
+      {mounted && score && (
+        <StepHeader
+          currentStep={2}
+          totalSteps={5}
+          title="完成度を確認"
+          description="あなたの志望理由書の現在地を可視化します。弱点を把握したら、次のステップで合格ライン目安と比べましょう。"
+          backHref="/statement/edit"
+          nextHref="/statement/compare"
+          nextLabel="差分を見る"
+        />
+      )}
 
-      {mounted && !score && <NoReviewYet />}
+      {mounted && !score && <NoScoreYet />}
 
       {mounted && score && <ScoreView score={score} />}
 
-      <div className="fixed bottom-0 inset-x-0 sm:static bg-white sm:bg-transparent border-t sm:border-none border-gray-200 px-4 py-3 sm:p-0 shadow-[0_-4px_12px_rgba(0,0,0,0.04)] sm:shadow-none">
-        <div className="max-w-4xl mx-auto">
-          <LinkButton
-            href="/statement/compare"
-            variant="primary"
-            size="lg"
-            className="w-full"
-          >
-            合格ライン目安と比べる →
-          </LinkButton>
-          <p className="text-xs text-slate-400 text-center mt-2 hidden sm:block">
-            次のステップ：合格ライン目安との差分を確認します
-          </p>
+      {mounted && score && (
+        <div className="fixed bottom-0 inset-x-0 sm:static bg-white sm:bg-transparent border-t sm:border-none border-gray-200 px-4 py-3 sm:p-0 shadow-[0_-4px_12px_rgba(0,0,0,0.04)] sm:shadow-none">
+          <div className="max-w-4xl mx-auto">
+            <LinkButton
+              href="/statement/compare"
+              variant="primary"
+              size="lg"
+              className="w-full"
+            >
+              合格ライン目安と比べる →
+            </LinkButton>
+            <p className="text-xs text-slate-400 text-center mt-2 hidden sm:block">
+              次のステップ：合格ライン目安との差分を確認します
+            </p>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function NoReviewYet() {
+// /statement Entry の③「今のスコアを見る」（スコアなし状態）からの着地点。
+// 「ここはまだ使えない」ではなく「まず書けばここで見られる」と読ませる soft トーン。
+function NoScoreYet() {
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 sm:p-8 text-center my-6">
-      <p className="text-base font-bold text-amber-800 mb-2">添削履歴がまだありません</p>
-      <p className="text-sm text-amber-700 leading-relaxed mb-5">
-        先に <span className="font-semibold">志望理由書を入力 → AI 添削</span> を実行すると、ここに完成度スコアが表示されます。
+    <Card variant="soft" padding="lg" className="text-center mt-2 sm:mt-4">
+      <h2 className="text-lg sm:text-xl font-bold text-slate-900 mb-3">
+        まだスコアはありません
+      </h2>
+      <p className="text-sm text-slate-600 leading-relaxed mb-6 max-w-md mx-auto">
+        志望理由書を書いて確認すると、ここで現在地や前回からの変化を見られます。
       </p>
-      <LinkButton href="/statement/edit" variant="primary" size="md">
-        添削画面へ移動 →
+      <LinkButton
+        href="/statement/edit"
+        variant="primary"
+        size="md"
+        className="w-full sm:w-auto"
+      >
+        志望理由書を書く
       </LinkButton>
-    </div>
+      <p className="mt-4">
+        <Link
+          href="/statement"
+          className="text-sm text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-700"
+        >
+          志望理由書TOPに戻る
+        </Link>
+      </p>
+    </Card>
   );
 }
 
