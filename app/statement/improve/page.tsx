@@ -16,23 +16,34 @@ import {
   breakdownToPassLineItems,
 } from '@/lib/statement/score/statementScoreSource';
 import type { StatementScoreResult } from '@/lib/statement/score/statementScore';
+import {
+  loadRewriteDrafts,
+  type RewriteDraftsByAxis,
+} from '@/lib/statement/rewrite/rewriteDraftStorage';
 
 export default function StatementImprovePage() {
   const [score, setScore] = useState<StatementScoreResult | null>(null);
+  const [drafts, setDrafts] = useState<RewriteDraftsByAxis>({});
   const [mounted, setMounted] = useState(false);
 
   // localStorage は SSR で読めないため、マウント後に1回だけ読み込む。
   // hydration mismatch を避けるための既存パターン（edit/page.tsx も同様）。
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    /* eslint-disable react-hooks/set-state-in-effect */
     setScore(getLatestStatementScore());
+    setDrafts(loadRewriteDrafts());
     setMounted(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const suggestions = score
     ? getImprovementSuggestions(breakdownToPassLineItems(score.breakdown), 2)
     : [];
   const topPriority = suggestions[0];
+  // axis id → 「下書きあり」サマリ。空文字 draft はサインを出さない（保存ボタンの canSave 条件上
+  // 通常は起きないが、旧データ・部分編集途中の保存に備えた防御）。
+  const topDraft = topPriority ? drafts[topPriority.id] : undefined;
+  const topHasDraft = !!topDraft && topDraft.text.length > 0;
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 pb-28 sm:pb-12">
@@ -65,9 +76,21 @@ export default function StatementImprovePage() {
                 </p>
               </div>
             ) : (
-              suggestions.map((s, i) => (
-                <ImprovementCard key={s.id} suggestion={s} rank={i + 1} />
-              ))
+              suggestions.map((s, i) => {
+                const d = drafts[s.id];
+                const draftSummary =
+                  d && d.text.length > 0
+                    ? { textLength: d.text.length }
+                    : undefined;
+                return (
+                  <ImprovementCard
+                    key={s.id}
+                    suggestion={s}
+                    rank={i + 1}
+                    draftSummary={draftSummary}
+                  />
+                );
+              })
             )}
           </section>
         </>
@@ -82,7 +105,9 @@ export default function StatementImprovePage() {
               size="lg"
               className="w-full"
             >
-              {topPriority.label}から書き直す →
+              {topHasDraft
+                ? `${topPriority.label}の続きを書く →`
+                : `${topPriority.label}から書き直す →`}
             </LinkButton>
           </div>
         </div>
