@@ -23,6 +23,10 @@ import {
   type StatementPrepareFollowUpAnswers,
   type StatementPrepareSummary,
 } from '@/lib/statement/prepare/statementPrepareStorage';
+import {
+  loadRewriteDrafts,
+  type RewriteDraftRecord,
+} from '@/lib/statement/rewrite/rewriteDraftStorage';
 import type { ActivityData } from '@/types/activity';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { WallHittingResult } from '@/types/analysis';
@@ -163,6 +167,16 @@ function appendHintToText(currentText: string, hint: string): string {
   return `${currentText}\n\n${trimmedHint}`;
 }
 
+// ── 書き直しメモ section の表示用 axis ラベル ───────────────────────
+// PASS_LINE_TARGETS / breakdown ラベルの subset を local に持つ（cross-file 依存を増やさない）。
+const REWRITE_AXIS_LABELS: Record<string, string> = {
+  logic:         '論理構造',
+  specificity:   '具体性',
+  universityFit: '大学との一致',
+  futureGoal:    '将来目標',
+  originality:   '独自性',
+};
+
 // ── ページ本体 ────────────────────────────────────────────────────
 
 // マウント前 false / マウント後 true を返す flag（SSR/hydration セーフ）。
@@ -209,6 +223,19 @@ function StatementPageInner() {
   );
   const prepareSummary = useMemo<StatementPrepareSummary | null>(
     () => (isMounted ? getStatementPrepareSummary() : null),
+    [isMounted],
+  );
+
+  // 「書き直しメモ」 section 用。空 text の draft は drop。statementText は触らない参照表示専用。
+  // SSR 時は []、mount 後に load して filter する既存の useMemo[isMounted] パターンを踏襲。
+  const rewriteDraftEntries = useMemo<Array<[string, RewriteDraftRecord]>>(
+    () => {
+      if (!isMounted) return [];
+      const all = loadRewriteDrafts();
+      return Object.entries(all).filter(
+        ([, d]) => d && d.text.length > 0,
+      ) as Array<[string, RewriteDraftRecord]>;
+    },
     [isMounted],
   );
 
@@ -266,6 +293,19 @@ function StatementPageInner() {
       el.selectionStart = el.value.length;
       el.selectionEnd = el.value.length;
     }, 0);
+  }
+
+  // 書き直しメモのコピー。statementText には触らない（PASSAI 思想: 本文の自動書き換えはしない）。
+  // 既存 handleRestoreHistory との writer 衝突を避け toastTimerRef は触らず fire-and-forget。
+  // 連打時に短い flicker が出る可能性はあるが副作用は限定的（user 起点アクション）。
+  async function handleCopyRewrite(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setToast('コピーしました');
+      setTimeout(() => setToast(''), 2000);
+    } catch {
+      // clipboard 拒否時は silent
+    }
   }
 
   const [result, setResult] = useState<StatementResult | null>(null);
@@ -588,6 +628,56 @@ function StatementPageInner() {
       )}
 
       <BasicInfoSummary basicInfo={basicInfo} />
+
+      {/* ── 書き直しメモ ──────────────────────────────────────────────
+          /improve/[slug] で保存された書き直し下書きを、本文の近くで参照できる軽い section。
+          statementText には自動反映せず、コピー経由でユーザーが手で取り込む。
+          PASSAI 思想: AI が代わりに書くのではなく、受験生が自分の言葉で整える。 */}
+      {mounted && rewriteDraftEntries.length > 0 && (
+        <section className="bg-blue-50 border border-blue-100 rounded-xl p-4 sm:p-5 mb-6">
+          <h2 className="text-sm font-bold text-slate-900 mb-1">
+            書き直しメモ
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed mb-4">
+            保存した書き直しを見ながら、本文を自分の言葉で整えられます。
+          </p>
+          <div className="space-y-2">
+            {rewriteDraftEntries.map(([axisId, draft]) => {
+              const axisLabel = REWRITE_AXIS_LABELS[axisId] ?? axisId;
+              return (
+                <details
+                  key={axisId}
+                  className="group bg-white rounded-lg border border-slate-200"
+                >
+                  <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 py-3 flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-slate-800">
+                      {axisLabel}
+                    </span>
+                    <span className="text-xs text-slate-500 tabular-nums flex items-center gap-2">
+                      {draft.text.length}文字
+                      <span className="text-slate-400 transition-transform group-open:rotate-180 inline-block">
+                        ▾
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="px-4 pb-4 pt-1">
+                    <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words mb-3">
+                      {draft.text}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyRewrite(draft.text)}
+                      className="text-xs text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900"
+                    >
+                      コピー
+                    </button>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* STEP8.4: 入力フォーム section は InputFormView へ logical split 済み。 */}
       <InputFormView
