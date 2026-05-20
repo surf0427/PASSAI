@@ -107,6 +107,7 @@ export default async function StatementImproveSlugPage({ params }: Props) {
 
       {/* ── 書き直しエリア + チェックリスト + ボタン ─────── */}
       <RewriteForm
+        axisId={guide.axisId}
         axisLabel={guide.axisLabel}
         checklist={guide.checklist}
       />

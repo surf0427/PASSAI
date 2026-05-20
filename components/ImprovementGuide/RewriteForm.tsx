@@ -1,23 +1,41 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { Textarea } from '@/components/ui/Textarea';
 import { Label } from '@/components/ui/Label';
+import {
+  loadRewriteDraft,
+  saveRewriteDraft,
+  type RewriteDraftRecord,
+} from '@/lib/statement/rewrite/rewriteDraftStorage';
 
 type Props = {
+  axisId: string;
   axisLabel: string;
   checklist: string[];
 };
 
-export function RewriteForm({ axisLabel, checklist }: Props) {
+export function RewriteForm({ axisId, axisLabel, checklist }: Props) {
   const [text, setText] = useState('');
   const [checked, setChecked] = useState<boolean[]>(() =>
     checklist.map(() => false),
   );
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // localStorage は SSR で読めないため、マウント後に1回だけ読み込んで復元する。
+  // mount 前は text='' / checked=[false…] のままなので SSR / 初期 client paint と一致し、
+  // hydration mismatch が起きない。
+  useEffect(() => {
+    const draft = loadRewriteDraft(axisId);
+    if (!draft) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setText(draft.text);
+    setChecked(checklist.map((item) => draft.checkedItems.includes(item)));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [axisId, checklist]);
 
   const checkedCount = checked.filter(Boolean).length;
   const canSave = text.trim().length > 0;
@@ -27,7 +45,13 @@ export function RewriteForm({ axisLabel, checklist }: Props) {
   }
 
   function handleSave() {
-    // 現段階では UI のみ。将来 localStorage / API 接続時にここを差し替える。
+    if (!canSave) return;
+    const record: RewriteDraftRecord = {
+      text,
+      checkedItems: checklist.filter((_, i) => checked[i]),
+      updatedAt: new Date().toISOString(),
+    };
+    saveRewriteDraft(axisId, record);
     setSavedFlash(true);
     window.setTimeout(() => setSavedFlash(false), 2000);
   }
