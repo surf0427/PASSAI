@@ -357,6 +357,16 @@ export default function BasicInfoPage() {
           <h2 className="text-base font-semibold text-gray-700 mb-4 pb-2 border-b border-gray-200">
             志望校
           </h2>
+          {/* 略称入力を防ぐためのガイダンス。
+              DB 照合や submit ブロックは行わず、表示のみで誘導する（[[university_database_usage_guide]] 参照）。 */}
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700 mb-4 leading-relaxed">
+            <p className="mb-1">
+              大学・学部・学科は、できるだけ<span className="font-medium">正式名称で最後まで</span>入力してください。
+            </p>
+            <p>
+              「法政」ではなく「法政大学」、「経営」ではなく「経営学部」、「国際文化」ではなく「国際文化学科」のように入力すると、AI の分析精度が上がります。省略されていると、志望理由書や面接練習で正しく反映されない場合があります。
+            </p>
+          </div>
           <div className="space-y-4">
             {formData.preferences.map((pref, index) => {
               const isRequired = index === 0;

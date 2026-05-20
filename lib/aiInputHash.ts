@@ -303,7 +303,29 @@ export function hashEssayReviewInput(input: HashEssayReviewInput): string {
 //             buildInterviewStudentProfileContext（interview-feedback 専用）も同 hint table
 //             を共有するため出力挙動には副作用として影響あり。interview-feedback には input
 //             cache 機構が無いため bump 対象外。
-export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 3;
+//   v3 → v4 : 日次バリエーション seed を導入。HashInterviewQuestionsInput に dailySeed
+//             (YYYY-MM-DD / JST) を追加し、buildInterviewQuestionUserPrompt の末尾に
+//             【出題バリエーション指示】セクションを 1 つ optional 追加。
+//             system prompt / TwoLayerInterviewQuestions schema / 質問数 10 / category 許可値 /
+//             代筆禁止 / authenticity_check ルール / temperature は 1 字も変えない。
+//             同日 = 同 hash → cache hit、翌日 = 異なる hash → cache miss で再生成。
+//             dailySeed が undefined の場合は legacy prompt と byte-identical（hash も
+//             stableStringify で undefined を畳むため v3 hash と等価）。クライアントが
+//             dailySeed を送らない場合は事実上 v3 と同じ挙動になる安全側 fallback。
+//             bump により旧 v3 cache（dailySeed なしで生成）が新 prompt 出力契約と
+//             混ざらないようにする（intentional 1 回 miss）。
+//   v4 → v5 : 出題バリエーション指示の構造化。【出題バリエーション指示】section の中身を
+//             4 ブロック（固定重要枠 / 日替わり深掘り枠 / 接続確認枠 / 偏りと喪失の禁止）に
+//             書き換え、「最重要エピソード」の判定基準と「単一活動 3 問超え禁止 + 最低 1 問
+//             残す」の保護ルールを明文化した。
+//             system prompt / TwoLayerInterviewQuestions schema / 質問数 10 / personalized
+//             必須 category 5 種 / category 許可値 / authenticity_check の作り方 / 代筆禁止 /
+//             temperature / max_tokens / model は 1 字も変えない。HashInterviewQuestionsInput
+//             の signature も不変（v4 と同じく optional dailySeed のみ）。
+//             bump により v4 cache（緩い variation 指示で生成）が新ルール出力契約と混ざる
+//             のを防ぐ（intentional 1 回 miss）。dailySeed 未送信 client は v4 と同様
+//             legacy 経路に落ちる（section ごと省略）。
+export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 5;
 export const INTERVIEW_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashInterviewQuestionsInput = {
@@ -311,6 +333,12 @@ export type HashInterviewQuestionsInput = {
   statementDraft: unknown;
   studentProfile: unknown;
   activitySummary: unknown;
+  // 日次バリエーション seed。'YYYY-MM-DD'（JST）または undefined。
+  // 同日内では cache hit を維持し、日が変われば hash が変わる軸として機能する。
+  // 値の生成は client（InterviewQuestionForm）で行い、route 側にも body 経由で同値を送る
+  // ことで client / server の hash 計算が一致する前提。undefined のときは hash から落ちる
+  // ため v3 と互換（プロンプトも byte-identical 経路）。
+  dailySeed?: string;
   model: string;
   promptVersion: number;
 };

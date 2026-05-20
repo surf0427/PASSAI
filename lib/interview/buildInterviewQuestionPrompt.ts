@@ -178,8 +178,15 @@ export function buildInterviewQuestionUserPrompt(input: {
   materials: InterviewQuestionMaterials;
   universityContext?: string | null;
   examTypeGuidance?: string | null;
+  // 日次バリエーション seed（'YYYY-MM-DD'）。
+  // 与えられた場合のみ末尾に【出題バリエーション指示】section を 1 つ追加する。
+  // 未指定（undefined / null / 空）の場合は section を出さず、legacy prompt と byte-identical。
+  // PROMPT_VERSION v5（lib/aiInputHash.ts）と紐づく。文言を変えたら同 file の bump 履歴を更新する。
+  // v5 では section 内を 4 ブロック構造（固定重要枠 / 日替わり深掘り枠 / 接続確認枠 /
+  // 偏りと喪失の禁止）に拡張し、最重要エピソード保護ルールを明文化している。
+  dailySeed?: string | null;
 }): string {
-  const { materials, universityContext, examTypeGuidance } = input;
+  const { materials, universityContext, examTypeGuidance, dailySeed } = input;
 
   const sections: string[] = [];
 
@@ -238,6 +245,42 @@ export function buildInterviewQuestionUserPrompt(input: {
       trimmedGuidance === '' ? '受験方式ガイダンスなし' : trimmedGuidance,
     ].join('\n'),
   );
+
+  // ── 出題バリエーション指示（v5: 固定/日替わり/接続/禁止 の 4 ブロック）───────
+  // dailySeed が与えられた日のみ末尾に 1 section 追加。
+  // 「personalized 5 問の主題と切り口」をどう動かす / どう動かさないかだけを語り、
+  // system prompt 側で確定済みの構造（件数・許可値・必須 category・代筆禁止・
+  // authenticity_check の作り方）には踏み込まない。
+  const trimmedSeed = typeof dailySeed === 'string' ? dailySeed.trim() : '';
+  if (trimmedSeed !== '') {
+    sections.push(
+      [
+        '【出題バリエーション指示（personalized の主題選び）】',
+        `本日の出題シード：${trimmedSeed}`,
+        '本指示は personalized 5 問の「主題の選び方」と「切り口」だけを seed に応じて少しずらすためのもの。【件数ルール】【personalized の方針（観点最低 1 問ずつ）】【category / sourceHint の許可値】【authenticity_check の作り方】【代筆禁止の最重要ルール】は完全に維持する。',
+        '',
+        '【固定重要枠（seed に依らず毎回必ず含める）】',
+        '・志望理由 / 大学理解 / 将来像（既に personalized の必須 category として確定済み）。',
+        '・「最重要エピソード」を主題にした質問を最低 1 問。',
+        '  - 最重要エピソードの判定: 志望理由書サマリー / 活動サマリー / 自己分析サマリー の 2 つ以上で繰り返し参照される、または最も詳細に語られている本人エピソードのこと。',
+        '  - 明確に特定できない場合は、「最も志望理由と接続度が高い本人エピソード」を代替指定とする。',
+        '',
+        '【日替わり深掘り枠（seed に応じて主題を少し動かす）】',
+        '・本人材料に複数のエピソード（部活 / 留学 / 探究活動 / ボランティア / 資格 / 課外活動 / 失敗経験 等）がある場合、seed をハッシュ的に解釈してその日の主要 deep-dive 対象を 1 つ選ぶ。',
+        '・activity / consistency_check / self_analysis 系の personalized 質問の anchor を、当日 deep-dive 対象寄りに調整する。',
+        '・同じエピソードでも日によって angle を変える: 時系列 / 判断軸 / 失敗と修正 / 他者との衝突 / 動機の変化 / 学びと現在への接続 など。',
+        '',
+        '【接続確認枠（毎回必ず含める）】',
+        '・当日 deep-dive 対象として扱った経験を、志望理由 / 学部適性 / 将来像 のいずれかに接続させる consistency_check 質問を最低 1 問。',
+        '',
+        '【偏りと喪失の禁止】',
+        '・personalized 5 問のうち、単一活動だけを扱う質問が 3 問を超えてはならない（「今日は部活だけ」「明日は留学だけ」のような偏りを禁止）。',
+        '・最重要エピソードを日替わりで personalized から完全に消去してはならない。当日の deep-dive 対象から外れていても、最低 1 問は最重要エピソードを扱う。',
+        '・本人材料に無い活動・経験を seed に合わせて捏造しない（素材外の新規エピソードを持ち込まない）。',
+        '・seed そのもの（日付の数値文字列）を question / answerTip / intent / sourceHint に書かない。seed は AI 内部の主題選び基準としてのみ使う。',
+      ].join('\n'),
+    );
+  }
 
   return sections.join('\n\n');
 }

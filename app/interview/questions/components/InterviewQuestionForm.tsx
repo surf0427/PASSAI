@@ -37,6 +37,17 @@ import { logAiCache } from '@/lib/aiCacheLog';
 
 const CACHE_ROUTE = 'api/interview-questions';
 
+// 日次バリエーション seed（PROMPT_VERSION v4 と連動）。
+// JST の `YYYY-MM-DD` を返し、hash 入力 + API body の両方に同値を載せて client/server の
+// hash 整合性を保つ。JST 固定にしているのは、ユーザー（高校生）の生活時間軸と一致させて
+// 「日付が変わったタイミング = 質問が切り替わるタイミング」を直感的に揃えるため。
+// UTC 基準だと JST 朝 9:00 で切り替わってしまい体験が分かりにくい。
+function getInterviewDailyVariationSeed(): string {
+  // 'en-CA' は `YYYY-MM-DD` 形式を返すロケール。`Intl.DateTimeFormat` の
+  // timeZone option で wall-clock を Asia/Tokyo に固定する。
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date());
+}
+
 const INITIAL_FORM_DATA: InterviewQuestionFormData = {
   universityName: '',
   facultyName: '',
@@ -127,11 +138,16 @@ export function InterviewQuestionForm() {
       // 同じ素材なら AI call を skip して保存済み 2 層質問を復元する。
       // model / promptVersion 差分は cache miss として扱い、無理に hit させない。
       // fail-open: parse 失敗・JSON 壊れ・quota error は safeGetStorage 側で吸収済み。
+      //
+      // v4: dailySeed を hash 入力に含める。同日 = 同 hash → cache hit。翌日 =
+      // 異なる hash → cache miss → AI 再生成。API コストは「同じ入力で 1 日 1 回」が上限。
+      const dailySeed = getInterviewDailyVariationSeed();
       const inputHash = hashInterviewQuestionsInput({
         basicInfo,
         statementDraft,
         studentProfile,
         activitySummary,
+        dailySeed,
         model: INTERVIEW_QUESTIONS_MODEL,
         promptVersion: INTERVIEW_QUESTIONS_PROMPT_VERSION,
       });
@@ -151,6 +167,8 @@ export function InterviewQuestionForm() {
       logAiCache({ route: CACHE_ROUTE, action: 'miss', inputHash });
 
       // ── API call（cache miss / 不一致時のみ） ─────────────────────────
+      // dailySeed は client / server で同値を共有する必要があるため、hash 入力と同じ
+      // 値を body にも渡す。server は body の値を直接 prompt に使う（再計算しない）。
       const response = await fetch('/api/interview-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -159,6 +177,7 @@ export function InterviewQuestionForm() {
           statementDraft,
           studentProfile,
           activitySummary,
+          dailySeed,
         }),
       });
 
