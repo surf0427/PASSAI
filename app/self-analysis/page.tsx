@@ -35,6 +35,7 @@ import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { UsageNote } from '@/components/shared/UsageNote';
 import { AiInlineThinking, ImprovementList } from '@/components/shared/result';
+import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
@@ -603,6 +604,12 @@ export default function SelfAnalysisPage() {
             <h2 className="text-base font-bold text-gray-800">活動まとめ</h2>
           </div>
           <SummarySection summary={summary} />
+          {/* 活動まとめの直後に診断タイプカードを挟み、
+              「活動まとめ → 受験タイプ → 次のステップ」の流れを作る。
+              currentHref="/self-analysis" で「自己分析へ戻す CTA」を抑制。 */}
+          <div className="mt-8">
+            <DiagnosisTypeCard currentHref="/self-analysis" />
+          </div>
           <div className="mt-8 p-4 bg-gray-50 border border-gray-200 rounded-xl">
             <p className="text-sm font-semibold text-gray-700 mb-3">次のステップ</p>
             <div className="space-y-3">
