@@ -1,11 +1,14 @@
 'use client';
 
 import { useMemo, useSyncExternalStore } from 'react';
+import Link from 'next/link';
 import { LinkButton } from '@/components/ui/LinkButton';
 import {
   loadDiagnosisResult,
   type DiagnosisResult,
 } from '@/lib/diagnosisStorage';
+import { loadAnalyzeState } from '@/lib/analyzeStorage';
+import { inferAnalysisType } from '@/lib/analysis/inferAnalysisType';
 import type { DiagnosisType } from '@/types/diagnosis';
 
 // マウント前 false / マウント後 true を返す flag。
@@ -16,161 +19,99 @@ const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
-// ── 「あなたの診断タイプ」カード ───────────────────────────────
-// /diagnosis で localStorage に保存した結果を読み取り、タイプ別の
-// 「次にやるべきこと」を提示する。診断結果が無い／壊れている場合は
-// 受験タイプ診断への誘導カード（PromoCard）にフォールバックする。
+// ── 受験タイプ「AI 分析コメント」カード ──────────────────────────
+// 自己分析 summary（あれば）から軽量ルールベースで受験タイプを推定し、
+// 「強み・注意点・次の一歩」を 1 つの自然な文章として返す。診断カード感を
+// 抑え、塾講師/受験コンサルが書いたコメントとして読めるトーンに揃える。
 //
-// 利用箇所: /home 上部、および /self-analysis の活動まとめ直後。
+// タイプ解決の優先順位:
+//   1) /self-analysis の summary から inferAnalysisType() で推定（最優先）
+//   2) /diagnosis の旧結果（passai_diagnosis_result）を fallback
+//   3) どちらも無い／無効なら PromoCard で診断へ誘導
+// → 自己分析をやり直すと、その内容に合わせてタイプ表示が自動更新される。
+//
+// 利用箇所: /home、/self-analysis（活動まとめ直後）。
 // 呼び出し側は <DiagnosisTypeCard /> を 1 行差し込むだけで動く設計。
 //
 // 自分自身のページに戻す CTA を抑制したい場合は currentHref を渡す。
-// FIRST_STEP / NEXT_ACTIONS の href がこれと一致する CTA はボタンを
-// 出さない（first step は補足文に差し替え、next action はボタンのみ非表示）。
+// 一致した場合：CTA リンク非表示 + 締めの一文を「このページで進めましょう」系に
+// 差し替え。本文（強み・注意点）はそのまま残す。
+//
+// NOTE: TYPE_FEEDBACK の本文は新 4 タイプ名（活動アピール/探究・研究/将来
+// ビジョン/成長ポテンシャル）を直接埋め込む。旧 diagnosis_result の
+// resultTitle（「何から始めるか整理タイプ」等の旧名称）は表示に使わない。
 
-type ActionInfo = {
-  recommend: string;
-  reason: string;
-  ctaLabel: string;
+type DiagnosisTypeCardProps = {
+  // 現在表示中のページ pathname。TYPE_FEEDBACK の ctaHref がこれと一致する
+  // CTA は、自分自身への誘導になるため抑制する。
+  // 省略時（/home など）は CTA を常に表示する。
+  currentHref?: string;
+  // 'card'（既定）: 独立カードとして表示（/home 用）。
+  // 'inline':       outer wrapper の枠/背景/影/余白を外し、
+  //                 SummarySection の続きとして読める軽量表示（/self-analysis 用）。
+  //                 診断日も非表示にする。ロジック（CTA 抑制・本文）は共通。
+  variant?: 'card' | 'inline';
+};
+
+type Feedback = {
+  summary: string;
+  strengths: string;
+  caution: string;
+  nextStep: string;
   ctaHref: string;
+  ctaLabel: string;
 };
 
-// タイプ別の「強み / 注意したいポイント」表示用テキスト。
-// 判定ロジック・保存構造は触らず、表示時の付加情報としてのみ使う。
-// 文言方針：強みは断定で背中を押し、注意点は否定にならない言い回しに揃える。
-const TYPE_DETAILS: Record<
-  DiagnosisType,
-  { strengths: string[]; cautions: string[] }
-> = {
+const TYPE_FEEDBACK: Record<DiagnosisType, Feedback> = {
   1: {
-    strengths: [
-      '経験や行動を材料にしやすい',
-      '面接で具体例を出しやすい',
-      '志望理由に自分らしさを入れやすい',
-    ],
-    cautions: [
-      '活動の説明だけで終わらないようにする',
-      '学びや変化まで言語化する',
-      '大学での学びにつなげる',
-    ],
-  },
-  2: {
-    strengths: [
-      '問題意識や興味関心を軸にしやすい',
-      '学部・学科との相性を示しやすい',
-      '小論文や面接で深掘りしやすい',
-    ],
-    cautions: [
-      '興味が抽象的なままだと弱く見える',
-      '調べたこと・考えたことを具体化する',
-      '大学で何を深めたいかまで整理する',
-    ],
-  },
-  3: {
-    strengths: [
-      '志望理由に一貫性を出しやすい',
-      '将来像から逆算して話を組み立てやすい',
-      '面接で意欲を伝えやすい',
-    ],
-    cautions: [
-      '将来の夢だけで終わらせない',
-      '大学での学びとの接続を明確にする',
-      'きっかけや根拠を具体化する',
-    ],
-  },
-  4: {
-    strengths: [
-      '変化や努力の過程を材料にしやすい',
-      'これから伸びる理由を伝えやすい',
-      '自己分析と相性が良い',
-    ],
-    cautions: [
-      '「頑張ります」だけで終わらせない',
-      '過去の変化や行動を具体化する',
-      '今後の挑戦を大学での学びにつなげる',
-    ],
-  },
-};
-
-// タイプ別の「最初の一歩」専用導線。NEXT_ACTIONS とは別建てで持つ理由：
-// - NEXT_ACTIONS は中長期の継続提案（既存）。FIRST_STEP は診断直後の
-//   "今すぐ押せる 1 つ" を明確に名指しする役割で、見せ方も別カードにする。
-// - 動線が NEXT_ACTIONS と一致する場合もあるが、type 4 のように違うこともある
-//   （NEXT_ACTIONS[4] = /input/activity、FIRST_STEP[4] = /self-analysis）。
-const FIRST_STEP_DETAILS: Record<
-  DiagnosisType,
-  {
-    title: string;
-    description: string;
-    href: string;
-    buttonLabel: string;
-  }
-> = {
-  1: {
-    title: '活動整理',
-    description:
-      '経験を整理すると、志望理由書や面接で使える材料が見えやすくなります。',
-    href: '/input/activity',
-    buttonLabel: '活動整理を始める',
-  },
-  2: {
-    title: '自己分析',
-    description:
-      '興味関心や問題意識を言葉にしていくと、「なぜ学びたいか」が深まります。',
-    href: '/self-analysis',
-    buttonLabel: '自己分析を始める',
-  },
-  3: {
-    title: '志望理由書',
-    description:
-      '将来像と大学での学びを接続すると、志望理由に一貫性が出てきます。',
-    href: '/statement',
-    buttonLabel: '志望理由書に進む',
-  },
-  4: {
-    title: '自己分析',
-    description:
-      '過去の変化や努力の過程を言葉にすると、伸びしろが強みとして伝わります。',
-    href: '/self-analysis',
-    buttonLabel: '自己分析を始める',
-  },
-};
-
-// タイプ別の次アクション。リンク先は実在する既存ルートに合わせる。
-//   1: 活動整理 → /input/activity
-//   2: 自己分析 → /self-analysis
-//   3: 志望理由書 → /statement
-//   4: 一般受験並行 → 短時間ルートとしてまず /input/activity から
-const NEXT_ACTIONS: Record<DiagnosisType, ActionInfo> = {
-  1: {
-    recommend: 'まずは活動整理から始めましょう。',
-    reason:
-      '今は「実績がない」のではなく、経験をどう整理するかが見えていない状態です。活動整理で、過去の経験を一つずつ言葉にしていきましょう。',
-    ctaLabel: '活動整理を始める',
+    summary: '今回の内容からは、「活動アピール型」に近い特徴が見えます。',
+    strengths:
+      '経験や行動を材料にしやすく、面接や志望理由書でも具体例を出しやすい点が強みとして見えます。',
+    caution:
+      '一方で、活動の説明だけで終わらず、そこから何を学んだか・大学での学びにどうつなげるかまで整理できると、さらに説得力が増していきます。',
+    nextStep: '次は「活動整理」で材料を深めていくのがおすすめです。',
     ctaHref: '/input/activity',
+    ctaLabel: '活動整理を進める',
   },
   2: {
-    recommend: '自己分析で強みを言葉にしましょう。',
-    reason:
-      '活動や経験はあるので、それを志望理由書や面接で使える言葉に変えることが大事です。自己分析から進めましょう。',
-    ctaLabel: '自己分析を始める',
+    summary: '今回の内容からは、「探究・研究型」に近い特徴が見えます。',
+    strengths:
+      '問題意識や興味関心を軸にしやすく、学部・学科との相性を示しやすい点が強みとして見えます。',
+    caution:
+      '一方で、興味が抽象的なままだと弱く見えやすいので、調べたこと・考えたことを具体化していくと、より深さが伝わります。',
+    nextStep:
+      '次は「自己分析」で「なぜ学びたいか」を言語化していくのがおすすめです。',
     ctaHref: '/self-analysis',
+    ctaLabel: '自己分析を進める',
   },
   3: {
-    recommend: '志望理由書の完成度を上げましょう。',
-    reason:
-      'すでに書き始めている場合は、具体性・大学との一致・面接で話せる深さを高めることが重要です。',
-    ctaLabel: '志望理由書を見直す',
+    summary: '今回の内容からは、「将来ビジョン型」に近い特徴が見えます。',
+    strengths:
+      '志望理由に一貫性を出しやすく、将来像から逆算して話を組み立てられる点が強みとして見えます。',
+    caution:
+      '一方で、将来の夢だけで終わらせず、きっかけや根拠を具体化し、大学での学びとの接続を明確にしていくと、さらに説得力が増します。',
+    nextStep:
+      '次は「志望理由書」で将来像と大学での学びをつなげていくのがおすすめです。',
     ctaHref: '/statement',
+    ctaLabel: '志望理由書に進む',
   },
   4: {
-    recommend: '短時間で進める優先ルートから始めましょう。',
-    reason:
-      '一般受験と並行する場合は、まず活動整理・自己分析・志望理由書の順に、短時間でつながる部分から進めるのがおすすめです。',
-    ctaLabel: '最短ルートで始める',
-    ctaHref: '/input/activity',
+    summary: '今回の内容からは、「成長ポテンシャル型」に近い特徴が見えます。',
+    strengths:
+      '変化や努力の過程を材料にしやすく、これから伸びる理由を伝えやすい点が強みとして見えます。',
+    caution:
+      '一方で、「頑張ります」だけで終わらせず、過去の変化や行動を具体化し、今後の挑戦を大学での学びにつなげていくと、より説得力が増します。',
+    nextStep:
+      '次は「自己分析」で変化や伸びしろを言葉にしていくのがおすすめです。',
+    ctaHref: '/self-analysis',
+    ctaLabel: '自己分析を進める',
   },
 };
+
+// currentHref が ctaHref と一致するときに nextStep を差し替える汎用文。
+// /self-analysis 以外で再利用される可能性もあるため、ページ名を含めない言い回し。
+const SELF_REFERENCE_NEXT_STEP =
+  '今このページで進めている内容を、引き続き丁寧に深めていくのがおすすめです。';
 
 // 保存データが壊れていてもクラッシュしないよう、必要 field を最低限ガード
 function isResultUsable(r: DiagnosisResult): boolean {
@@ -188,14 +129,11 @@ function formatDate(iso: string): string {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-type DiagnosisTypeCardProps = {
-  // 現在表示中のページ pathname。FIRST_STEP / NEXT_ACTIONS の href が
-  // これと一致する CTA は、自分自身への誘導になるため抑制する。
-  // 省略時（/home など）は従来通り全 CTA を表示する。
-  currentHref?: string;
-};
-
-export function DiagnosisTypeCard({ currentHref }: DiagnosisTypeCardProps = {}) {
+export function DiagnosisTypeCard({
+  currentHref,
+  variant = 'card',
+}: DiagnosisTypeCardProps = {}) {
+  const isInline = variant === 'inline';
   // hydration mismatch 回避：マウント前は何も描画しない。
   // マウント後に loadDiagnosisResult() を 1度だけ呼んで以降は memo 値を返す。
   const isMounted = useSyncExternalStore(
@@ -203,152 +141,92 @@ export function DiagnosisTypeCard({ currentHref }: DiagnosisTypeCardProps = {}) 
     getMountedSnapshot,
     getMountedServerSnapshot,
   );
-  const result = useMemo<DiagnosisResult | null>(
-    () => (isMounted ? loadDiagnosisResult() : null),
-    [isMounted],
-  );
+
+  // タイプ解決：summary 推定優先 → diagnosis_result fallback。
+  // どちらも無いときは null を返し、後段で PromoCard へ落とす。
+  // 「診断日」は diagnosis_result 経由のときのみ意味があるので、
+  // source を分けて createdAt を持たせる。
+  const resolved = useMemo<
+    | { type: DiagnosisType; source: 'self-analysis' }
+    | { type: DiagnosisType; source: 'diagnosis'; createdAt: string }
+    | null
+  >(() => {
+    if (!isMounted) return null;
+
+    // 1) self-analysis summary から推定（最優先）
+    const analyzeState = loadAnalyzeState();
+    const summary = analyzeState?.summary;
+    if (summary) {
+      const inferred = inferAnalysisType(summary);
+      if (inferred) return { type: inferred.type, source: 'self-analysis' };
+    }
+
+    // 2) 旧 diagnosis_result を fallback
+    const diag: DiagnosisResult | null = loadDiagnosisResult();
+    if (diag && isResultUsable(diag)) {
+      return {
+        type: diag.resultType,
+        source: 'diagnosis',
+        createdAt: diag.createdAt,
+      };
+    }
+
+    // 3) どちらも無い → PromoCard
+    return null;
+  }, [isMounted]);
 
   if (!isMounted) return null;
+  if (!resolved) return <PromoCard />;
 
-  if (!result || !isResultUsable(result)) {
-    return <PromoCard />;
-  }
+  const feedback = TYPE_FEEDBACK[resolved.type];
+  // 「診断日」は /diagnosis 経由のときだけ表示する。summary 推定経由では
+  // 「診断」という言葉が文脈にそぐわないため非表示。
+  const dateStr =
+    resolved.source === 'diagnosis' ? formatDate(resolved.createdAt) : '';
+  const isSelfReference = feedback.ctaHref === currentHref;
+  const closingText = isSelfReference
+    ? SELF_REFERENCE_NEXT_STEP
+    : feedback.nextStep;
 
-  const action = NEXT_ACTIONS[result.resultType];
-  const details = TYPE_DETAILS[result.resultType];
-  const firstStep = FIRST_STEP_DETAILS[result.resultType];
-  const dateStr = formatDate(result.createdAt);
+  // 装飾は variant でのみ分岐し、本文・CTA・抑制ロジックは共通。
+  // inline は枠/背景/影/外余白を持たず、親側の流れに溶け込む。
+  const outerClass = isInline
+    ? ''
+    : 'mb-8 bg-white rounded-2xl border border-slate-200 p-5 sm:p-6';
 
   return (
-    <div className="mb-8 bg-white rounded-2xl border border-accent-200 shadow-sm overflow-hidden">
-      {/* ヘッダ：診断結果 + タイトル + 説明 + 診断日 */}
-      <div className="bg-accent-50/70 px-5 py-5 sm:px-6 border-b border-accent-100">
-        <p className="text-xs font-semibold text-accent-600 mb-3">診断結果</p>
-        <div className="flex items-start gap-3 mb-3">
-          <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-accent-100 text-accent-700 text-base font-extrabold shrink-0">
-            {result.resultType}
-          </span>
-          <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 leading-snug">
-            あなたは「{result.resultTitle}」です
-          </h2>
-        </div>
-        <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
-          {result.resultDescription}
-        </p>
-        {dateStr && (
-          <p className="mt-3 text-xs text-slate-400">診断日：{dateStr}</p>
-        )}
+    <div className={outerClass}>
+      <p className="text-xs font-semibold text-slate-500 mb-3">
+        AIからの分析コメント
+      </p>
+      <div className="text-sm sm:text-base text-slate-800 leading-relaxed space-y-3">
+        <p>{feedback.summary}</p>
+        <p>{feedback.strengths}</p>
+        <p>{feedback.caution}</p>
+        <p>{closingText}</p>
       </div>
-
-      {/* 強み / 注意したいポイント */}
-      <div className="px-5 py-5 sm:px-6 border-b border-accent-100 grid gap-5 sm:grid-cols-2">
-        <div>
-          <p className="text-xs font-semibold text-brand-600 mb-2">
-            あなたの強み
-          </p>
-          <ul className="space-y-1.5">
-            {details.strengths.map((s) => (
-              <li
-                key={s}
-                className="flex gap-2 text-sm text-slate-700 leading-relaxed"
-              >
-                <span aria-hidden="true" className="text-brand-500 mt-0.5">
-                  ・
-                </span>
-                <span>{s}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-amber-600 mb-2">
-            注意したいポイント
-          </p>
-          <ul className="space-y-1.5">
-            {details.cautions.map((c) => (
-              <li
-                key={c}
-                className="flex gap-2 text-sm text-slate-700 leading-relaxed"
-              >
-                <span aria-hidden="true" className="text-amber-500 mt-0.5">
-                  ・
-                </span>
-                <span>{c}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      {/* あなたにおすすめの最初の一歩（タイプ別の専用導線）
-          診断直後に "今すぐ押せる 1 つ" を強く名指しする位置づけ。
-          bg-brand-50/60 で軽く強調しつつ既存トーンを維持する。 */}
-      <div className="px-5 py-5 sm:px-6 border-b border-accent-100 bg-brand-50/60">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="inline-block text-[10px] font-bold tracking-wide text-white bg-brand-600 rounded-full px-2 py-0.5">
-            あなた専用
-          </span>
-          <p className="text-xs font-semibold text-brand-700">
-            おすすめの最初の一歩
-          </p>
-        </div>
-        <p className="text-base sm:text-lg font-extrabold text-slate-900 mb-2 leading-snug">
-          {result.resultTitle}のあなたは、まず「{firstStep.title}」から始めるのがおすすめです。
-        </p>
-        <p className="text-sm text-slate-600 leading-relaxed mb-4">
-          {firstStep.description}
-        </p>
-        {firstStep.href === currentHref ? (
-          // 現在ページ自身を指す CTA は出さず、補足文に差し替えて
-          // 「この方向で正しい」という意味だけ伝える。
-          <p className="text-sm font-semibold text-brand-700 leading-relaxed">
-            このタイプは「{firstStep.title}」を深めることが特に大事です。引き続きこのページで進めましょう。
-          </p>
-        ) : (
-          <LinkButton
-            href={firstStep.href}
-            variant="accent"
-            size="lg"
-            className="font-bold shadow-sm"
+      {!isSelfReference && (
+        <div className="mt-5">
+          <Link
+            href={feedback.ctaHref}
+            className="inline-flex items-center text-sm font-semibold text-brand-700 hover:text-brand-800 hover:underline"
           >
-            {firstStep.buttonLabel}
-            <span aria-hidden="true" className="ml-2">→</span>
-          </LinkButton>
-        )}
-      </div>
-
-      {/* おすすめの次アクション */}
-      <div className="px-5 py-5 sm:px-6">
-        <p className="text-xs font-semibold text-brand-600 mb-2">
-          おすすめの次アクション
-        </p>
-        <p className="text-base font-bold text-slate-900 mb-2 leading-relaxed">
-          {action.recommend}
-        </p>
-        <p className="text-sm text-slate-600 leading-relaxed mb-4">
-          {action.reason}
-        </p>
-        {/* font-bold は BASE の font-medium を上書きするため className で指定。
-            shadow-sm は Button BASE には無いので追加で乗せる。
-            text-sm sm:text-base → text-base に揃う点は許容（モバイルで微増）。
-            currentHref と一致するときはボタンだけ抑制（説明文は残す）。 */}
-        {action.ctaHref !== currentHref && (
-          <LinkButton
-            href={action.ctaHref}
-            variant="accent"
-            size="lg"
-            className="font-bold shadow-sm"
-          >
-            {action.ctaLabel}
-            <span aria-hidden="true" className="ml-2">→</span>
-          </LinkButton>
-        )}
-      </div>
+            {feedback.ctaLabel}
+            <span aria-hidden="true" className="ml-1">
+              →
+            </span>
+          </Link>
+        </div>
+      )}
+      {!isInline && dateStr && (
+        <p className="mt-4 text-[11px] text-slate-400">診断日：{dateStr}</p>
+      )}
     </div>
   );
 }
 
-// 診断未実施 or 結果が壊れている場合のフォールバック
+// 診断未実施 or 結果が壊れている場合のフォールバック。
+// 結果カードと違い「診断への誘導」が役割なので、accent ボタンの強さは維持する。
 function PromoCard() {
   return (
     <div className="mb-8 bg-white rounded-2xl border border-brand-200 shadow-sm p-5 sm:p-6">
@@ -368,7 +246,9 @@ function PromoCard() {
         className="font-bold shadow-sm"
       >
         受験タイプ診断をする
-        <span aria-hidden="true" className="ml-2">→</span>
+        <span aria-hidden="true" className="ml-2">
+          →
+        </span>
       </LinkButton>
     </div>
   );

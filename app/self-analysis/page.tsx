@@ -604,11 +604,15 @@ export default function SelfAnalysisPage() {
             <h2 className="text-base font-bold text-gray-800">活動まとめ</h2>
           </div>
           <SummarySection summary={summary} />
-          {/* 活動まとめの直後に診断タイプカードを挟み、
+          {/* 活動まとめの直後に診断タイプの分析コメントを挟み、
               「活動まとめ → 受験タイプ → 次のステップ」の流れを作る。
-              currentHref="/self-analysis" で「自己分析へ戻す CTA」を抑制。 */}
+              variant="inline" で枠/背景を外し SummarySection の続きとして読ませ、
+              currentHref="/self-analysis" で「自己分析へ戻す CTA」を抑制する。 */}
           <div className="mt-8">
-            <DiagnosisTypeCard currentHref="/self-analysis" />
+            <DiagnosisTypeCard
+              currentHref="/self-analysis"
+              variant="inline"
+            />
           </div>
           <div className="mt-8 p-4 bg-gray-50 border border-gray-200 rounded-xl">
             <p className="text-sm font-semibold text-gray-700 mb-3">次のステップ</p>
