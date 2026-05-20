@@ -15,11 +15,18 @@ import { RadarSummary } from '@/components/ScoreDashboard/RadarSummary';
 import { ImprovementPriority } from '@/components/ScoreDashboard/ImprovementPriority';
 import { DashboardSummary } from '@/components/ScoreDashboard/DashboardSummary';
 import { getImprovementPriority } from '@/lib/scoreRank';
+import { PASS_LINE_TARGETS } from '@/lib/passLineComparison';
 import {
   getLatestStatementScore,
   breakdownToRankItems,
 } from '@/lib/statement/score/statementScoreSource';
 import type { StatementScoreResult } from '@/lib/statement/score/statementScore';
+
+// axis id → 合格ライン目安スコア。ScoreBarCard の目安マーカー描画に使う。
+// compare の dual-bar 表現は取り込まず、ScoreBarCard 内に控えめな縦線として重ねる。
+const TARGET_BY_KEY: Record<string, number> = Object.fromEntries(
+  PASS_LINE_TARGETS.map((t) => [t.id, t.targetScore]),
+);
 
 // 各軸の説明テキストはスコアに依存しない汎用説明にする（旧版はハードコードスコア前提だった）。
 const AXIS_DESCRIPTIONS: Record<string, string> = {
@@ -142,6 +149,7 @@ function ScoreView({ score }: { score: StatementScoreResult }) {
               label={label}
               score={itemScore}
               description={AXIS_DESCRIPTIONS[key] ?? ''}
+              targetScore={TARGET_BY_KEY[key]}
             />
           ))}
         </div>

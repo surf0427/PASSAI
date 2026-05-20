@@ -60,8 +60,9 @@ export const IMPROVEMENT_ROUTES: Record<string, string> = {
 };
 
 // ページ冒頭の優先順位ノート。UI 側に直書きしないため lib に集約。
+// improve を「作業入口」として見せるトーンに統一（compare 連想の「差分」「改善」を排除）。
 export const PRIORITY_NOTE_TEXT =
-  'すべてを同時に直す必要はありません。まずは差分の大きい項目から改善しましょう。';
+  'すべてを同時に直す必要はありません。まずはここから書き直してみましょう。';
 
 export function getImprovementSuggestions(
   currentItems: EvaluationItem[],

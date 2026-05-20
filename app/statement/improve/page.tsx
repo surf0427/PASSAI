@@ -41,7 +41,7 @@ export default function StatementImprovePage() {
           currentStep={4}
           totalSteps={5}
           title="どこから直すか決める"
-          description="優先順位の高い項目から改善していきましょう。各カードから個別に書き直しに進めます。"
+          description="優先順位の高い項目から書き直していきましょう。各カードから個別に進めます。"
           backHref="/statement/compare"
         />
       )}
@@ -82,7 +82,7 @@ export default function StatementImprovePage() {
               size="lg"
               className="w-full"
             >
-              最優先：{topPriority.label}から改善する →
+              {topPriority.label}から書き直す →
             </LinkButton>
           </div>
         </div>

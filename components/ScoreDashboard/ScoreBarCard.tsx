@@ -5,6 +5,9 @@ type Props = {
   label: string;
   score: number;
   description: string;
+  // 任意の合格ライン目安マーカー。指定時のみ bar 上に薄い縦線を描画する。
+  // compare の dual-bar 表現は取り込まず、「現在地」のうえに目安を控えめに重ねるだけにする。
+  targetScore?: number;
 };
 
 function toneFor(percentage: number): string {
@@ -14,8 +17,16 @@ function toneFor(percentage: number): string {
   return 'bg-rose-500';
 }
 
-export function ScoreBarCard({ label, score, description }: Props) {
-  const percentage = Math.min(100, Math.max(0, (score / EVAL_MAX_SCORE) * 100));
+function clampPct(p: number): number {
+  return Math.max(0, Math.min(100, p));
+}
+
+export function ScoreBarCard({ label, score, description, targetScore }: Props) {
+  const percentage = clampPct((score / EVAL_MAX_SCORE) * 100);
+  const targetPct =
+    typeof targetScore === 'number'
+      ? clampPct((targetScore / EVAL_MAX_SCORE) * 100)
+      : null;
   return (
     <Card>
       <div className="flex items-center justify-between mb-2">
@@ -26,7 +37,7 @@ export function ScoreBarCard({ label, score, description }: Props) {
         </span>
       </div>
       <div
-        className="h-2 bg-gray-100 rounded-full overflow-hidden mb-3"
+        className="relative h-2 bg-gray-100 rounded-full overflow-hidden mb-3"
         role="progressbar"
         aria-valuenow={score}
         aria-valuemin={0}
@@ -36,6 +47,13 @@ export function ScoreBarCard({ label, score, description }: Props) {
           className={`h-full ${toneFor(percentage)} rounded-full`}
           style={{ width: `${percentage}%` }}
         />
+        {targetPct !== null && (
+          <span
+            className="absolute top-0 bottom-0 w-px bg-slate-700/70"
+            style={{ left: `${targetPct}%` }}
+            aria-label={`目安 ${targetScore}点`}
+          />
+        )}
       </div>
       <p className="text-xs text-slate-500 leading-relaxed">{description}</p>
     </Card>
