@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { LinkButton } from '@/components/ui/LinkButton';
 import { Textarea } from '@/components/ui/Textarea';
 import { Label } from '@/components/ui/Label';
 import {
@@ -108,23 +108,32 @@ export function RewriteForm({ axisId, axisLabel, checklist }: Props) {
         </ul>
       </Card>
 
-      <div className="flex flex-col sm:flex-row gap-2">
+      {/* 主 = 保存 / 次 = 本文に取り込む（edit へ遷移するだけ。自動反映はしない）/
+          最弱 = 単なる戻り。PASSAI 思想に従い rewrite と statementText の
+          物理的マージは行わない。 */}
+      <div className="flex flex-col gap-3">
         <Button
           variant="primary"
           onClick={handleSave}
           disabled={!canSave}
-          className="flex-1"
+          className="w-full"
         >
           {savedFlash ? '✓ 保存しました' : '保存する'}
         </Button>
-        <LinkButton
-          href="/statement/edit"
-          variant="secondary"
-          size="md"
-          className="flex-1"
-        >
-          下書きに戻る
-        </LinkButton>
+        <div className="flex flex-col items-center gap-2 pt-1">
+          <Link
+            href="/statement/edit?from=rewrite"
+            className="text-sm text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900"
+          >
+            本文に取り込む →
+          </Link>
+          <Link
+            href="/statement/edit"
+            className="text-sm text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-700"
+          >
+            下書きに戻る
+          </Link>
+        </div>
       </div>
     </>
   );
