@@ -37,7 +37,7 @@ export function RewriteForm({ axisLabel, checklist }: Props) {
       <Card className="mb-4">
         <Label htmlFor="rewrite-textarea">書き直しエリア</Label>
         <p className="text-xs text-slate-500 mb-3 leading-relaxed">
-          上の問いを意識しながら、{axisLabel}を改善した文章を書いてみましょう。1段落だけでもOKです。
+          上の問いに答えながら、{axisLabel}を意識して書き直してみましょう。1段落だけでもOKです。
         </p>
         <Textarea
           id="rewrite-textarea"
@@ -99,7 +99,7 @@ export function RewriteForm({ axisLabel, checklist }: Props) {
           size="md"
           className="flex-1"
         >
-          もう一度添削へ戻る
+          下書きに戻る
         </LinkButton>
       </div>
     </>

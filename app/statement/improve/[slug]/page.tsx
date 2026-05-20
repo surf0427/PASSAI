@@ -20,7 +20,7 @@ export async function generateMetadata({ params }: Props) {
   const { slug } = await params;
   const guide = getRewriteGuide(slug);
   return {
-    title: guide ? `改善する：${guide.axisLabel}` : '改善する',
+    title: guide ? `書き直す：${guide.axisLabel}` : '書き直す',
   };
 }
 
@@ -35,39 +35,45 @@ export default async function StatementImproveSlugPage({ params }: Props) {
       <StepHeader
         currentStep={5}
         totalSteps={5}
-        title={`改善する：${guide.axisLabel}`}
-        description="個別に書き直すステップです。問いに答えながら、自分の言葉で改善文を書いてみましょう。"
+        title={`書き直す：${guide.axisLabel}`}
+        description="問いに答えながら、自分の言葉で書き直してみましょう。"
         backHref="/statement/improve"
       />
 
-      {/* ── なぜこの項目を直すべきか ──────────────────────── */}
-      <AlertBox variant="info" className="mb-4">
+      {/* ── なぜここを直すか（短く可視） ──────────────────── */}
+      <AlertBox variant="info" className="mb-3">
         <p className="text-[11px] font-bold text-blue-700 mb-2 tracking-wider">
-          なぜこの項目を直すべきか
+          なぜここを直すか
         </p>
         <p className="text-sm text-slate-700 leading-relaxed">
           {guide.reasoning}
         </p>
       </AlertBox>
 
-      {/* ── 改善の方向性（参考） ──────────────────────────── */}
+      {/* ── 直す方向性（折り畳み、補助情報） ─────────────── */}
       {guide.improvementComment && (
-        <section className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 mb-4">
-          <p className="text-[11px] font-bold text-slate-600 mb-2 tracking-wider">
-            改善の方向性
-          </p>
-          <p className="text-sm text-slate-700 leading-relaxed">
+        <details className="group bg-slate-50 border border-slate-200 rounded-xl mb-3">
+          <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden text-xs font-bold text-slate-700 px-4 py-3 flex items-center justify-between">
+            <span>直す方向性</span>
+            <span className="text-slate-400 transition-transform group-open:rotate-180">
+              ▾
+            </span>
+          </summary>
+          <p className="text-sm text-slate-700 leading-relaxed px-4 pb-4">
             {guide.improvementComment}
           </p>
-        </section>
+        </details>
       )}
 
-      {/* ── 現在の弱点 ────────────────────────────────────── */}
-      <Card className="mb-4">
-        <h2 className="text-sm font-semibold text-slate-700 mb-3">
-          現在ありがちな弱点
-        </h2>
-        <ul className="space-y-2">
+      {/* ── ありがちな弱点（折り畳み、補助情報） ─────────── */}
+      <details className="group bg-slate-50 border border-slate-200 rounded-xl mb-5">
+        <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden text-xs font-bold text-slate-700 px-4 py-3 flex items-center justify-between">
+          <span>ありがちな弱点</span>
+          <span className="text-slate-400 transition-transform group-open:rotate-180">
+            ▾
+          </span>
+        </summary>
+        <ul className="space-y-2 px-4 pb-4">
           {guide.weaknessHints.map((w, i) => (
             <li key={i} className="text-sm text-slate-600 flex gap-2">
               <span className="shrink-0 text-slate-400">・</span>
@@ -75,9 +81,9 @@ export default async function StatementImproveSlugPage({ params }: Props) {
             </li>
           ))}
         </ul>
-      </Card>
+      </details>
 
-      {/* ── 書き直しの問い ────────────────────────────────── */}
+      {/* ── 書き直しの問い（DO トリガー、可視） ──────────── */}
       <Card className="mb-6">
         <h2 className="text-sm font-semibold text-slate-700 mb-1">
           書き直しの問い
