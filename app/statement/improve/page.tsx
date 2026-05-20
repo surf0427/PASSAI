@@ -53,7 +53,7 @@ export default function StatementImprovePage() {
           totalSteps={5}
           title="どこから直すか決める"
           description="優先順位の高い項目から書き直していきましょう。各カードから個別に進めます。"
-          backHref="/statement/compare"
+          backHref="/statement/score"
         />
       )}
 

@@ -59,10 +59,10 @@ export default function StatementScorePage() {
           currentStep={2}
           totalSteps={5}
           title="完成度を確認"
-          description="あなたの志望理由書の現在地を可視化します。弱点を把握したら、次のステップで合格ライン目安と比べましょう。"
+          description="あなたの志望理由書の現在地を可視化します。弱点を把握したら、次は優先度の高い項目から書き直しましょう。"
           backHref="/statement/edit"
-          nextHref="/statement/compare"
-          nextLabel="差分を見る"
+          nextHref="/statement/improve"
+          nextLabel="書き直す"
         />
       )}
 
@@ -74,15 +74,15 @@ export default function StatementScorePage() {
         <div className="fixed bottom-0 inset-x-0 sm:static bg-white sm:bg-transparent border-t sm:border-none border-gray-200 px-4 py-3 sm:p-0 shadow-[0_-4px_12px_rgba(0,0,0,0.04)] sm:shadow-none">
           <div className="max-w-4xl mx-auto">
             <LinkButton
-              href="/statement/compare"
+              href="/statement/improve"
               variant="primary"
               size="lg"
               className="w-full"
             >
-              合格ライン目安と比べる →
+              書き直す →
             </LinkButton>
             <p className="text-xs text-slate-400 text-center mt-2 hidden sm:block">
-              次のステップ：合格ライン目安との差分を確認します
+              次のステップ：どこから書き直すかを決めます
             </p>
           </div>
         </div>
