@@ -1,7 +1,9 @@
 'use client';
 
-// STEP-DA-1: 詳細分析専用ページ（view-only）。
+// STEP-DA-1: 詳細分析専用ページ。
 // STEP-UI-CLEANUP-2: 「カードを並べる管理画面UI」から「1 枚の分析レポートを読むUI」へ寄せる。
+// 後続 STEP: ④ improve のフロー上流に組み込まれた。本ページからは下部 primary CTA で
+//   /statement/improve/rewrite/[id]（書き直し準備）へ進める。③ score からの導線も維持。
 //
 // 設計方針:
 //   - white 主体、border 最小、Card / AlertBox を使わない
@@ -192,6 +194,24 @@ function AnalysisReport({
           faculty={entry.faculty}
         />
       </Section>
+
+      {/* ── ④ 書き直し準備への primary CTA ──────────────────────────
+          ④ の自然なフロー：improve 一覧 → analysis（このページ）→ rewrite prep → ② edit。
+          ③ score からの導線でもこのページに来る可能性があるが、「分析を読んだ後に書き直す」
+          動線として CTA は常時表示で OK（user 仕様）。 */}
+      <section className="mt-4 mb-8">
+        <LinkButton
+          href={`/statement/improve/rewrite/${encodeURIComponent(entry.id)}`}
+          variant="primary"
+          size="lg"
+          className="w-full sm:w-auto"
+        >
+          書き直し準備へ進む →
+        </LinkButton>
+        <p className="text-xs text-slate-400 mt-3 leading-relaxed">
+          この分析をもとに、実際に書き直す前の準備ページ（Before/After や書き直しメモ）に進めます。
+        </p>
+      </section>
     </article>
   );
 }

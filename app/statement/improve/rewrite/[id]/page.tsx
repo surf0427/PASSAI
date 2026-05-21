@@ -1,6 +1,9 @@
 'use client';
 
 // STEP-IMP-1 / UX polish: ④「書き直す」do フローのページ3「書き直し準備ページ」。
+// 後続 STEP で ④ のフロー上流が変更：改善点 + 詳細分析の理解は /statement/analysis/[id] が担い、
+// 本ページはそこから「書き直し準備へ進む →」CTA 経由で到達するページに位置づけ直された。
+// 戻る link は /statement/analysis/[id]（=「分析レポートに戻る」）を指す。
 //
 // 役割:
 //   - 過去に書いた志望理由書（ReviewHistoryItem）を元に「何を直すか / どう直すか」を整理する
@@ -123,10 +126,10 @@ export default function StatementImproveRewritePage() {
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <div className="mb-8">
         <Link
-          href="/statement/improve"
+          href={`/statement/analysis/${encodeURIComponent(id)}`}
           className="text-sm text-slate-500 hover:text-slate-700"
         >
-          ← 書き直し一覧に戻る
+          ← 分析レポートに戻る
         </Link>
       </div>
 
@@ -278,10 +281,10 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
       {/* footer back link */}
       <div className="mt-8">
         <Link
-          href="/statement/improve"
+          href={`/statement/analysis/${encodeURIComponent(entry.id)}`}
           className="text-sm text-slate-500 hover:text-slate-700"
         >
-          ← 書き直し一覧に戻る
+          ← 分析レポートに戻る
         </Link>
       </div>
     </article>

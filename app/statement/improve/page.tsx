@@ -1,25 +1,35 @@
 'use client';
 
 // ④「書き直す」機能（do）の入口。
-// STEP-IMP-2 で score 俯瞰 UI を撤去、続く STEP で中継 hub も撤去し、
-// 「一覧 → クリック → そのまま書き直し準備ページ」のフラットな 1 階層構造にした。
+// STEP-IMP-2 で score 俯瞰 UI を撤去、続く STEP で中継 hub も撤去、さらに続く STEP で
+// 一覧クリックの遷移先を analysis page に変更し、④ の自然なフローを整えた。
 //
 // 役割:
 //   - 過去に書いた志望理由書（statementReviewHistory）の一覧を表示
-//   - 各エントリは `<Link>` で /statement/improve/rewrite/<id> へ直接遷移
+//   - 各エントリは `<Link>` で /statement/analysis/<id>（分析レポート）へ直接遷移
 //   - 詳細 hub（"この志望理由書を書き直しますか？" の中継ページ）は持たない
 //   - 完成度スコア俯瞰 UI（TotalScoreCard / RankBadge / DashboardSummary / AxisGapCard）も持たない
 //
+// ④ 全体の流れ:
+//   /statement/improve            (この一覧)
+//     → カードクリック
+//   /statement/analysis/<id>      (改善点 + 詳細分析を読む)
+//     → 「書き直し準備へ進む →」
+//   /statement/improve/rewrite/<id>  (Before/After + 書き直しメモ)
+//     → 「②で本文を書き直す →」
+//   /statement/edit?rewriteFrom=<id>  (本文 prefill + 添削)
+//
 // ③ /statement/score との責務分離:
 //   - ③ = 完成度を俯瞰する view 機能（一覧 + 詳細 hub あり）
-//   - ④ = 書き直しを始める do 機能（一覧から直接 rewrite prep へ）
+//   - ④ = 書き直しを始める do 機能（一覧から直接 analysis レポートへ）
 //
 // 触らない:
 //   - statementReviewHistory の保存・削除ロジック（read のみ）
 //   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
 //   - ② edit / ③ score / /statement/analysis/[id]
 //   - /statement/improve/[slug] サブルート（orphan 維持）
-//   - /statement/improve/rewrite/[id]（page 3 = STEP-IMP-1、本ページの遷移先）
+//   - /statement/improve/rewrite/[id]（page 3 = STEP-IMP-1、analysis page 経由で到達）
+//   - /statement/analysis/[id]（page 2 = analysis レポート、本ページの遷移先）
 
 import { useMemo, useSyncExternalStore } from 'react';
 import Link from 'next/link';
@@ -95,9 +105,12 @@ function NoHistoryYet() {
 }
 
 // ── 一覧表示 ─────────────────────────────────────────────────────
-// 各カードは <Link> で /statement/improve/rewrite/<id> へ直接遷移する。
+// 各カードは <Link> で /statement/analysis/<id>（分析レポート）へ直接遷移する。
 // 旧版では in-page state（selectedId）で詳細 hub に切り替えていたが、hub の情報が薄く
 // 1 クリック余計に挟まる UX だったため撤去した。視覚的なカード形状は維持。
+// 「書き直し準備（/statement/improve/rewrite/<id>）」は analysis page 下部の CTA
+// 経由で到達する。本ページから rewrite prep に直接飛ばすと、改善点を読まずに
+// 書き始めることになり、④ の意図と合わない。
 function HistoryListView({ history }: { history: ReviewHistoryItem[] }) {
   return (
     <>
@@ -108,7 +121,7 @@ function HistoryListView({ history }: { history: ReviewHistoryItem[] }) {
         {history.map((item) => (
           <li key={item.id}>
             <Link
-              href={`/statement/improve/rewrite/${encodeURIComponent(item.id)}`}
+              href={`/statement/analysis/${encodeURIComponent(item.id)}`}
               className="block w-full text-left rounded-xl border border-slate-200 bg-white px-4 py-4 hover:border-blue-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-center justify-between gap-3 mb-2">
