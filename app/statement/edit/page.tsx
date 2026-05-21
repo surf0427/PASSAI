@@ -719,8 +719,18 @@ function StatementPageInner() {
 
       {/* STEP8.4: 添削結果エリア・次のステップ CTA は ReviewResultView へ logical split 済み。
           ②の責務整理に伴い「もう一度改善する」ボタン / 再添削フォーム / 各評価カードは UI 側で削除済み。
-          関連する dead state / dead handler も page.tsx から除去済み。 */}
-      <ReviewResultView result={result} />
+          関連する dead state / dead handler も page.tsx から除去済み。
+          STEP-NAV-1: 「↑ 本文を修正する」は inputSectionRef を流用した同一ページ内 anchor scroll のみ。
+          handleStartRewrite と同じ scroll パターン（block: 'center' でも 'start' でも実害なし）。 */}
+      <ReviewResultView
+        result={result}
+        onScrollToInput={() =>
+          inputSectionRef.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+          })
+        }
+      />
 
       {/* STEP8.4: 詳細分析（折りたたみ）内 content は DetailAnalysisAccordionView へ logical split 済み。
           Accordion 自体は layout primitive として page に残す。 */}

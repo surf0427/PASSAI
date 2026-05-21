@@ -23,6 +23,7 @@ import { AlertBox } from '@/components/ui/AlertBox';
 import { Accordion } from '@/components/ui/Accordion';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
+import { Button } from '@/components/ui/Button';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
 import { ScoreBarCard } from '@/components/ScoreDashboard/ScoreBarCard';
@@ -337,6 +338,14 @@ function HistoryDetailView({
             />
           </div>
         </Accordion>
+      </div>
+
+      {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
+          一覧へ戻れるよう、最下部にも副ボタンを置く。onBack は既存 prop を流用。 */}
+      <div className="mt-6">
+        <Button variant="secondary" onClick={onBack}>
+          ← 一覧に戻る
+        </Button>
       </div>
     </>
   );

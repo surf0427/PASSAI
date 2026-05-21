@@ -303,6 +303,7 @@ export default function StatementPrepareUniversityPage() {
         <SummaryStep
           pref={pref}
           summary={summary}
+          onEditAnswers={() => setStep('answer')}
           onStartOver={handleStartOver}
         />
       )}
@@ -540,10 +541,14 @@ const SUMMARY_FIELDS: Array<{
 function SummaryStep({
   pref,
   summary,
+  onEditAnswers,
   onStartOver,
 }: {
   pref: SchoolPreference;
   summary: StatementPrepareApiResult;
+  // 同じ大学・同じ回答を保持して 6 問画面へ戻す（answers / questions / pref state は触らない）。
+  // handleStartOver の全リセットとは役割を分離する。
+  onEditAnswers: () => void;
   onStartOver: () => void;
 }) {
   return (
@@ -587,6 +592,9 @@ function SummaryStep({
         <LinkButton href="/statement/edit" variant="primary" size="md">
           志望理由書を書きに行く →
         </LinkButton>
+        <Button variant="secondary" onClick={onEditAnswers}>
+          回答を修正する
+        </Button>
         <Button variant="secondary" onClick={onStartOver}>
           別の大学で整理する
         </Button>

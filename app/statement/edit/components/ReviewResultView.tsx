@@ -13,14 +13,19 @@
 
 import { Card } from '@/components/ui/Card';
 import { AlertBox } from '@/components/ui/AlertBox';
+import { Button } from '@/components/ui/Button';
 import { LinkButton } from '@/components/ui/LinkButton';
 import type { StatementResult } from '@/types/statement';
 
 export type ReviewResultViewProps = {
   result: StatementResult | null;
+  // 添削結果直下から本文入力欄へスムーズスクロールするための callback。
+  // 「もう一度改善する」UI を復活させず、同一ページ内 anchor scroll のみで戻り導線を提供する。
+  // ref 本体は page.tsx 側に集約され、InputFormView に渡される inputSectionRef を流用する。
+  onScrollToInput: () => void;
 };
 
-export function ReviewResultView({ result }: ReviewResultViewProps) {
+export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewProps) {
   return (
     <>
       {result ? (
@@ -114,7 +119,9 @@ export function ReviewResultView({ result }: ReviewResultViewProps) {
         </section>
       )}
 
-      {/* ── 次のステップへ：完成度スコア ─────────────────── */}
+      {/* ── 次のステップへ：完成度スコア / 本文修正 ───────────────────
+          完成度スコア = 進む（primary）／本文修正 = 戻り anchor（secondary）。
+          後者は inputSectionRef へスクロールするだけで、新 state / 新 handler 経路を作らない。 */}
       {result && (
         <section className="mb-10 bg-blue-50 border border-blue-100 rounded-2xl p-5 sm:p-6">
           <p className="text-[11px] font-bold text-blue-700 mb-1 tracking-widest">
@@ -123,14 +130,19 @@ export function ReviewResultView({ result }: ReviewResultViewProps) {
           <p className="text-sm text-slate-700 leading-relaxed mb-4">
             添削結果をもとに、完成度スコアで現在地を確認しましょう。
           </p>
-          <LinkButton
-            href="/statement/score"
-            variant="primary"
-            size="md"
-            className="w-full sm:w-auto"
-          >
-            完成度スコアを見る →
-          </LinkButton>
+          <div className="flex flex-wrap items-center gap-3">
+            <LinkButton
+              href="/statement/score"
+              variant="primary"
+              size="md"
+              className="w-full sm:w-auto"
+            >
+              完成度スコアを見る →
+            </LinkButton>
+            <Button variant="secondary" onClick={onScrollToInput}>
+              ↑ 本文を修正する
+            </Button>
+          </div>
         </section>
       )}
     </>

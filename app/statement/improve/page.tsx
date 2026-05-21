@@ -29,6 +29,7 @@ import { AlertBox } from '@/components/ui/AlertBox';
 import { Accordion } from '@/components/ui/Accordion';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
+import { Button } from '@/components/ui/Button';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
 import { ScoreBarCard } from '@/components/ScoreDashboard/ScoreBarCard';
@@ -343,6 +344,15 @@ function HistoryDetailView({
             />
           </div>
         </Accordion>
+      </div>
+
+      {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
+          一覧へ戻れるよう、最後の Accordion 直後にも副ボタンを置く。下の primary CTA
+          （書き直し）と並べて、戻る = secondary / 進む = primary の役割を視覚的に分ける。 */}
+      <div className="mt-6">
+        <Button variant="secondary" onClick={onBack}>
+          ← 一覧に戻る
+        </Button>
       </div>
 
       {/* ── ④ → ② へ遷移する CTA ────────────────────────────────
