@@ -37,7 +37,8 @@ export default async function StatementImproveSlugPage({ params }: Props) {
         totalSteps={5}
         title={`書き直す：${guide.axisLabel}`}
         description="問いに答えながら、自分の言葉で書き直してみましょう。"
-        backHref="/statement/improve"
+        backHref="/statement"
+        backLabel="志望理由書トップへ"
       />
 
       {/* ── なぜここを直すか（短く可視） ──────────────────── */}

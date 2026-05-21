@@ -6,7 +6,11 @@ import type { StatementImprovementTargetSection } from '@/types/statementIntervi
 import type { StudentProfile } from '@/types/studentProfile';
 import {
   saveDraft, loadDraft, clearDraft,
-  saveReviewHistory, loadReviewHistory, clearReviewHistory, deleteReviewHistoryItem,
+  saveReviewHistory,
+  // STEP4-2: ④ /statement/improve から ?rewriteFrom=<id> 経由で来た場合に
+  // 該当 entry を read-only で読み出して prefill / 参考表示するために再 import。
+  // 履歴の保存・削除には触らない（loadReviewHistory は read only 用途）。
+  loadReviewHistory,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
 import {
@@ -23,6 +27,10 @@ import {
   type StatementPrepareFollowUpAnswers,
   type StatementPrepareSummary,
 } from '@/lib/statement/prepare/statementPrepareStorage';
+import {
+  loadUniversityPrepareHistory,
+  type UniversityPrepareEntry,
+} from '@/lib/statement/prepare/universityPrepareHistory';
 import {
   loadRewriteDrafts,
   type RewriteDraftRecord,
@@ -226,6 +234,14 @@ function StatementPageInner() {
     [isMounted],
   );
 
+  // ① 大学軸 prepare の履歴。配列 / 最大 10 件 / 先頭が最新。
+  // 履歴が 1 件以上あれば左サイド欄で「整理メモ履歴」を優先表示し、
+  // 旧 prepareSummary（最新 1 枚）の表示は履歴 0 件時の fallback に下ろす。
+  const prepareHistory = useMemo<UniversityPrepareEntry[]>(
+    () => (isMounted ? loadUniversityPrepareHistory() : []),
+    [isMounted],
+  );
+
   // 「書き直しメモ」 section 用。空 text の draft は drop。statementText は触らない参照表示専用。
   // SSR 時は []、mount 後に load して filter する既存の useMemo[isMounted] パターンを踏襲。
   const rewriteDraftEntries = useMemo<Array<[string, RewriteDraftRecord]>>(
@@ -250,9 +266,10 @@ function StatementPageInner() {
     [isMounted, wallHitting],
   );
 
-  // mutable state（submitReview 成功時や履歴削除操作で更新される）。
+  // mutable state（submitReview 成功時に更新される）。
   // 初期値は SSR-stable な空値。実値は後段の mount-init useEffect で setState する。
-  const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
+  // 過去の添削履歴の閲覧/復元/削除は ③ /statement/score 系に分離済みのため、本ページでは保持しない
+  // （storage への保存 saveReviewHistory はそのまま継続）。
   const [remainingCount, setRemainingCount] = useState(5); // サーバーと一致するデフォルト値
   // STEP 18: /statement/prepare で書いた追加メモ。表示専用、textarea には自動挿入しない。
   const [prepareFollowUps, setPrepareFollowUps] = useState<StatementPrepareFollowUpAnswers>({});
@@ -296,7 +313,7 @@ function StatementPageInner() {
   }
 
   // 書き直しメモのコピー。statementText には触らない（PASSAI 思想: 本文の自動書き換えはしない）。
-  // 既存 handleRestoreHistory との writer 衝突を避け toastTimerRef は触らず fire-and-forget。
+  // toastTimerRef は触らず fire-and-forget。
   // 連打時に短い flicker が出る可能性はあるが副作用は限定的（user 起点アクション）。
   async function handleCopyRewrite(text: string) {
     try {
@@ -311,9 +328,14 @@ function StatementPageInner() {
   const [result, setResult] = useState<StatementResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showImproveForm, setShowImproveForm] = useState(false);
-  const [improveText, setImproveText] = useState('');
   const [toast, setToast] = useState('');
+
+  // STEP4-2: ④ → ② への書き直し対象履歴の context。?rewriteFrom=<id> が指す
+  // ReviewHistoryItem を mount-init useEffect で 1 回だけ load する。
+  // mount 後は不変（書き直し対象は per-visit で固定）。
+  // 左サイド欄の「書き直し中：参考メモ」表示に使う。本文 textarea には自動反映しない
+  //（prefill は mount-init で 1 回のみ）。
+  const [rewriteContext, setRewriteContext] = useState<ReviewHistoryItem | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // STEP5.13: mount 後に localStorage から実値を取得し、form 入力 + mutable state にセットする。
@@ -322,7 +344,7 @@ function StatementPageInner() {
   //     client first render で同一でないとハイドレーションエラーになる。lazy initializer で
   //     localStorage を読むと server '' / client '実値' で必ず mismatch するため、useState('')
   //     + mount 後 setState で post-hydration に統一する従来パターンを維持する。
-  //   - history / remainingCount / prepareFollowUps は mutable で後段の submitReview 成功時等に
+  //   - remainingCount / prepareFollowUps は mutable で後段の submitReview 成功時等に
   //     setState される。lazy init + useMemo では mutability を表現できない。
   //   - draft が無いときは basicInfo.preferences[0] から form を seed する条件付きロジックを
   //     伴うため、ここで loadBasicInfo() を 1 度だけローカル変数として読み直している
@@ -333,25 +355,45 @@ function StatementPageInner() {
   // 内のみで limited に閉じる。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    const draft = loadDraft();
-    if (draft) {
-      setUniversity(draft.university);
-      setFaculty(draft.faculty);
-      setDepartment(draft.department);
-      setStatementText(draft.statementText);
-    } else {
-      // 初回アクセスで下書きがない場合は basicInfo の第一志望を初期値に入れる。
-      // ユーザーは画面上で上書きできる。department が空なら空欄のまま。
-      const basic = loadBasicInfo();
-      const pref = basic?.preferences?.[0];
-      if (pref) {
-        setUniversity(pref.university ?? '');
-        setFaculty(pref.faculty ?? '');
-        setDepartment(pref.department ?? '');
+    // STEP4-2: ?rewriteFrom=<id> が指す履歴 entry があれば、それを優先 prefill する。
+    // ユーザーが ④ で「この内容をもとに書き直す」を明示的にクリックして来た経路なので、
+    // 既存 draft / basicInfo の seeding より優先。
+    // entry が見つからない（id 不正・履歴削除済み）場合は silently fall through。
+    // prefill は mount で 1 回だけ（rerun しない）。
+    const rewriteId = searchParams?.get('rewriteFrom') ?? null;
+    let rewritePrefilled = false;
+    if (rewriteId) {
+      const entry = loadReviewHistory().find((h) => h.id === rewriteId);
+      if (entry) {
+        setRewriteContext(entry);
+        setUniversity(entry.university);
+        setFaculty(entry.faculty);
+        setDepartment(entry.department);
+        setStatementText(entry.essay);
+        rewritePrefilled = true;
       }
     }
 
-    setHistory(loadReviewHistory());
+    if (!rewritePrefilled) {
+      const draft = loadDraft();
+      if (draft) {
+        setUniversity(draft.university);
+        setFaculty(draft.faculty);
+        setDepartment(draft.department);
+        setStatementText(draft.statementText);
+      } else {
+        // 初回アクセスで下書きがない場合は basicInfo の第一志望を初期値に入れる。
+        // ユーザーは画面上で上書きできる。department が空なら空欄のまま。
+        const basic = loadBasicInfo();
+        const pref = basic?.preferences?.[0];
+        if (pref) {
+          setUniversity(pref.university ?? '');
+          setFaculty(pref.faculty ?? '');
+          setDepartment(pref.department ?? '');
+        }
+      }
+    }
+
     setRemainingCount(getRemainingStatementReviewCount());
     setPrepareFollowUps(getStatementPrepareFollowUpAnswers());
   }, []);
@@ -431,7 +473,6 @@ function StatementPageInner() {
       setError('');
       const mapped = mapApiResponse(cached.response);
       setResult(mapped);
-      setShowImproveForm(false);
       saveReviewHistory({
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
@@ -441,7 +482,6 @@ function StatementPageInner() {
         essay: statementText,
         result: mapped,
       });
-      setHistory(loadReviewHistory());
       options.afterSuccess?.();
       return;
     }
@@ -485,7 +525,6 @@ function StatementPageInner() {
       const apiResponse = data as ApiReviewResponse;
       const mapped = mapApiResponse(apiResponse);
       setResult(mapped);
-      setShowImproveForm(false);
 
       incrementStatementReviewCount();
       setRemainingCount(getRemainingStatementReviewCount());
@@ -499,7 +538,6 @@ function StatementPageInner() {
         essay: statementText,
         result: mapped,
       });
-      setHistory(loadReviewHistory());
 
       // STEP5.10: 成功時のみ cache 書き込み（!res.ok / catch では保存しない）。
       saveStatementReviewCache({
@@ -542,51 +580,13 @@ function StatementPageInner() {
     setStatementText('');
     setResult(null);
     setError('');
-    setShowImproveForm(false);
-    setImproveText('');
     clearDraft();
   }
 
-  async function handleImproveSubmit() {
-    if (loading) return;
-    const trimmedImproveText = improveText.trim();
-    // 元の志望理由書に追加情報を組み合わせて再添削する
-    const combinedEssay = `【元の志望理由書】\n${statementText}\n\n【追加情報・改善メモ】\n${trimmedImproveText}`;
-    await submitReview(combinedEssay, {
-      validate: () => !trimmedImproveText ? '追加情報を入力してください' : null,
-      afterSuccess: () => {
-        setImproveText('');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    });
-  }
-
-  function handleRestoreHistory(item: ReviewHistoryItem) {
-    setUniversity(item.university);
-    setFaculty(item.faculty);
-    setDepartment(item.department);
-    setStatementText(item.essay);
-    setResult(item.result);
-    setError('');
-    setShowImproveForm(false);
-    setImproveText('');
-    if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-    setToast('履歴を復元しました');
-    toastTimerRef.current = setTimeout(() => setToast(''), 3000);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function handleDeleteHistoryItem(id: string) {
-    if (!window.confirm('この履歴を削除しますか？')) return;
-    deleteReviewHistoryItem(id);
-    setHistory(loadReviewHistory());
-  }
-
-  function handleClearHistory() {
-    if (!window.confirm('履歴をすべて削除しますか？この操作は元に戻せません。')) return;
-    clearReviewHistory();
-    setHistory([]);
-  }
+  // 過去履歴の閲覧/復元/削除ハンドラ（handleImproveSubmit / handleRestoreHistory /
+  // handleDeleteHistoryItem / handleClearHistory）は ③ /statement/score 等に分離した
+  // ことで本ページからは未使用となったため除去済み。
+  // 保存パス（saveReviewHistory）は cache hit / API 成功の 2 経路に温存している。
 
   // C1 mitigation: submit disable 条件の single source of truth。
   // mounted 前は localStorage 由来の state (basicInfo / wallHitting / activities / studentProfile)
@@ -604,6 +604,7 @@ function StatementPageInner() {
         title="志望理由書を入力する"
         description="入力した志望理由書をAIが添削します。AIは完成文を代筆するのではなく、自分で改善できるようにアドバイスします。"
         backHref="/statement"
+        backLabel="志望理由書トップへ"
         nextHref="/statement/score"
         nextLabel="完成度を見る"
       />
@@ -695,6 +696,9 @@ function StatementPageInner() {
         setShowInsertedHint={setShowInsertedHint}
         mounted={mounted}
         prepareSummary={prepareSummary}
+        prepareHistory={prepareHistory}
+        rewriteContext={rewriteContext}
+        activities={activities}
         prepareFollowUps={prepareFollowUps}
         setPrepareFollowUps={setPrepareFollowUps}
         showReferenceNotes={showReferenceNotes}
@@ -713,18 +717,10 @@ function StatementPageInner() {
         <p className="text-red-600 text-sm mb-6">{error}</p>
       )}
 
-      {/* STEP8.4: 添削結果エリア・再提出フォーム・次のステップ CTA は ReviewResultView へ logical split 済み。 */}
-      <ReviewResultView
-        result={result}
-        showImproveForm={showImproveForm}
-        setShowImproveForm={setShowImproveForm}
-        improveText={improveText}
-        setImproveText={setImproveText}
-        setError={setError}
-        loading={loading}
-        remainingCount={remainingCount}
-        onImproveSubmit={handleImproveSubmit}
-      />
+      {/* STEP8.4: 添削結果エリア・次のステップ CTA は ReviewResultView へ logical split 済み。
+          ②の責務整理に伴い「もう一度改善する」ボタン / 再添削フォーム / 各評価カードは UI 側で削除済み。
+          関連する dead state / dead handler も page.tsx から除去済み。 */}
+      <ReviewResultView result={result} />
 
       {/* STEP8.4: 詳細分析（折りたたみ）内 content は DetailAnalysisAccordionView へ logical split 済み。
           Accordion 自体は layout primitive として page に残す。 */}
@@ -737,10 +733,6 @@ function StatementPageInner() {
           activities={activities}
           onStartRewrite={handleStartRewrite}
           onInsertStarterHint={handleInsertStarterHint}
-          history={history}
-          onRestoreHistory={handleRestoreHistory}
-          onDeleteHistoryItem={handleDeleteHistoryItem}
-          onClearHistory={handleClearHistory}
         />
       </Accordion>
 

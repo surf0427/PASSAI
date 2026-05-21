@@ -36,12 +36,12 @@ type Mode = {
 
 const MODES: Mode[] = [
   {
-    href: '/statement/prepare',
+    href: '/statement/prepare/university',
     title: '書く前に整理する',
     getDescription: (s) =>
       s && !s.preparedReady
         ? 'まず書く材料を整えましょう。'
-        : '学部系統に合わせて材料を整えます。',
+        : '大学の評価軸に合わせて整理します。',
   },
   {
     href: '/statement/edit',
@@ -66,7 +66,7 @@ const MODES: Mode[] = [
     getDescription: (s) =>
       s && s.latestScore === null
         ? 'スコア確認後に使えます。'
-        : '弱い部分を集中して直します。',
+        : '過去に書いた志望理由書を選んで書き直します。',
     isDisabled: (s) => s !== null && s.latestScore === null,
   },
 ];
