@@ -1,70 +1,54 @@
 'use client';
 
-// ③「今のスコアを見る」機能（view）。
+// ③「今のスコアを見る」機能（view）。STEP-DA-2: 「完成度を俯瞰するページ」に整理。
 //
 // 役割:
 //   - 過去に書いた志望理由書（statementReviewHistory）の一覧を表示
-//   - クリックで詳細（本文 / スコア / 良い点 / 弱い点 / 改善アクション / 詳細分析）を表示
-//   - 閲覧専用。書き直し / 再添削 / 削除はここでは扱わない
+//   - クリックで詳細（総合スコア / 各評価軸の現在 vs 目安 / 改善方向性）を俯瞰表示
+//   - 細かい詳細分析（NGワード / 構造 / 評価軸チェック）は出さない
+//   - 詳細分析へは「詳細分析を見る →」LinkButton で /statement/analysis/[id] に遷移
+//
+// STEP-DA-2 の変更:
+//   - 削除: AlertBox 3 種（改善アクション / 弱い点 / 良い点）
+//   - 削除: Accordion 本文・詳細分析（NgWordCheck / StructureCheck / EvaluationAxisCheck）
+//   - 削除: RadarSummary / ScoreBarCard × 5 / ImprovementPriority
+//   - 追加: AxisGapCard × 5（評価項目 / 現在 / 目安 / あと N 点 / 改善方向性）
+//   - 追加: 「詳細分析を見る →」LinkButton → /statement/analysis/{entry.id}
 //
 // 触らない:
 //   - statementReviewHistory の保存・削除ロジック（read のみ）
-//   - /api/statement-review / /api/statement-prepare
-//   - AI prompt / PROMPT_VERSION
-//   - ② edit の添削フロー、④ rewrite 機能
-//
-// 履歴データは [lib/statement/review/statementStorage.ts](../../../lib/statement/review/statementStorage.ts) の
-// loadReviewHistory() で取得。スコア breakdown は statementResultToScore() で再計算。
+//   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
+//   - ② edit / ④ improve / /statement/analysis/[id]
+//   - 書き直し導線（③ は view 専用、改善始める CTA は付けない）
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
-import { AlertBox } from '@/components/ui/AlertBox';
-import { Accordion } from '@/components/ui/Accordion';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { Button } from '@/components/ui/Button';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
-import { ScoreBarCard } from '@/components/ScoreDashboard/ScoreBarCard';
-import { RadarSummary } from '@/components/ScoreDashboard/RadarSummary';
-import { ImprovementPriority } from '@/components/ScoreDashboard/ImprovementPriority';
 import { DashboardSummary } from '@/components/ScoreDashboard/DashboardSummary';
-import { NgWordCheck } from '@/components/statement/NgWordCheck';
-import { StructureCheck } from '@/components/statement/StructureCheck';
-import { EvaluationAxisCheck } from '@/components/statement/EvaluationAxisCheck';
-import { detectNgWords } from '@/lib/detectNgWords';
-import { loadActivityData } from '@/lib/activityStorage';
 import {
   loadReviewHistory,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
 import { statementResultToScore } from '@/lib/statement/score/statementScore';
-import { breakdownToRankItems } from '@/lib/statement/score/statementScoreSource';
-import { getImprovementPriority } from '@/lib/scoreRank';
-import { PASS_LINE_TARGETS } from '@/lib/passLineComparison';
-import type { ActivityData } from '@/types/activity';
+import { breakdownToPassLineItems } from '@/lib/statement/score/statementScoreSource';
+import {
+  getPassLineComparison,
+  type ComparisonResult,
+} from '@/lib/passLineComparison';
+import { IMPROVEMENT_COMMENTS } from '@/lib/improvementSuggestions';
 
 // SSR-stable mount flag（他ページと同形パターン）。
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
-// axis id → 合格ライン目安スコア（ScoreBarCard の目安マーカー描画用）。
-const TARGET_BY_KEY: Record<string, number> = Object.fromEntries(
-  PASS_LINE_TARGETS.map((t) => [t.id, t.targetScore]),
-);
-
-const AXIS_DESCRIPTIONS: Record<string, string> = {
-  logic:         '主張と根拠のつながり',
-  specificity:   '体験の描写・具体性',
-  universityFit: '大学固有のカリキュラム・教員への言及度',
-  futureGoal:    '将来像の踏み込み度',
-  originality:   '自分らしさ・独自性',
-};
-
 const SUMMARY_MESSAGE =
-  '過去の添削結果を確認できます。書き直しはトップから ④「書き直す」を選んでください。';
+  '各評価軸の現在地と目安、改善の方向性を確認できます。詳しい分析は下の「詳細分析を見る」から。';
 
 export default function StatementScorePage() {
   const isMounted = useSyncExternalStore(
@@ -79,12 +63,6 @@ export default function StatementScorePage() {
     [isMounted],
   );
 
-  // 詳細分析の NgWordCheck が require する activity data。view-only でも入力としては必要。
-  const activities = useMemo<ActivityData | null>(
-    () => (isMounted ? loadActivityData() : null),
-    [isMounted],
-  );
-
   // 詳細表示中の履歴 id。null なら一覧表示。
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -95,7 +73,7 @@ export default function StatementScorePage() {
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <PageHeader
         title="今のスコアを見る"
-        description="過去に作成した志望理由書の完成度と詳細分析を確認できます（閲覧専用）。"
+        description="過去に作成した志望理由書の完成度を確認できます（閲覧専用）。"
       />
 
       <div className="mb-6">
@@ -120,7 +98,6 @@ export default function StatementScorePage() {
       {isMounted && selected !== null && (
         <HistoryDetailView
           entry={selected}
-          activities={activities}
           onBack={() => setSelectedId(null)}
         />
       )}
@@ -129,7 +106,6 @@ export default function StatementScorePage() {
 }
 
 // ── 履歴ゼロのとき ─────────────────────────────────────────────────
-// 「ここはまだ使えない」より「まず書けばここで見られる」と読ませる soft トーン。
 function NoHistoryYet() {
   return (
     <Card variant="soft" padding="lg" className="text-center mt-2 sm:mt-4">
@@ -152,7 +128,6 @@ function NoHistoryYet() {
 }
 
 // ── 一覧表示 ─────────────────────────────────────────────────────
-// 大学名 / 学部 / 学科 / 作成日時 / 総合スコア / 本文プレビューを 1 件ずつカード表示。
 function HistoryListView({
   history,
   onSelect,
@@ -200,22 +175,24 @@ function HistoryListView({
   );
 }
 
-// ── 詳細表示 ─────────────────────────────────────────────────────
-// 本文 / 総合スコア / 各評価軸 / 良い点 / 弱い点 / 改善アクション / 詳細分析。
-// 閲覧専用なので「書き直す」「再添削」「削除」ボタンは出さない。
+// ── 詳細表示（俯瞰）──────────────────────────────────────────────
+// 総合スコア + 各評価軸の現在 vs 目安 vs あと何点 vs 改善方向性。
+// 細かい詳細分析（NGワード / 構造 / 評価軸チェック）は /statement/analysis/[id] に分離済み。
 function HistoryDetailView({
   entry,
-  activities,
   onBack,
 }: {
   entry: ReviewHistoryItem;
-  activities: ActivityData | null;
   onBack: () => void;
 }) {
   const score = statementResultToScore(entry.result);
-  const items = breakdownToRankItems(score.breakdown);
-  const radarItems = items.map(({ label, score: s }) => ({ label, score: s }));
-  const priority = getImprovementPriority(items);
+  const passLineItems = breakdownToPassLineItems(score.breakdown);
+  // 5 軸の現在 vs 目安比較。getPassLineComparison は PASS_LINE_TARGETS 順で返す。
+  // 表示は diff 降順（あと何点が大きい順 = 改善優先度高い順）に並べ替える。
+  // 達成済み（diff=0）は末尾に寄せる。tiebreak は元順序で安定。
+  const comparison = [...getPassLineComparison(passLineItems)].sort(
+    (a, b) => b.diff - a.diff,
+  );
 
   return (
     <>
@@ -254,91 +231,37 @@ function HistoryDetailView({
         <DashboardSummary message={SUMMARY_MESSAGE} />
       </section>
 
-      <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 sm:gap-4 mb-6">
-        <RadarSummary items={radarItems} />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
-          {items.map(({ key, label, score: itemScore }) => (
-            <ScoreBarCard
-              key={key}
-              label={label}
-              score={itemScore}
-              description={AXIS_DESCRIPTIONS[key] ?? ''}
-              targetScore={TARGET_BY_KEY[key]}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section className="mb-6">
-        <ImprovementPriority items={priority} />
-      </section>
-
-      {/* 結果 text セクション（良い点 / 弱い点 / 改善アクション） */}
-      <AlertBox variant="warning" className="mb-4">
-        <h3 className="text-sm font-semibold text-yellow-800 mb-3">優先度順の改善アクション</h3>
-        <ol className="space-y-2">
-          {entry.result.actions.map((a, i) => (
-            <li key={i} className="text-sm text-yellow-900 flex gap-2">
-              <span className="font-bold shrink-0">{i + 1}.</span>
-              <span>{a}</span>
-            </li>
-          ))}
-        </ol>
-      </AlertBox>
-
-      <AlertBox variant="error" className="mb-4">
-        <h3 className="text-sm font-semibold text-red-800 mb-3">弱い点</h3>
-        <ul className="space-y-1">
-          {entry.result.weaknesses.map((w, i) => (
-            <li key={i} className="text-sm text-red-700 flex gap-2">
-              <span>△</span>
-              <span>{w}</span>
+      {/* 各評価軸の俯瞰：現在 / 目安 / あと N 点 / 改善方向性 */}
+      <section className="mb-8">
+        <h2 className="text-sm font-bold text-slate-900 mb-3">
+          評価軸ごとの現在地
+        </h2>
+        <ul className="space-y-3">
+          {comparison.map((c) => (
+            <li key={c.id}>
+              <AxisGapCard comparison={c} direction={IMPROVEMENT_COMMENTS[c.id] ?? ''} />
             </li>
           ))}
         </ul>
-      </AlertBox>
+      </section>
 
-      <AlertBox variant="success" className="mb-6">
-        <h3 className="text-sm font-semibold text-green-800 mb-3">良い点</h3>
-        <ul className="space-y-1">
-          {entry.result.strengths.map((s, i) => (
-            <li key={i} className="text-sm text-green-700 flex gap-2">
-              <span>✓</span>
-              <span>{s}</span>
-            </li>
-          ))}
-        </ul>
-      </AlertBox>
-
-      {/* 本文（折りたたみで邪魔にならない位置）*/}
-      <Accordion title="この志望理由書の本文を見る">
-        <Card>
-          <pre className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed font-sans">
-            {entry.essay}
-          </pre>
-        </Card>
-      </Accordion>
-
-      {/* 詳細分析（折りたたみ）*/}
-      <div className="mt-4">
-        <Accordion title="詳細分析を見る">
-          <div className="space-y-4">
-            <NgWordCheck
-              issues={detectNgWords(entry.essay, activities, entry.university, entry.faculty)}
-              // ③ は閲覧専用。NgWordCheck 内の rewrite / insert CTA は no-op に縛る
-              // （edit feature の書き直し導線は ② / ④ に分離済み。ここから直接書き換えない）。
-              onStartRewrite={noopRewrite}
-              onInsertStarterHint={noopInsert}
-            />
-            <StructureCheck text={entry.essay} />
-            <EvaluationAxisCheck
-              university={entry.university}
-              faculty={entry.faculty}
-              text={entry.essay}
-            />
-          </div>
-        </Accordion>
-      </div>
+      {/* 詳細分析へ進む（深掘りは /statement/analysis/[id] に集約） */}
+      <section className="mb-6 bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6">
+        <p className="text-[11px] font-bold text-slate-600 mb-1 tracking-widest">
+          深掘り
+        </p>
+        <p className="text-sm text-slate-700 leading-relaxed mb-4">
+          抽象表現・NGワード・構造・大学一致など、より詳しい分析を分析レポートで確認できます。
+        </p>
+        <LinkButton
+          href={`/statement/analysis/${encodeURIComponent(entry.id)}`}
+          variant="primary"
+          size="md"
+          className="w-full sm:w-auto"
+        >
+          詳細分析を見る →
+        </LinkButton>
+      </section>
 
       {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
           一覧へ戻れるよう、最下部にも副ボタンを置く。onBack は既存 prop を流用。 */}
@@ -351,15 +274,107 @@ function HistoryDetailView({
   );
 }
 
+// ── 各評価軸の俯瞰カード ──────────────────────────────────────────
+// 旧 ScoreBarCard を「現在 / 目安 / あと何点 / 改善方向性」を 1 枚にまとめた form に拡張。
+// 白背景・薄い border・テキスト主体で、AlertBox 系の色付き矩形に頼らない。
+// 「改善を始める」CTA は意図的に置かない（③ は view 専用、書き直し導線は ② edit / ④ improve）。
+
+const STATUS_STYLES: Record<
+  ComparisonResult['status'],
+  { label: string; badgeClass: string; barClass: string }
+> = {
+  achieved: {
+    label: '達成',
+    badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    barClass: 'bg-emerald-500',
+  },
+  almost: {
+    label: 'もう少し',
+    badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
+    barClass: 'bg-amber-500',
+  },
+  needsImprovement: {
+    label: '要改善',
+    badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+    barClass: 'bg-rose-500',
+  },
+};
+
+const AXIS_MAX_SCORE = 20;
+
+function AxisGapCard({
+  comparison,
+  direction,
+}: {
+  comparison: ComparisonResult;
+  direction: string;
+}) {
+  const style = STATUS_STYLES[comparison.status];
+  const currentPct = clampPct((comparison.currentScore / AXIS_MAX_SCORE) * 100);
+  const targetPct = clampPct((comparison.targetScore / AXIS_MAX_SCORE) * 100);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm font-semibold text-slate-900">
+          {comparison.label}
+        </h3>
+        <span
+          className={`shrink-0 text-[11px] font-semibold border rounded px-2 py-0.5 ${style.badgeClass}`}
+        >
+          {style.label}
+        </span>
+      </div>
+
+      {/* 現在地のバー + 目安マーカー */}
+      <div className="relative h-2 bg-slate-100 rounded-full overflow-hidden mb-2">
+        <div
+          className={`h-2 rounded-full transition-all ${style.barClass}`}
+          style={{ width: `${currentPct}%` }}
+        />
+        <div
+          aria-hidden
+          className="absolute top-0 h-2 w-0.5 bg-slate-400"
+          style={{ left: `${targetPct}%` }}
+        />
+      </div>
+
+      {/* スコア数値 + あと何点 */}
+      <p className="text-xs text-slate-600 tabular-nums mb-3">
+        現在{' '}
+        <span className="font-semibold text-slate-900">
+          {comparison.currentScore}
+        </span>
+        <span className="mx-1 text-slate-400">/</span>
+        目安{' '}
+        <span className="font-semibold text-slate-700">
+          {comparison.targetScore}
+        </span>
+        {comparison.diff > 0 ? (
+          <span className="ml-3 text-slate-700">
+            あと{' '}
+            <span className="font-semibold text-slate-900">
+              {comparison.diff}
+            </span>{' '}
+            点
+          </span>
+        ) : (
+          <span className="ml-3 text-emerald-600 font-semibold">達成済み</span>
+        )}
+      </p>
+
+      {/* 改善方向性 */}
+      {direction && (
+        <p className="text-xs text-slate-600 leading-relaxed">{direction}</p>
+      )}
+    </div>
+  );
+}
+
+function clampPct(p: number): number {
+  return Math.max(0, Math.min(100, p));
+}
+
 // ── helpers ──────────────────────────────────────────────────────
-
-function noopRewrite(_phrase: string, _answers: string[]): void {
-  // ③ view-only: rewrite CTA は機能させない（② edit / ④ rewrite に分離済み）。
-}
-
-function noopInsert(_hint: string): void {
-  // 同上。
-}
 
 function formatDateTime(isoString: string): string {
   const d = new Date(isoString);

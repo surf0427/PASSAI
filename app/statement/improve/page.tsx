@@ -1,75 +1,64 @@
 'use client';
 
-// ④「書き直す」機能（do）の入口。STEP4-1: 一覧 → 詳細 → ② edit へ遷移、までを実装。
+// ④「書き直す」機能（do）の入口。STEP-DA-4: ③ /statement/score と思想を揃え、
+// 「書き直し開始ページ」として整理する。
 //
 // 役割:
 //   - 過去に書いた志望理由書（statementReviewHistory）の一覧を表示
-//   - クリックで詳細（本文 / スコア / 改善点 / 弱い点 / 改善アクション / 詳細分析）を表示
-//   - 詳細画面の最下部に「この内容をもとに書き直す」ボタンを置き、
-//     `/statement/edit?rewriteFrom=<historyId>` へ遷移する
+//   - クリックで「俯瞰（軸別の現在 vs 目安 vs あと N 点 vs 改善方向性）」を表示
+//   - 「詳細分析を見る →」で /statement/analysis/[id] へ深掘り遷移
+//   - 「この内容をもとに書き直す →」で /statement/edit?rewriteFrom=<id> へ進む
 //
 // ③ /statement/score との違い:
-//   - ③ は閲覧専用（書き直し導線なし）
+//   - ③ は閲覧専用（書き直し CTA なし）
 //   - ④ は「書き直しへ進む」CTA がある（書き直しは ② edit が担う）
+//
+// STEP-DA-4 の変更:
+//   - 削除: AlertBox 3 種（改善アクション / 弱い点 / 良い点）
+//   - 削除: Accordion 本文・詳細分析（NgWordCheck / StructureCheck / EvaluationAxisCheck）
+//   - 削除: RadarSummary / ScoreBarCard × 5 / ImprovementPriority
+//   - 追加: AxisGapCard × 5（評価項目 / 現在 / 目安 / あと N 点 / 改善方向性）
+//   - 追加: 「詳細分析を見る →」LinkButton → /statement/analysis/{entry.id}
+//   - 維持: 「この内容をもとに書き直す →」LinkButton → /statement/edit?rewriteFrom={entry.id}
+//
+// 注: AxisGapCard / STATUS_STYLES は ③ score/page.tsx の同名コードと意図的に重複している
+// （③ を触らない制約のため）。将来 STEP で components/ScoreDashboard/AxisGapCard.tsx 等に
+// 共通切り出し、③④ で import する形に揃えるのが望ましい。
 //
 // 触らない:
 //   - statementReviewHistory の保存・削除ロジック（read のみ）
-//   - /api/statement-review / /api/statement-prepare
-//   - AI prompt / PROMPT_VERSION
-//   - ② edit 側の本文入力処理・添削フロー
+//   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
+//   - ② edit / ③ score / /statement/analysis/[id]
 //   - /statement/improve/[slug] サブルート（軸別 rewrite ガイドは現状そのまま温存）
-//
-// STEP4-1 では `?rewriteFrom=<historyId>` URL 形式を固定するだけ。② edit 側の
-// パラメータ受け取り＋本文 prefill ＋左サイド改善点表示は別 STEP で実装する。
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
-import { AlertBox } from '@/components/ui/AlertBox';
-import { Accordion } from '@/components/ui/Accordion';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { Button } from '@/components/ui/Button';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
-import { ScoreBarCard } from '@/components/ScoreDashboard/ScoreBarCard';
-import { RadarSummary } from '@/components/ScoreDashboard/RadarSummary';
-import { ImprovementPriority } from '@/components/ScoreDashboard/ImprovementPriority';
 import { DashboardSummary } from '@/components/ScoreDashboard/DashboardSummary';
-import { NgWordCheck } from '@/components/statement/NgWordCheck';
-import { StructureCheck } from '@/components/statement/StructureCheck';
-import { EvaluationAxisCheck } from '@/components/statement/EvaluationAxisCheck';
-import { detectNgWords } from '@/lib/detectNgWords';
-import { loadActivityData } from '@/lib/activityStorage';
 import {
   loadReviewHistory,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
 import { statementResultToScore } from '@/lib/statement/score/statementScore';
-import { breakdownToRankItems } from '@/lib/statement/score/statementScoreSource';
-import { getImprovementPriority } from '@/lib/scoreRank';
-import { PASS_LINE_TARGETS } from '@/lib/passLineComparison';
-import type { ActivityData } from '@/types/activity';
+import { breakdownToPassLineItems } from '@/lib/statement/score/statementScoreSource';
+import {
+  getPassLineComparison,
+  type ComparisonResult,
+} from '@/lib/passLineComparison';
+import { IMPROVEMENT_COMMENTS } from '@/lib/improvementSuggestions';
 
-// SSR-stable mount flag。
+// SSR-stable mount flag（他ページと同形パターン）。
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
-const TARGET_BY_KEY: Record<string, number> = Object.fromEntries(
-  PASS_LINE_TARGETS.map((t) => [t.id, t.targetScore]),
-);
-
-const AXIS_DESCRIPTIONS: Record<string, string> = {
-  logic:         '主張と根拠のつながり',
-  specificity:   '体験の描写・具体性',
-  universityFit: '大学固有のカリキュラム・教員への言及度',
-  futureGoal:    '将来像の踏み込み度',
-  originality:   '自分らしさ・独自性',
-};
-
 const SUMMARY_MESSAGE =
-  '改善点と詳細分析を確認したら、下の「この内容をもとに書き直す」から ② 書く画面へ進めます。';
+  'どこを直すかを確認してから、下の「この内容をもとに書き直す」で ② 書く画面へ進めます。';
 
 export default function StatementImprovePage() {
   const isMounted = useSyncExternalStore(
@@ -84,12 +73,6 @@ export default function StatementImprovePage() {
     [isMounted],
   );
 
-  // 詳細分析の NgWordCheck が require する activity data（view 文脈なので入力としてだけ使う）。
-  const activities = useMemo<ActivityData | null>(
-    () => (isMounted ? loadActivityData() : null),
-    [isMounted],
-  );
-
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const selected =
@@ -99,7 +82,7 @@ export default function StatementImprovePage() {
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <PageHeader
         title="書き直す"
-        description="過去に書いた志望理由書を選んで、改善点と詳細分析を見てから書き直しに進めます。"
+        description="過去に書いた志望理由書を選んで、どこを直すかを確認してから書き直しに進めます。"
       />
 
       <div className="mb-6">
@@ -123,7 +106,6 @@ export default function StatementImprovePage() {
       {isMounted && selected !== null && (
         <HistoryDetailView
           entry={selected}
-          activities={activities}
           onBack={() => setSelectedId(null)}
         />
       )}
@@ -155,8 +137,6 @@ function NoHistoryYet() {
 }
 
 // ── 一覧表示 ─────────────────────────────────────────────────────
-// 大学名 / 学部 / 学科 / 作成日時 / 総合スコア / 本文プレビュー。
-// 構造は ③ score の HistoryListView と寄せている（review 容易性のため）。
 function HistoryListView({
   history,
   onSelect,
@@ -204,26 +184,27 @@ function HistoryListView({
   );
 }
 
-// ── 詳細表示 ─────────────────────────────────────────────────────
-// 本文 / 総合スコア / 改善点 / 弱い点 / 改善アクション / 詳細分析 +
-// 「この内容をもとに書き直す」CTA。
+// ── 詳細表示（俯瞰 + 書き直し開始 CTA） ───────────────────────────
+// ③ score の HistoryDetailView と同じ俯瞰構造 + 末尾に書き直し CTA を足す形。
+// 詳細分析（NGワード / 構造 / 評価軸チェック）は /statement/analysis/[id] に分離済み。
 function HistoryDetailView({
   entry,
-  activities,
   onBack,
 }: {
   entry: ReviewHistoryItem;
-  activities: ActivityData | null;
   onBack: () => void;
 }) {
   const score = statementResultToScore(entry.result);
-  const items = breakdownToRankItems(score.breakdown);
-  const radarItems = items.map(({ label, score: s }) => ({ label, score: s }));
-  const priority = getImprovementPriority(items);
+  const passLineItems = breakdownToPassLineItems(score.breakdown);
+  // 5 軸の現在 vs 目安比較。diff 降順（あと何点が大きい順 = 改善優先度高い順）に並べ替える。
+  // 達成済み（diff=0）は末尾に寄せる。
+  const comparison = [...getPassLineComparison(passLineItems)].sort(
+    (a, b) => b.diff - a.diff,
+  );
 
   // ② edit へ「書き直し対象」コンテキストを渡す URL。
-  // STEP4-1: ここで URL 形式を固定する。② 側の受け取り実装は次 STEP。
   const rewriteHref = `/statement/edit?rewriteFrom=${encodeURIComponent(entry.id)}`;
+  const analysisHref = `/statement/analysis/${encodeURIComponent(entry.id)}`;
 
   return (
     <>
@@ -262,102 +243,42 @@ function HistoryDetailView({
         <DashboardSummary message={SUMMARY_MESSAGE} />
       </section>
 
-      <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 sm:gap-4 mb-6">
-        <RadarSummary items={radarItems} />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
-          {items.map(({ key, label, score: itemScore }) => (
-            <ScoreBarCard
-              key={key}
-              label={label}
-              score={itemScore}
-              description={AXIS_DESCRIPTIONS[key] ?? ''}
-              targetScore={TARGET_BY_KEY[key]}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section className="mb-6">
-        <ImprovementPriority items={priority} />
-      </section>
-
-      {/* 結果 text セクション（改善点 / 弱い点 / 改善アクション） */}
-      <AlertBox variant="warning" className="mb-4">
-        <h3 className="text-sm font-semibold text-yellow-800 mb-3">優先度順の改善アクション</h3>
-        <ol className="space-y-2">
-          {entry.result.actions.map((a, i) => (
-            <li key={i} className="text-sm text-yellow-900 flex gap-2">
-              <span className="font-bold shrink-0">{i + 1}.</span>
-              <span>{a}</span>
-            </li>
-          ))}
-        </ol>
-      </AlertBox>
-
-      <AlertBox variant="error" className="mb-4">
-        <h3 className="text-sm font-semibold text-red-800 mb-3">弱い点</h3>
-        <ul className="space-y-1">
-          {entry.result.weaknesses.map((w, i) => (
-            <li key={i} className="text-sm text-red-700 flex gap-2">
-              <span>△</span>
-              <span>{w}</span>
+      {/* 各評価軸の俯瞰：現在 / 目安 / あと N 点 / 改善方向性 */}
+      <section className="mb-8">
+        <h2 className="text-sm font-bold text-slate-900 mb-3">
+          評価軸ごとの現在地
+        </h2>
+        <ul className="space-y-3">
+          {comparison.map((c) => (
+            <li key={c.id}>
+              <AxisGapCard comparison={c} direction={IMPROVEMENT_COMMENTS[c.id] ?? ''} />
             </li>
           ))}
         </ul>
-      </AlertBox>
+      </section>
 
-      <AlertBox variant="success" className="mb-6">
-        <h3 className="text-sm font-semibold text-green-800 mb-3">良い点</h3>
-        <ul className="space-y-1">
-          {entry.result.strengths.map((s, i) => (
-            <li key={i} className="text-sm text-green-700 flex gap-2">
-              <span>✓</span>
-              <span>{s}</span>
-            </li>
-          ))}
-        </ul>
-      </AlertBox>
+      {/* 詳細分析へ進む（深掘りは /statement/analysis/[id] に集約） */}
+      <section className="mb-4 bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6">
+        <p className="text-[11px] font-bold text-slate-600 mb-1 tracking-widest">
+          深掘り
+        </p>
+        <p className="text-sm text-slate-700 leading-relaxed mb-4">
+          抽象表現・NGワード・構造・大学一致など、より詳しい分析を分析レポートで確認できます。
+        </p>
+        <LinkButton
+          href={analysisHref}
+          variant="secondary"
+          size="md"
+          className="w-full sm:w-auto"
+        >
+          詳細分析を見る →
+        </LinkButton>
+      </section>
 
-      <Accordion title="この志望理由書の本文を見る">
-        <Card>
-          <pre className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed font-sans">
-            {entry.essay}
-          </pre>
-        </Card>
-      </Accordion>
-
-      <div className="mt-4">
-        <Accordion title="詳細分析を見る">
-          <div className="space-y-4">
-            <NgWordCheck
-              issues={detectNgWords(entry.essay, activities, entry.university, entry.faculty)}
-              // ④ 入口 view でも内部 rewrite/insert CTA は no-op。本格的な書き直しは
-              // ② edit に遷移してから行う設計（書き直し先を 1 つに集約するため）。
-              onStartRewrite={noopRewrite}
-              onInsertStarterHint={noopInsert}
-            />
-            <StructureCheck text={entry.essay} />
-            <EvaluationAxisCheck
-              university={entry.university}
-              faculty={entry.faculty}
-              text={entry.essay}
-            />
-          </div>
-        </Accordion>
-      </div>
-
-      {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
-          一覧へ戻れるよう、最後の Accordion 直後にも副ボタンを置く。下の primary CTA
-          （書き直し）と並べて、戻る = secondary / 進む = primary の役割を視覚的に分ける。 */}
-      <div className="mt-6">
-        <Button variant="secondary" onClick={onBack}>
-          ← 一覧に戻る
-        </Button>
-      </div>
-
-      {/* ── ④ → ② へ遷移する CTA ────────────────────────────────
-          rewriteFrom URL パラメータ形式は本 STEP で固定。② 側の受け取りは次 STEP で実装。 */}
-      <section className="mt-8 mb-6 bg-blue-50 border border-blue-100 rounded-2xl p-5 sm:p-6">
+      {/* ── ④ → ② へ遷移する CTA（primary、書き直し開始の主導線）─────────
+          STEP4-1 で導入した URL 形式 `?rewriteFrom=<id>` を維持。② 側で本文 prefill + 左サイドに
+          「書き直し中：参考メモ」Card を表示する経路と接続済み。 */}
+      <section className="mb-6 bg-blue-50 border border-blue-100 rounded-2xl p-5 sm:p-6">
         <p className="text-[11px] font-bold text-blue-700 mb-1 tracking-widest">
           次のステップ
         </p>
@@ -373,19 +294,120 @@ function HistoryDetailView({
           この内容をもとに書き直す →
         </LinkButton>
       </section>
+
+      {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
+          一覧へ戻れるよう、最下部にも副ボタンを置く。onBack は既存 prop を流用。 */}
+      <div className="mt-6">
+        <Button variant="secondary" onClick={onBack}>
+          ← 一覧に戻る
+        </Button>
+      </div>
     </>
   );
 }
 
+// ── 各評価軸の俯瞰カード（③ score/page.tsx の同名 component と意図的に重複） ──
+// score を触らない制約のため、improve 側に local 複製を置く。将来 STEP で
+// components/ScoreDashboard/AxisGapCard.tsx として共通切り出しする予定。
+// 「改善を始める」per-card CTA は意図的に置かない（書き直し導線は下部の
+// 「この内容をもとに書き直す →」に集約する）。
+
+const STATUS_STYLES: Record<
+  ComparisonResult['status'],
+  { label: string; badgeClass: string; barClass: string }
+> = {
+  achieved: {
+    label: '達成',
+    badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    barClass: 'bg-emerald-500',
+  },
+  almost: {
+    label: 'もう少し',
+    badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
+    barClass: 'bg-amber-500',
+  },
+  needsImprovement: {
+    label: '要改善',
+    badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+    barClass: 'bg-rose-500',
+  },
+};
+
+const AXIS_MAX_SCORE = 20;
+
+function AxisGapCard({
+  comparison,
+  direction,
+}: {
+  comparison: ComparisonResult;
+  direction: string;
+}) {
+  const style = STATUS_STYLES[comparison.status];
+  const currentPct = clampPct((comparison.currentScore / AXIS_MAX_SCORE) * 100);
+  const targetPct = clampPct((comparison.targetScore / AXIS_MAX_SCORE) * 100);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm font-semibold text-slate-900">
+          {comparison.label}
+        </h3>
+        <span
+          className={`shrink-0 text-[11px] font-semibold border rounded px-2 py-0.5 ${style.badgeClass}`}
+        >
+          {style.label}
+        </span>
+      </div>
+
+      {/* 現在地のバー + 目安マーカー */}
+      <div className="relative h-2 bg-slate-100 rounded-full overflow-hidden mb-2">
+        <div
+          className={`h-2 rounded-full transition-all ${style.barClass}`}
+          style={{ width: `${currentPct}%` }}
+        />
+        <div
+          aria-hidden
+          className="absolute top-0 h-2 w-0.5 bg-slate-400"
+          style={{ left: `${targetPct}%` }}
+        />
+      </div>
+
+      {/* スコア数値 + あと何点 */}
+      <p className="text-xs text-slate-600 tabular-nums mb-3">
+        現在{' '}
+        <span className="font-semibold text-slate-900">
+          {comparison.currentScore}
+        </span>
+        <span className="mx-1 text-slate-400">/</span>
+        目安{' '}
+        <span className="font-semibold text-slate-700">
+          {comparison.targetScore}
+        </span>
+        {comparison.diff > 0 ? (
+          <span className="ml-3 text-slate-700">
+            あと{' '}
+            <span className="font-semibold text-slate-900">
+              {comparison.diff}
+            </span>{' '}
+            点
+          </span>
+        ) : (
+          <span className="ml-3 text-emerald-600 font-semibold">達成済み</span>
+        )}
+      </p>
+
+      {/* 改善方向性 */}
+      {direction && (
+        <p className="text-xs text-slate-600 leading-relaxed">{direction}</p>
+      )}
+    </div>
+  );
+}
+
+function clampPct(p: number): number {
+  return Math.max(0, Math.min(100, p));
+}
+
 // ── helpers ──────────────────────────────────────────────────────
-
-function noopRewrite(_phrase: string, _answers: string[]): void {
-  // ④ 入口 view では内部 rewrite CTA は無効化（書き直しは ② edit に集約）。
-}
-
-function noopInsert(_hint: string): void {
-  // 同上。
-}
 
 function formatDateTime(isoString: string): string {
   const d = new Date(isoString);

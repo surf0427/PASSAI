@@ -1,18 +1,19 @@
-// STEP8.4/8.5: 志望理由書 edit 画面の AI 添削結果 view。
-//   STEP8.4 で page.tsx 内 top-level function として logical split、STEP8.5 で
-//   feature-local component file として physical split。
-//   state ownership / hook ownership は page.tsx 側に維持。本 view は props を受け取って
-//   render するだけの pure-ish 関数。
+// STEP-DA-3: ②「書く + 添削結果の概要」として軽量化。
+//   - 各評価カード（軸別 ScoreBar）→ 既に STEP-2 で削除済み
+//   - 「もう一度改善する」ボタン + 再添削フォーム → 既に STEP-2 で削除済み
+//   - 優先度順の改善アクション full list / 弱い点 / 良い点 AlertBox → /statement/score
+//   - 再提出チェックリスト / 部分修正例 Card → /statement/analysis/[id]
 //
-// ── ②「志望理由書を書く機能」整理 ────────────────────────────────
-// 添削後 1 ページ目は「総合評価点数＋概要＋完成度スコアを見る導線」のみに絞る。
-//   - 各評価カード（軸別 ScoreBar）→ /statement/score と内容が被るため削除
-//   - 「もう一度改善する」ボタン + 再添削フォーム → 書き直しは ④ /statement/improve
-//     に分離するため、②の添削後ページからは導線を出さない
-// 保存処理（saveReviewHistory）/ API（/api/statement-review）/ プロンプトは未変更。
+// 残すもの:
+//   - 総合スコア（大きい数値）
+//   - 各評価のコンパクト badge 列（label + score だけ）
+//   - 簡単な総評（result.actions の top 1 のみ）
+//   - 「完成度スコアを見る →」LinkButton（③ へ）
+//   - 「↑ 本文を修正する」Button（STEP-NAV-1: 同一ページ内 anchor scroll）
+//
+// 詳細分析は /statement/analysis/[id]、軸別ギャップは /statement/score に集約済み。
+// 添削 API / 保存処理は触らない（呼び出しは page.tsx 側で従来どおり）。
 
-import { Card } from '@/components/ui/Card';
-import { AlertBox } from '@/components/ui/AlertBox';
 import { Button } from '@/components/ui/Button';
 import { LinkButton } from '@/components/ui/LinkButton';
 import type { StatementResult } from '@/types/statement';
@@ -20,10 +21,11 @@ import type { StatementResult } from '@/types/statement';
 export type ReviewResultViewProps = {
   result: StatementResult | null;
   // 添削結果直下から本文入力欄へスムーズスクロールするための callback。
-  // 「もう一度改善する」UI を復活させず、同一ページ内 anchor scroll のみで戻り導線を提供する。
-  // ref 本体は page.tsx 側に集約され、InputFormView に渡される inputSectionRef を流用する。
+  // ref 本体は page.tsx 側に集約し、InputFormView に渡される inputSectionRef を流用する。
   onScrollToInput: () => void;
 };
+
+const AXIS_MAX = 20;
 
 export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewProps) {
   return (
@@ -33,9 +35,11 @@ export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewPr
           <h2 className="text-xl font-bold text-gray-800 mb-6">添削結果</h2>
 
           {/* 総合評価 */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
-            <div className="flex items-center gap-4 mb-3">
-              <span className="text-4xl font-bold text-blue-700">{result.overallScore}</span>
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-5">
+            <div className="flex items-center gap-4">
+              <span className="text-4xl font-bold text-blue-700 tabular-nums">
+                {result.overallScore}
+              </span>
               <div>
                 <p className="text-sm font-semibold text-blue-800">総合評価</p>
                 <p className="text-xs text-blue-600">/ 100点</p>
@@ -43,71 +47,30 @@ export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewPr
             </div>
           </div>
 
-          {/* 改善アクション（結論ファースト UX：優先度順で最上部に置く） */}
-          <AlertBox variant="warning" className="mb-4">
-            <h3 className="text-sm font-semibold text-yellow-800 mb-3">優先度順の改善アクション</h3>
-            <ol className="space-y-2">
-              {result.actions.map((a, i) => (
-                <li key={i} className="text-sm text-yellow-900 flex gap-2">
-                  <span className="font-bold shrink-0">{i + 1}.</span>
-                  <span>{a}</span>
-                </li>
-              ))}
-            </ol>
-          </AlertBox>
+          {/* 各評価のコンパクト badge 列。ScoreBar 等の大きい visual は ③ /statement/score 側に集約。 */}
+          <div className="flex flex-wrap gap-2 mb-5">
+            {result.evaluations.map((ev) => (
+              <span
+                key={ev.label}
+                className="inline-flex items-baseline gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1"
+              >
+                <span className="text-[11px] text-slate-600">{ev.label}</span>
+                <span className="text-sm font-semibold text-slate-900 tabular-nums">
+                  {ev.score}
+                </span>
+                <span className="text-[10px] text-slate-400">/{AXIS_MAX}</span>
+              </span>
+            ))}
+          </div>
 
-          {/* 弱い点（アクションの根拠として直下に置く） */}
-          <AlertBox variant="error" className="mb-4">
-            <h3 className="text-sm font-semibold text-red-800 mb-3">弱い点</h3>
-            <ul className="space-y-1">
-              {result.weaknesses.map((w, i) => (
-                <li key={i} className="text-sm text-red-700 flex gap-2">
-                  <span>△</span>
-                  <span>{w}</span>
-                </li>
-              ))}
-            </ul>
-          </AlertBox>
-
-          {/* 再提出チェックリスト（次にやることを目立たせる） */}
-          <Card className="mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">再提出チェックリスト</h3>
-            <ul className="space-y-2">
-              {result.checklist.map((item, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 shrink-0"
-                    id={`check-${i}`}
-                  />
-                  <label htmlFor={`check-${i}`} className="text-sm text-gray-700 cursor-pointer">
-                    {item}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          {/* 部分修正例 */}
-          <Card className="mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">部分修正例</h3>
-            <pre className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed font-sans">
-              {result.partialRevision}
-            </pre>
-          </Card>
-
-          {/* 良い点 */}
-          <AlertBox variant="success" className="mb-4">
-            <h3 className="text-sm font-semibold text-green-800 mb-3">良い点</h3>
-            <ul className="space-y-1">
-              {result.strengths.map((s, i) => (
-                <li key={i} className="text-sm text-green-700 flex gap-2">
-                  <span>✓</span>
-                  <span>{s}</span>
-                </li>
-              ))}
-            </ul>
-          </AlertBox>
+          {/* 簡単な総評: actions の top 1 を 1〜2 行で出す。
+              full list は ③ /statement/score / /statement/analysis/[id] で確認できるため概要のみ。 */}
+          {result.actions[0] && (
+            <p className="text-sm text-slate-700 leading-relaxed">
+              <span className="font-semibold text-slate-800">次に直すなら：</span>
+              {result.actions[0]}
+            </p>
+          )}
         </section>
       ) : (
         /* 添削前のプレースホルダー */

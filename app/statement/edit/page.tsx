@@ -54,11 +54,10 @@ import { parseStatementReviewError } from '@/lib/statement/review/parseStatement
 import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
-import { Accordion } from '@/components/ui/Accordion';
 // STEP8.5: edit feature 専用 view は app/statement/edit/components/ 配下へ physical split 済み。
+// STEP-DA-3: DetailAnalysisAccordionView は削除（詳細分析は /statement/analysis/[id] に集約）。
 import { InputFormView } from './components/InputFormView';
 import { ReviewResultView } from './components/ReviewResultView';
-import { DetailAnalysisAccordionView } from './components/DetailAnalysisAccordionView';
 
 // ── 面接 → 志望理由書改善 動線（STEP7.5 / STEP9）──────────────────
 // InterviewHistoryCard の CTA から ?focus=<targetSection> で遷移してきたときに、
@@ -163,16 +162,6 @@ function mapApiResponse(data: ApiReviewResponse): StatementResult {
     partialRevision: data.partialExamples.join('\n\n'),
     checklist: data.checklist,
   };
-}
-
-// ── 書き出しヒント挿入ロジック ────────────────────────────────────
-
-function appendHintToText(currentText: string, hint: string): string {
-  const trimmedHint = hint.trim();
-  if (!currentText.trim()) return trimmedHint;
-  if (currentText.endsWith('\n\n')) return `${currentText}${trimmedHint}`;
-  if (currentText.endsWith('\n')) return `${currentText}\n${trimmedHint}`;
-  return `${currentText}\n\n${trimmedHint}`;
 }
 
 // ── 書き直しメモ section の表示用 axis ラベル ───────────────────────
@@ -286,31 +275,10 @@ function StatementPageInner() {
   const focusKey: StatementImprovementTargetSection | null =
     mounted && isFocusKey(focusParam) ? focusParam : null;
 
+  // STEP-NAV-1: 添削結果直下の「↑ 本文を修正する」ボタンが scrollIntoView 先として使う。
+  // STEP-DA-3: handleStartRewrite / handleInsertStarterHint と textareaRef は、
+  // edit ページから詳細分析（NgWordCheck の deep-dive）を切り離したため削除済み。
   const inputSectionRef = useRef<HTMLElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [rewriteGuide, setRewriteGuide] = useState<{ phrase: string; answers: string[] } | null>(null);
-  const [showInsertedHint, setShowInsertedHint] = useState(false);
-
-  function handleStartRewrite(phrase: string, answers: string[]) {
-    setRewriteGuide({ phrase, answers });
-    setTimeout(() => {
-      inputSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 50);
-  }
-
-  function handleInsertStarterHint(hint: string) {
-    setStatementText((prev) => appendHintToText(prev, hint));
-    setShowInsertedHint(true);
-    // DOM更新後にフォーカスとカーソル移動を実行
-    setTimeout(() => {
-      inputSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.selectionStart = el.value.length;
-      el.selectionEnd = el.value.length;
-    }, 0);
-  }
 
   // 書き直しメモのコピー。statementText には触らない（PASSAI 思想: 本文の自動書き換えはしない）。
   // toastTimerRef は触らず fire-and-forget。
@@ -680,7 +648,10 @@ function StatementPageInner() {
         </section>
       )}
 
-      {/* STEP8.4: 入力フォーム section は InputFormView へ logical split 済み。 */}
+      {/* STEP8.4: 入力フォーム section は InputFormView へ logical split 済み。
+          STEP-DA-3: rewriteGuide / showInsertedHint / textareaRef は edit ページの詳細分析
+          切り離しに伴い削除済み（書き直しガイドの起点だった NgWordCheck deep-dive が
+          /statement/analysis/[id] 側に移ったため）。 */}
       <InputFormView
         university={university}
         setUniversity={setUniversity}
@@ -690,10 +661,6 @@ function StatementPageInner() {
         setDepartment={setDepartment}
         statementText={statementText}
         setStatementText={setStatementText}
-        rewriteGuide={rewriteGuide}
-        setRewriteGuide={setRewriteGuide}
-        showInsertedHint={showInsertedHint}
-        setShowInsertedHint={setShowInsertedHint}
         mounted={mounted}
         prepareSummary={prepareSummary}
         prepareHistory={prepareHistory}
@@ -710,7 +677,6 @@ function StatementPageInner() {
         onSaveDraft={handleSaveDraft}
         onResetForm={handleReset}
         inputSectionRef={inputSectionRef}
-        textareaRef={textareaRef}
       />
 
       {error && (
@@ -732,19 +698,10 @@ function StatementPageInner() {
         }
       />
 
-      {/* STEP8.4: 詳細分析（折りたたみ）内 content は DetailAnalysisAccordionView へ logical split 済み。
-          Accordion 自体は layout primitive として page に残す。 */}
-      <Accordion title="詳細分析を見る">
-        <DetailAnalysisAccordionView
-          result={result}
-          statementText={statementText}
-          university={university}
-          faculty={faculty}
-          activities={activities}
-          onStartRewrite={handleStartRewrite}
-          onInsertStarterHint={handleInsertStarterHint}
-        />
-      </Accordion>
+      {/* STEP-DA-3: 詳細分析 Accordion + DetailAnalysisAccordionView は削除済み。
+          深掘り分析（NgWord / Structure / EvaluationAxis）は /statement/analysis/[id] に集約。
+          edit からは ReviewResultView の「完成度スコアを見る →」（③ /statement/score）を経由して
+          そこから「詳細分析を見る →」（/statement/analysis/{id}）に進む 2 段構造になる。 */}
 
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-sm px-5 py-2.5 rounded-lg shadow-lg pointer-events-none">

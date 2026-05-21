@@ -12,10 +12,9 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Button } from '@/components/ui/Button';
 import { AlertBox } from '@/components/ui/AlertBox';
-import { RewriteGuide } from '@/components/statement/RewriteGuide';
 // STEP4-2: 書き直し対象 entry の参考表示で詳細分析 3 種を再利用。
-// 本ページ DetailAnalysisAccordionView でも同じ component を使うが、各 instance の
-// 内部 state（useDeepDive 等）は独立しているため衝突しない。
+// STEP-DA-3 で edit ページ本体の詳細分析 Accordion は削除済み。各 instance の内部 state
+// （useDeepDive 等）は独立なので、左サイド RewriteContextCard 内のみで残る。
 import { NgWordCheck } from '@/components/statement/NgWordCheck';
 import { StructureCheck } from '@/components/statement/StructureCheck';
 import { EvaluationAxisCheck } from '@/components/statement/EvaluationAxisCheck';
@@ -55,10 +54,6 @@ export type InputFormViewProps = {
   setDepartment: Dispatch<SetStateAction<string>>;
   statementText: string;
   setStatementText: Dispatch<SetStateAction<string>>;
-  rewriteGuide: { phrase: string; answers: string[] } | null;
-  setRewriteGuide: Dispatch<SetStateAction<{ phrase: string; answers: string[] } | null>>;
-  showInsertedHint: boolean;
-  setShowInsertedHint: Dispatch<SetStateAction<boolean>>;
   mounted: boolean;
   prepareSummary: StatementPrepareSummary | null;
   // ① 大学軸 prepare の履歴。1 件以上あれば左サイド欄で「整理メモ履歴」として優先表示し、
@@ -83,7 +78,6 @@ export type InputFormViewProps = {
   onSaveDraft: () => void;
   onResetForm: () => void;
   inputSectionRef: RefObject<HTMLElement | null>;
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
 };
 
 export function InputFormView({
@@ -91,8 +85,6 @@ export function InputFormView({
   faculty, setFaculty,
   department, setDepartment,
   statementText, setStatementText,
-  rewriteGuide, setRewriteGuide,
-  showInsertedHint, setShowInsertedHint,
   mounted,
   prepareSummary,
   prepareHistory,
@@ -104,7 +96,7 @@ export function InputFormView({
   remainingCount,
   submitDisabled,
   onSubmit, onSaveDraft, onResetForm,
-  inputSectionRef, textareaRef,
+  inputSectionRef,
 }: InputFormViewProps) {
   return (
     <section ref={inputSectionRef} className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
@@ -261,33 +253,14 @@ export function InputFormView({
             </div>
           )}
       <div className="mb-6">
-        {rewriteGuide && (
-          <RewriteGuide
-            key={rewriteGuide.phrase}
-            phrase={rewriteGuide.phrase}
-            answers={rewriteGuide.answers}
-            onClose={() => setRewriteGuide(null)}
-          />
-        )}
         <Label>志望理由書本文</Label>
         <Textarea
-          ref={textareaRef}
           value={statementText}
-          onChange={(e) => { setStatementText(e.target.value); setShowInsertedHint(false); }}
+          onChange={(e) => setStatementText(e.target.value)}
           rows={12}
           placeholder={`志望理由書の本文を貼り付けてください。\n\n例：\n私が○○大学△△学部を志望する理由は…`}
           className="leading-relaxed resize-y"
         />
-        {showInsertedHint && (
-          <div className="mt-2 space-y-0.5">
-            <p className="text-sm text-blue-600">
-              👇 追加された一文の「〇〇」「△△」を、あなた自身の経験・関心に置き換えてください。
-            </p>
-            <p className="text-xs text-gray-400">
-              例：〇〇＝留学先で印象に残った出来事、△△＝そこから興味を持ったテーマ
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
