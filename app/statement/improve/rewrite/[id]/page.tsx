@@ -1,9 +1,11 @@
 'use client';
 
 // STEP-IMP-1 / UX polish: ④「書き直す」do フローのページ3「書き直し準備ページ」。
-// 後続 STEP で ④ のフロー上流が変更：改善点 + 詳細分析の理解は /statement/analysis/[id] が担い、
-// 本ページはそこから「書き直し準備へ進む →」CTA 経由で到達するページに位置づけ直された。
-// 戻る link は /statement/analysis/[id]（=「分析レポートに戻る」）を指す。
+// STEP-IA-1 で ④ のフロー上流が分離された：改善点 + 詳細分析の理解は
+// /statement/improve/analysis/[id]（improve 専用 analysis）が担い、本ページはそこから
+// 「書き直し準備へ進む →」CTA 経由で到達するページに位置づけ直された。
+// 戻る link / 横参照はすべて improve 専用 analysis を指す（view-only の
+// /statement/analysis/[id] には飛ばさない）。
 //
 // 役割:
 //   - 過去に書いた志望理由書（ReviewHistoryItem）を元に「何を直すか / どう直すか」を整理する
@@ -20,9 +22,8 @@
 // 触らない:
 //   - statementReviewHistory 保存・削除ロジック（read のみ）
 //   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
-//   - rewriteDraftStorage / statement_rewrite_drafts
 //   - ② edit の URL 受け取り（?rewriteFrom=<id> 既存）と本文 prefill 経路
-//   - /statement/analysis/[id] / /statement/score
+//   - /statement/analysis/[id]（view-only score-analysis） / /statement/score
 //   - 既存 lib の API surface（IMPROVEMENT_COMMENTS / REASONINGS を read のみ）
 //
 // UI 思想:
@@ -30,7 +31,7 @@
 //   - 色は slate / blue（accent）/ red（warning がもしあれば）のみ
 //   - 「ダッシュボード感」を出さない、レポート風
 
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LinkButton } from '@/components/ui/LinkButton';
@@ -40,12 +41,25 @@ import {
   loadReviewHistory,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
+import {
+  loadRewriteMemo,
+  saveRewriteMemo,
+  saveRewriteMemoWorkAnswer,
+  type RewriteMemoWorkAnswers,
+} from '@/lib/statement/rewrite/rewriteMemoStorage';
+import {
+  getRewriteWorkQuestions,
+  type RewriteWorkQuestion,
+} from '@/lib/statement/rewrite/rewriteWorkQuestions';
 import { statementResultToScore } from '@/lib/statement/score/statementScore';
 import { breakdownToPassLineItems } from '@/lib/statement/score/statementScoreSource';
 import {
   getImprovementSuggestions,
+  getImprovementWorkKey,
   type ImprovementSuggestion,
 } from '@/lib/improvementSuggestions';
+import { pickAnalysisForAxes } from '@/lib/statement/rewrite/pickAnalysisForAxis';
+import { pickRelevantExcerpt } from '@/lib/statement/rewrite/pickRelevantExcerpt';
 
 // SSR-stable mount flag。既存ページと同形パターン。
 const subscribeMount = () => () => {};
@@ -126,10 +140,10 @@ export default function StatementImproveRewritePage() {
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <div className="mb-8">
         <Link
-          href={`/statement/analysis/${encodeURIComponent(id)}`}
+          href={`/statement/improve/analysis/${encodeURIComponent(id)}`}
           className="text-sm text-slate-500 hover:text-slate-700"
         >
-          ← 分析レポートに戻る
+          ← 改善レポートに戻る
         </Link>
       </div>
 
@@ -151,11 +165,104 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
     return getImprovementSuggestions(items, 3);
   }, [entry.result]);
 
-  // 書き直しメモ（MVP: ephemeral、localStorage 保存なし）。
-  // ページから離れると消える。永続化は別 STEP（rewritePrepMemoStorage 追加）で行う。
-  const [memo, setMemo] = useState('');
+  // v3: 各 suggestion の card 見出しに analysis-specific な指摘文を出すための割当。
+  // weaknesses / actions は flat string[] で axis tag 無しのため、keyword で greedy に
+  // 振り分ける（pickAnalysisForAxes は pure deterministic）。マッチ無しの axis は
+  // ImprovementSuggestion.reasoning / comment（generic 軸説明）に fallback する。
+  //
+  // v4: weaknessText に含まれる引用語 or axis keyword を anchor に、essay 本文から
+  // 「この文を直す」候補文を 1 つ拾う（pickRelevantExcerpt も pure deterministic）。
+  // 該当無しの axis は excerpt: null となり、card 側で「現在の本文」セクションを skip する。
+  const analysisByAxis = useMemo(() => {
+    const axisIds = suggestions.map((s) => s.id);
+    const weakness = pickAnalysisForAxes(entry.result.weaknesses ?? [], axisIds);
+    const action = pickAnalysisForAxes(entry.result.actions ?? [], axisIds);
+    const excerpt: Record<string, string | null> = {};
+    for (const s of suggestions) {
+      const wt = weakness[s.id] ?? s.reasoning;
+      excerpt[s.id] = pickRelevantExcerpt(entry.essay, s.id, wt);
+    }
+    return { weakness, action, excerpt };
+  }, [entry.result, entry.essay, suggestions]);
 
-  const analysisHref = `/statement/analysis/${encodeURIComponent(entry.id)}`;
+  // rewriteMemo は reviewId 単位で localStorage に永続化（statement_rewrite_memo）。
+  // 2 つの artifact を持つ：
+  //   - text         : 自由メモ（補足メモ）
+  //   - workAnswers  : 改善ポイント別ワークの回答（axisKey × questionKey の string map）
+  // どちらも mount 後に 1 回だけ既存 record から seed → 編集は debounce 500ms で autosave。
+  // initialMemoRef / initialWorkRef は「現在 storage に保存済みの値」をローカルに保持し、
+  // 同値の場合は autosave を skip する（mount-init 直後の不要な write を避ける）。
+  const [memo, setMemo] = useState('');
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const initialMemoRef = useRef<string | null>(null);
+
+  const [workAnswers, setWorkAnswers] = useState<RewriteMemoWorkAnswers>({});
+  const initialWorkRef = useRef<RewriteMemoWorkAnswers | null>(null);
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    // mount-init: 既存の memo / workAnswers を read。なければ baseline は空。
+    const existing = loadRewriteMemo(entry.id);
+    const baselineText = existing?.text ?? '';
+    initialMemoRef.current = baselineText;
+    setMemo(baselineText);
+    const baselineWork = existing?.workAnswers ?? {};
+    initialWorkRef.current = baselineWork;
+    setWorkAnswers(baselineWork);
+    if (existing) setLastSavedAt(existing.updatedAt);
+  }, [entry.id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    // autosave (text): mount-init が終わるまで（initialMemoRef が null）は走らない。
+    // baseline と同値なら skip（mount 直後の seed や、保存直後の冪等再描画を除外）。
+    if (initialMemoRef.current === null) return;
+    if (memo === initialMemoRef.current) return;
+    const t = setTimeout(() => {
+      const updatedAt = new Date().toISOString();
+      saveRewriteMemo(entry.id, { text: memo, updatedAt });
+      initialMemoRef.current = memo;
+      setLastSavedAt(updatedAt);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [memo, entry.id]);
+
+  useEffect(() => {
+    // autosave (workAnswers): 初期 ref に対して changed cell を diff して
+    // saveRewriteMemoWorkAnswer で 1 個ずつ upsert する。
+    // saveRewriteMemoWorkAnswer は text を維持しつつ updatedAt を更新する（merge 動作）。
+    if (initialWorkRef.current === null) return;
+    const initial = initialWorkRef.current;
+    const t = setTimeout(() => {
+      let saved = false;
+      for (const [axisKey, axis] of Object.entries(workAnswers)) {
+        if (!axis) continue;
+        const initAxis = initial[axisKey] ?? {};
+        for (const [qKey, val] of Object.entries(axis)) {
+          if (val === undefined) continue;
+          if (initAxis[qKey] === val) continue;
+          saveRewriteMemoWorkAnswer(entry.id, axisKey, qKey, val);
+          saved = true;
+        }
+      }
+      initialWorkRef.current = workAnswers;
+      if (saved) setLastSavedAt(new Date().toISOString());
+    }, 500);
+    return () => clearTimeout(t);
+  }, [workAnswers, entry.id]);
+
+  const handleWorkChange = (
+    axisKey: string,
+    questionKey: string,
+    value: string,
+  ) => {
+    setWorkAnswers((prev) => ({
+      ...prev,
+      [axisKey]: { ...(prev[axisKey] ?? {}), [questionKey]: value },
+    }));
+  };
+
+  const analysisHref = `/statement/improve/analysis/${encodeURIComponent(entry.id)}`;
   const editHref = `/statement/edit?rewriteFrom=${encodeURIComponent(entry.id)}`;
 
   return (
@@ -177,69 +284,87 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
 
       {/* ── 元の志望理由書 ──────────────────────────────────────
           「分析資料」ではなく「推敲対象の文章」として読める typography。
-          base サイズ + 行間広め + max-width で読書密度を確保する。 */}
-      <Section title="元の志望理由書">
-        <pre className="whitespace-pre-wrap text-slate-700 font-sans text-base leading-[1.85]">
-          {entry.essay}
-        </pre>
-      </Section>
+          base サイズ + 行間広め + max-width で読書密度を確保する。
+          STEP-REW-3: <details open> でラップして「初回は自然に読める／必要なくなったら閉じれる」
+            運用に切替。closed default ではなく open default（rewrite は本文を見ながら整理する
+            価値が大きいため）。Section primitive は h2 を summary に内包する形に展開する。 */}
+      <section className="mb-16">
+        <details open className="group">
+          <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-baseline gap-3 mb-6">
+            <h2 className="text-xl font-semibold text-slate-900 tracking-tight flex-1">
+              元の志望理由書
+            </h2>
+            <span className="text-xs text-slate-500 tabular-nums">
+              {entry.essay.length} 文字
+            </span>
+            <span className="shrink-0 text-slate-400 transition-transform group-open:rotate-180 inline-block text-sm leading-none">
+              ▾
+            </span>
+          </summary>
+          <pre className="whitespace-pre-wrap text-slate-700 font-sans text-base leading-[1.85]">
+            {entry.essay}
+          </pre>
+        </details>
+      </section>
 
-      {/* ── 改善ポイント ──────────────────────────────────────
-          各軸を「なぜ重要か → どう直すか → Before / After 例」の 3 段で展開し、
-          「読んだ後に書き始めたくなる」流れに作る。
-          数値（current / target / diff）は出さない。 */}
-      <Section title="改善ポイント">
-        {suggestions.length === 0 ? (
+      {/* ── 改善ポイント（v3: analysis-specific な指摘 × ワーク を統合した実行 card）─────
+          STEP-WORK v3: 旧「書き直しの参考例」+「改善ポイント別ワーク」を 1 セクションに統合。
+          各 card は axis label を主役にせず、analysis レポート由来の essay-specific な指摘
+          （weakness / action）を見出しに据えて、その下に static questions を並べる。
+          axis は内部 key（workAnswers の axisKey）として残し、chip 表示と questions の lookup
+          にのみ使う。weakness / action は pickAnalysisForAxes で keyword 割当て、無ければ
+          IMPROVEMENT_REASONINGS / IMPROVEMENT_COMMENTS の generic 文に fallback。
+          AI summary や snapshot は持たない（edit 側で render-time derive する方針）。 */}
+      {suggestions.length === 0 ? (
+        <Section title="改善ポイント">
           <p className="text-sm text-slate-500 leading-relaxed">
             このスコアでは目立った改善ポイントは検出されませんでした。詳細分析で他の観点を確認できます。
           </p>
-        ) : (
-          <ul className="divide-y divide-slate-100">
+        </Section>
+      ) : (
+        <Section title="改善ポイント">
+          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+            分析レポートで指摘された改善点ごとに、本文に入れる素材を書き出していきましょう。書いた内容は書き直し画面で見ながら執筆できます。
+          </p>
+          <ul className="space-y-4 list-none">
             {suggestions.map((s, i) => {
-              const example = IMPROVEMENT_EXAMPLES[s.id];
+              const axisKey = getImprovementWorkKey(s);
+              const questions = getRewriteWorkQuestions(axisKey);
+              const weaknessText = analysisByAxis.weakness[axisKey] ?? s.reasoning;
+              const actionText = analysisByAxis.action[axisKey] ?? s.comment;
+              const excerptText = analysisByAxis.excerpt[axisKey] ?? null;
               return (
-                <li key={s.id} className="py-7 first:pt-0 last:pb-0">
-                  <div className="flex items-baseline gap-3 mb-4">
-                    <span className="text-[11px] font-semibold text-slate-400 tabular-nums">
-                      {i + 1}
-                    </span>
-                    <h3 className="text-base font-medium text-slate-900">
-                      {s.label}
-                    </h3>
-                  </div>
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                        なぜ重要か
-                      </p>
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        {s.reasoning}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                        どう直すか
-                      </p>
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        {s.comment}
-                      </p>
-                    </div>
-                    {example && <BeforeAfter example={example} />}
-                  </div>
+                <li key={`work-${s.id}`}>
+                  <ImprovementActionCard
+                    index={i}
+                    suggestion={s}
+                    axisKey={axisKey}
+                    questions={questions}
+                    answers={workAnswers[axisKey] ?? {}}
+                    onChange={handleWorkChange}
+                    weaknessText={weaknessText}
+                    actionText={actionText}
+                    excerptText={excerptText}
+                    example={IMPROVEMENT_EXAMPLES[s.id]}
+                  />
                 </li>
               );
             })}
           </ul>
-        )}
-      </Section>
+        </Section>
+      )}
 
-      {/* ── 書き直しメモ ─────────────────────────────────────
-          「読む」から「書き始める」への橋渡し。CTA の直前に置く。
-          MVP: localStorage 保存なし。永続化は別 STEP。 */}
-      <Section title="書き直しメモ">
-        <Label htmlFor="rewrite-memo">直す方針を書き留める</Label>
+      {/* ── 書き直し方針メモ（補足メモ）─────────
+          STEP-REW-1: 元本文の直後・参考例の前に配置して「まず整理を書く」流れに変えた。
+          STEP-WORK-2: 改善ポイント別ワークが主役 artifact になったため、本セクションは
+            「ワークで書ききれなかった気付きを書き留める」補足メモへ役割を移した。配置も
+            ワークの下に移動。text 自体の保存ロジックは不変（saveRewriteMemo は workAnswers
+            未指定なら既存 workAnswers を保持する merge 動作）。
+          表示用の lastSavedAt は最後に成功した save の ISO 文字列（text/workAnswers 共通）。 */}
+      <Section title="書き直し方針メモ">
+        <Label htmlFor="rewrite-memo">補足として書き留める</Label>
         <p className="text-xs text-slate-400 mb-3 leading-relaxed">
-          このメモはページを離れると消えます。書き出す前に「何を直すか」を整理する作業用です。
+          上のワークに収まらない気付きや、全体に関わるメモを書く場所です。入力は自動的に保存されます。
         </p>
         <Textarea
           id="rewrite-memo"
@@ -251,6 +376,9 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
         />
         <p className="text-xs text-slate-400 tabular-nums mt-2">
           {memo.length} 文字
+          {lastSavedAt && (
+            <span className="ml-3">最終更新 {formatDateTime(lastSavedAt)}</span>
+          )}
         </p>
       </Section>
 
@@ -278,16 +406,149 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
         </p>
       </section>
 
-      {/* footer back link */}
-      <div className="mt-8">
-        <Link
-          href={`/statement/analysis/${encodeURIComponent(entry.id)}`}
-          className="text-sm text-slate-500 hover:text-slate-700"
-        >
-          ← 分析レポートに戻る
-        </Link>
-      </div>
     </article>
+  );
+}
+
+// ── 改善ポイント card（v4: 「どこを直すか」を明示する実行 card）─────
+// 1 suggestion = 1 details カード。closed default。
+// summary に「改善ポイント①」+ axis chip + filled count + diff を出し、開くと
+//   1. weaknessText（analysis 由来の essay-specific 指摘 / fallback: reasoning）
+//   2. 現在の本文（excerptText, pickRelevantExcerpt の heuristic 抽出 / null なら非表示）
+//   3. actionText（"改善するには" + analysis 由来の具体アクション / fallback: comment）
+//   4. 本文に入れる素材（static questions、existing autosave 経路は不変）
+//   5. 具体的な書き換え例（Before/After、generic だが補助として残す）
+// が並ぶ。textarea の value/onChange は親（RewritePrep）の workAnswers state を更新する。
+// storage shape（axisKey × questionKey × string）は STEP-WORK-2 から変更なし。
+
+function ImprovementActionCard({
+  index,
+  suggestion,
+  axisKey,
+  questions,
+  answers,
+  onChange,
+  weaknessText,
+  actionText,
+  excerptText,
+  example,
+}: {
+  index: number;
+  suggestion: ImprovementSuggestion;
+  axisKey: string;
+  questions: RewriteWorkQuestion[];
+  answers: Partial<Record<string, string>>;
+  onChange: (axisKey: string, questionKey: string, value: string) => void;
+  weaknessText: string;
+  actionText: string;
+  excerptText: string | null;
+  example: AxisExample | undefined;
+}) {
+  const filledCount = questions.reduce(
+    (n, q) => n + (answers[q.key] && answers[q.key]!.length > 0 ? 1 : 0),
+    0,
+  );
+  return (
+    <details className="group rounded-xl border border-slate-200 bg-white hover:border-violet-200 hover:shadow-sm transition-colors">
+      <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-3 px-4 sm:px-5 py-4">
+        <span className="inline-flex items-center justify-center size-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold tabular-nums shrink-0">
+          {index + 1}
+        </span>
+        <h3 className="text-base font-semibold text-slate-900 flex-1 min-w-0 truncate">
+          改善ポイント{index + 1}
+        </h3>
+        <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 rounded-full px-2 py-0.5 tracking-wide">
+          {suggestion.label}
+        </span>
+        <span
+          className={`text-xs tabular-nums ${
+            filledCount > 0 && filledCount === questions.length
+              ? 'text-violet-700 font-semibold'
+              : 'text-slate-400'
+          }`}
+        >
+          {filledCount}/{questions.length}
+        </span>
+        {suggestion.diff > 0 && (
+          <span className="text-xs text-slate-500 tabular-nums">
+            +{suggestion.diff}
+          </span>
+        )}
+        <span className="shrink-0 text-slate-400 transition-transform group-open:rotate-180 inline-block text-sm leading-none">
+          ▾
+        </span>
+      </summary>
+      <div className="space-y-5 px-4 sm:px-5 pb-5 pt-1">
+        {/* 1. analysis 由来の essay-specific な指摘（card の主役） */}
+        <p className="text-sm text-slate-800 leading-relaxed break-words">
+          {weaknessText}
+        </p>
+        {/* 2. 現在の本文（v4: essay から heuristic 抽出した「直す対象の 1 文」）。
+            該当無しの場合は表示しない。長文は line-clamp で視覚的に丸める（本体は保持）。
+            UI polish: rewrite flow の accent である violet を使って「直す対象」を視覚的にマーク。 */}
+        {excerptText && (
+          <div className="rounded-lg bg-violet-50/50 border-l-2 border-violet-300 px-4 py-3">
+            <p className="text-[11px] font-semibold text-violet-700 uppercase tracking-wider mb-1.5">
+              現在の本文
+            </p>
+            <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words line-clamp-4">
+              「{excerptText}」
+            </p>
+          </div>
+        )}
+        {/* 3. 改善するには（analysis 由来 / fallback: generic comment）。
+            左 border の薄い accent で「現在の本文 → 改善するには → 質問」の視線誘導を補助。 */}
+        <div className="border-l-2 border-slate-200 pl-3">
+          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
+            改善するには
+          </p>
+          <p className="text-sm text-slate-600 leading-relaxed break-words">
+            {actionText}
+          </p>
+        </div>
+        {/* 4. 本文に入れる素材（static questions × autosave） */}
+        <div>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-3">
+            本文に入れる素材
+          </p>
+          <div className="space-y-5">
+            {questions.map((q) => {
+              const fieldId = `work-${axisKey}-${q.key}`;
+              const value = answers[q.key] ?? '';
+              return (
+                <div key={q.key}>
+                  <Label htmlFor={fieldId} className="text-sm">
+                    {q.label}
+                  </Label>
+                  <Textarea
+                    id={fieldId}
+                    value={value}
+                    onChange={(e) => onChange(axisKey, q.key, e.target.value)}
+                    rows={3}
+                    placeholder={q.placeholder}
+                    className="leading-relaxed resize-y"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* 5. 参考の書き換え例（軸 generic な Before/After。analysis 由来ではない補助情報） */}
+        {example && (
+          <details className="group/inner">
+            <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              <span>具体的な書き換え例（参考）</span>
+              <span className="text-slate-400 transition-transform group-open/inner:rotate-180 inline-block text-sm leading-none">
+                ▾
+              </span>
+            </summary>
+            <div className="pt-3">
+              <BeforeAfter example={example} />
+            </div>
+          </details>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -296,6 +557,9 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
 // 縦並びの 2 ブロック + 区切り線 1 本。色付き Card にせず、subtle な背景で「変化」を見せる。
 
 function BeforeAfter({ example }: { example: AxisExample }) {
+  // UI polish: Before は muted（slate）、After は subtle positive（violet）に振り分けて
+  // 「変化」を色のトーンで示す。card 全体は bg-slate-50 で控えめに、内部の After 区画にだけ
+  // 微弱な violet tint を当てる。
   return (
     <div className="rounded-lg bg-slate-50 px-4 py-4 sm:px-5 sm:py-5">
       <div className="mb-3">
@@ -306,8 +570,8 @@ function BeforeAfter({ example }: { example: AxisExample }) {
           「{example.before}」
         </p>
       </div>
-      <div className="border-t border-slate-200 pt-3 mb-3">
-        <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider mb-1.5">
+      <div className="rounded-md bg-violet-50/60 border-l-2 border-violet-300 px-3 py-2.5 mb-3">
+        <p className="text-[10px] font-semibold text-violet-700 uppercase tracking-wider mb-1.5">
           After
         </p>
         <p className="text-sm text-slate-800 leading-relaxed">

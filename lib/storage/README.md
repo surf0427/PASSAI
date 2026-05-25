@@ -99,7 +99,7 @@ raw string ストレージには以下のコメントを必ず付けること:
 | `statement_prepare_summary` | `lib/statementPrepareStorage.ts` | JSON | 志望理由書 整理メモ AI 出力 5 項目（impressiveExperience / feltIssue / interestInField / universityLearning / futureApplication） |
 | `statementPrepareFollowUpAnswers` | `lib/statementPrepareStorage.ts` | JSON | 志望理由書 整理メモの深掘り回答（弱点別） |
 | `statement_prepare_limit` | `lib/statementPrepareLimit.ts` | JSON | 志望理由書 整理メモ AI 日次回数（daily limit） |
-| `statement_rewrite_drafts` | `lib/statement/rewrite/rewriteDraftStorage.ts` | JSON | 志望理由書の軸別「書き直し下書き」（Phase C で追加）。canonical な `statementDraft` とは独立した work-in-progress 領域。`Partial<Record<axisId, { text, checkedItems, updatedAt }>>`。axisId は `logic` / `specificity` / `universityFit` / `futureGoal` / `originality`。本文へのマージは別 phase |
+| `statement_rewrite_memo` | `lib/statement/rewrite/rewriteMemoStorage.ts` | JSON | reviewId（`statementReviewHistory` の id）単位の「書き直し方針メモ」。`/statement/improve/rewrite/[id]` でユーザーが書く整理 artifact。`Partial<Record<reviewId, { text, updatedAt, version?: 2, workAnswers?: Partial<Record<string, Partial<Record<string, string>>>> }>>`。v1 record（`version` 無し）は後方互換で透過 load される。`workAnswers` は改善ポイント別ワークの回答（外側 key = axis/improvement key、内側 key = 質問 id）。AI 出力・bullet snapshot は持たない（analysis = master 方針、edit 側は render-time derive）。旧 `statement_rewrite_drafts`（軸別、撤去済み）の後継。user の localStorage に旧 key の残骸が残っていても誰も読まないため放置 |
 | `essayPracticeData` | `lib/essayPracticeStorage.ts` | JSON | 小論文練習の進捗状態（途中保存） |
 | `essayPracticeReview` | `lib/essayPracticeStorage.ts` | JSON | 小論文添削結果の保存 |
 | `passai_diagnosis_result` | `lib/diagnosisStorage.ts` | JSON | 受験タイプ診断結果（LP → 診断 → 結果動線で再訪復元用） |

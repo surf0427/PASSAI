@@ -158,7 +158,7 @@ PASSAI には緑系 success UI が 4 件存在する：
 
 1. **success は "variant" ではなく "state"**：variant は「同じ操作の見た目バリエーション」、success は「同じボタンの一時的な表情」。axis が異なる
 2. **緑を増やすと「主要 CTA = 青」の規律が崩れる**：常時画面上に緑が存在すると青の優先性が薄まる
-3. **既に "色を変えない success" の成功例がある**：`components/ImprovementGuide/RewriteForm.tsx` は Button primary のまま `{savedFlash ? '✓ 保存しました' : '保存する'}` で success を表現済み。色を変えずに children だけで成立している
+3. **既に "色を変えない success" の成功例がある**：旧 `components/ImprovementGuide/RewriteForm.tsx`（STEP-ORPHAN-2 で撤去済み）が Button primary のまま `{savedFlash ? '✓ 保存しました' : '保存する'}` で success を表現していた。色を変えずに children だけで成立する方針はそのまま維持
 4. **4 件のうち 3 件は raw 維持で違和感がない**：それぞれ panel 内文脈が成立しているため、Button 体系に組み込む必要がない
 
 ### 緑系 button の今後の運用ルール
@@ -269,7 +269,7 @@ PASSAI には緑系 success UI が 4 件存在する：
 
 | 拡張案 | 判定 | 理由 |
 | --- | --- | --- |
-| `loading` prop | **却下** | RewriteForm パターンで children 切替で十分。spinner UI が他の primitive で確立してから |
+| `loading` prop | **却下** | children 切替（`{loading ? '保存中…' : '保存する'}`）で十分。spinner UI が他の primitive で確立してから |
 | `success` variant | **却下** | 5 節の通り。緑を増やさない |
 | `subtle` size | **保留** | 該当 1 件のみ。3 件出るまで保留 |
 | `chip` size | **却下** | 別 primitive 化が筋。Button に入れない |

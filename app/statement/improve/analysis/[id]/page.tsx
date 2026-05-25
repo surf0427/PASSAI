@@ -1,19 +1,25 @@
 'use client';
 
-// STEP-DA-1: 詳細分析専用ページ。
-// STEP-UI-CLEANUP-2: 「カードを並べる管理画面UI」から「1 枚の分析レポートを読むUI」へ寄せる。
-// STEP-DA-SEPARATION: view と do の責務分離。本ページは「③ score の詳細を閲覧するだけ」の
-//   view-only ページに固定する。rewrite / improve への CTA は持たない（改善動線は ④ improve
-//   hub 側に集約）。入口は ③ score の「詳細分析を見る →」のみ。出口は「← 今のスコアに戻る」。
+// STEP-IA-1: ④ improve flow 専用 analysis page。
+//   入口 = improve hub（一覧）の各カードクリック。
+//   出口 = 下部 primary CTA 「書き直し準備へ進む →」→ /statement/improve/rewrite/[id]。
+//   戻り = 「← 一覧に戻る」 → /statement/improve。
 //
-// 設計方針:
-//   - white 主体、border 最小、Card / AlertBox を使わない
-//   - 使用色は slate / blue / red のみ。緑・黄 ベースの「状態色」を全廃
-//   - section は box ではなく余白主体のレポートブロック
-//   - status は WarningBadge / MutedBadge の 2 種だけ。色の意味論を単純化
-//   - 詳細分析 3 種（NgWord / Structure / EvaluationAxis）は lib（detectNgWords / analyzeStructure /
-//     getEvaluationAxes / checkAxis）を直呼び出しして inline render する。本ページが唯一の
-//     詳細分析表示箇所（STEP-ORPHAN-3 で旧 Component wrapper 群は撤去済み）。
+//   ③ score の view-only analysis（/statement/analysis/[id]）とは別ページに分離した。
+//   shared component 化は意図的に避け、両ページが今後 hierarchy / CTA / tone でズレても
+//   片方の変更がもう片方を壊さないようにしている。analysis intelligence （lib の
+//   detectNgWords / analyzeStructure / getEvaluationAxes / checkAxis / result.actions /
+//   weaknesses / strengths）自体は両ページで reuse する。
+//
+// hierarchy（do oriented）:
+//   1. 改善ポイント（最優先・violet accent）             ← result.actions
+//   2. なぜ弱いか                                          ← result.weaknesses
+//   3. 現在の本文（推敲対象として読ませる）                  ← entry.essay
+//   4. 改善の方向（具体的にどこを直すか）                    ← Evaluation / Structure / NgWord
+//   5. 残したい良い点（compact, 末尾）                       ← result.strengths
+//   6. 書き直し準備へ進む CTA                              → /statement/improve/rewrite/[id]
+//
+//   score-analysis 側は「現在の状態」が主役、improve-analysis 側は「どこを直すべきか」が主役。
 //
 // 触らない（ロジック・契約完全保持）:
 //   - statementReviewHistory の保存・削除ロジック
@@ -50,7 +56,6 @@ const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
-// ── 構造分析の表示順 / ラベル（StructureAnalysis と同一の固定 mapping） ──
 const STRUCTURE_LABELS: Record<StructureElement, string> = {
   trigger: 'きっかけ',
   problem: '課題・問題意識',
@@ -69,7 +74,7 @@ const STRUCTURE_DISPLAY_ORDER: StructureElement[] = [
   'future',
 ];
 
-export default function StatementAnalysisPage() {
+export default function StatementImproveAnalysisPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
 
@@ -96,25 +101,25 @@ export default function StatementAnalysisPage() {
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <div className="mb-8">
         <Link
-          href="/statement/score"
+          href="/statement/improve"
           className="text-sm text-slate-500 hover:text-slate-700"
         >
-          ← 今のスコアに戻る
+          ← 一覧に戻る
         </Link>
       </div>
 
       {isMounted && entry === null && <NotFound />}
       {isMounted && entry !== null && (
-        <AnalysisReport entry={entry} activities={activities} />
+        <ImproveReport entry={entry} activities={activities} />
       )}
     </div>
   );
 }
 
 // ── レポート本体 ──────────────────────────────────────────────────
-// <article> 単位で見せる。section は枠ではなく余白で区切る。
+// do oriented hierarchy: 何を / なぜ / どこを / どう直すか の順に積み上げる。
 
-function AnalysisReport({
+function ImproveReport({
   entry,
   activities,
 }: {
@@ -123,67 +128,59 @@ function AnalysisReport({
 }) {
   return (
     <article>
-      {/* Header: 枠なし、タイポグラフィのみ */}
       <header className="mb-14">
         <p className="text-xs text-slate-400 tabular-nums mb-3">
           {formatDateTime(entry.createdAt)}
         </p>
         <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 tracking-tight mb-2">
-          分析レポート
+          改善レポート
         </h1>
         <p className="text-sm text-slate-500 mb-5">
           {[entry.university || '大学未入力', entry.faculty, entry.department]
             .filter((v) => v && v.length > 0)
             .join(' / ')}
         </p>
-        <div className="inline-flex items-baseline gap-2 rounded-lg bg-slate-50 border border-slate-200 px-4 py-2">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-            総合スコア
-          </span>
-          <span className="text-2xl font-semibold text-slate-900 tabular-nums">
-            {entry.result.overallScore}
-          </span>
-          <span className="text-xs text-slate-400">/ 100</span>
-        </div>
+        <p className="text-sm text-slate-600 leading-relaxed max-w-xl">
+          どこを直すかを決めて、書き直し準備に進みましょう。
+        </p>
       </header>
 
-      <Section title="本文">
+      {/* 1. 改善ポイント（最優先・violet accent） ─────────────────── */}
+      {entry.result.actions.length > 0 && (
+        <section className="mb-16">
+          <div className="rounded-lg bg-violet-50/40 border border-violet-100 px-5 sm:px-6 py-5 sm:py-6">
+            <h2 className="text-xs font-semibold text-violet-700 uppercase tracking-wider mb-4">
+              改善ポイント
+            </h2>
+            <ol className="list-decimal pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-violet-400">
+              {entry.result.actions.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ol>
+          </div>
+        </section>
+      )}
+
+      {/* 2. なぜ弱いか ─────────────────────────────────────────── */}
+      {entry.result.weaknesses.length > 0 && (
+        <Section title="なぜ弱いか">
+          <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-slate-400">
+            {entry.result.weaknesses.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {/* 3. 現在の本文（推敲対象として読ませる） ────────────────────── */}
+      <Section title="現在の本文">
         <pre className="whitespace-pre-wrap leading-relaxed text-slate-700 font-sans text-[15px]">
           {entry.essay}
         </pre>
       </Section>
 
-      <Section title="総合分析">
-        {entry.result.actions.length > 0 && (
-          <Subsection title="改善ポイント">
-            <ol className="list-decimal pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-slate-400">
-              {entry.result.actions.map((a, i) => (
-                <li key={i}>{a}</li>
-              ))}
-            </ol>
-          </Subsection>
-        )}
-        {entry.result.weaknesses.length > 0 && (
-          <Subsection title="弱い点">
-            <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-slate-400">
-              {entry.result.weaknesses.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          </Subsection>
-        )}
-        {entry.result.strengths.length > 0 && (
-          <Subsection title="良い点">
-            <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-slate-400">
-              {entry.result.strengths.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ul>
-          </Subsection>
-        )}
-      </Section>
-
-      <Section title="詳細分析">
+      {/* 4. 改善の方向（具体的にどこを直すか） ────────────────────── */}
+      <Section title="改善の方向">
         <EvaluationAxisReport
           text={entry.essay}
           university={entry.university}
@@ -198,20 +195,39 @@ function AnalysisReport({
         />
       </Section>
 
-      {/* 詳細分析を読み終えたユーザーが、自然に他機能（書き直す / 過去結果を見る等）へ
-          移れるよう、ページ末尾に志望理由書機能一覧への戻り導線を置く。
-          本ページは view-only でフロー上の primary CTA は持たないため、competition なし。 */}
-      <div className="mt-12 pt-6 border-t border-slate-100 flex justify-center">
-        <LinkButton href="/statement" variant="secondary" size="md">
-          志望理由書機能一覧に戻る
+      {/* 5. 残したい良い点（compact, 末尾） ───────────────────────── */}
+      {entry.result.strengths.length > 0 && (
+        <Section title="残したい良い点">
+          <p className="text-sm text-slate-500 leading-relaxed mb-4">
+            書き直すときも、ここは活かしましょう。
+          </p>
+          <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700 leading-relaxed marker:text-slate-400">
+            {entry.result.strengths.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {/* 6. primary CTA → 書き直し準備 ─────────────────────────── */}
+      <section className="mt-4 mb-8">
+        <LinkButton
+          href={`/statement/improve/rewrite/${encodeURIComponent(entry.id)}`}
+          variant="primary"
+          size="lg"
+          className="w-full sm:w-auto"
+        >
+          書き直し準備へ進む →
         </LinkButton>
-      </div>
+        <p className="text-xs text-slate-400 mt-3 leading-relaxed">
+          改善ポイントをもとに、Before / After や書き直しメモを整理する準備ページへ進みます。
+        </p>
+      </section>
     </article>
   );
 }
 
 // ── レイアウト primitives ─────────────────────────────────────────
-// section / subsection を「枠 + 背景」ではなく「余白 + 見出し」で区切る。
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -236,8 +252,6 @@ function Subsection({ title, children }: { title: string; children: ReactNode })
 }
 
 // ── Badge primitives ──────────────────────────────────────────────
-// 全 status を 2 種に集約: 注意喚起 = WarningBadge / それ以外 = MutedBadge。
-// 緑「OK」や黄色「中」も MutedBadge に寄せて色の主張を消す。
 
 function MutedBadge({ children }: { children: ReactNode }) {
   return (
@@ -256,8 +270,6 @@ function WarningBadge({ children }: { children: ReactNode }) {
 }
 
 // ── 大学・学部との一致 ────────────────────────────────────────────
-// lib/admissionEvaluationAxes（getEvaluationAxes / checkAxis）を直接呼ぶ。UI は list-row 化。
-// status='missing' のみ WarningBadge、'maybe' は MutedBadge（緑/黄を排除）。
 
 function EvaluationAxisReport({
   text,
@@ -317,9 +329,6 @@ function EvaluationAxisReport({
 }
 
 // ── 構造分析 ──────────────────────────────────────────────────────
-// score 0/1/2 の閾値ロジックは StructureAnalysis 側のまま。UI のみ簡略化。
-// 既存の score>=2='green' / score=1='amber' / score=0='red' の 3 色出し分けを
-// 「< 2 → WarningBadge / それ以外 → MutedBadge」の 2 値に集約。
 
 function StructureReport({ text }: { text: string }) {
   const analysis = useMemo<StructureAnalysis[]>(() => {
@@ -365,9 +374,7 @@ function StructureReport({ text }: { text: string }) {
 }
 
 // ── 抽象表現・文章品質（NGワード分析） ────────────────────────────
-// lib/detectNgWords を直接呼ぶ。deep-dive 系の対話 UI は持たない（責務: 理解のみ）。
-// 「修正候補リスト」として理由 / 改善方向 / 手がかり を読み物的に並べる。
-// severity='high' のみ WarningBadge、それ以外は MutedBadge。
+// improve flow では「改善の方向」ラベルを復活させる（do oriented）。
 
 function NgWordReport({
   text,
@@ -413,7 +420,7 @@ function NgWordReport({
               </div>
               <div>
                 <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                  改善ヒント
+                  改善の方向
                 </p>
                 <p className="text-sm text-slate-600 leading-relaxed">
                   {issue.suggestion}
@@ -447,8 +454,8 @@ function NotFound() {
       <p className="text-sm text-slate-500 leading-relaxed mb-6 max-w-md mx-auto">
         指定された志望理由書の記録が見つかりませんでした。
       </p>
-      <LinkButton href="/statement/score" variant="primary" size="md">
-        今のスコアへ戻る
+      <LinkButton href="/statement/improve" variant="primary" size="md">
+        一覧へ戻る
       </LinkButton>
     </div>
   );

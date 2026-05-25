@@ -5,22 +5,20 @@
 //   render するだけの pure-ish 関数。
 //   PREPARE_SUMMARY_FIELDS は本 view 専用 const として同居（他 view からの参照なし）。
 
-import type { Dispatch, SetStateAction, RefObject } from 'react';
+import { useMemo, type Dispatch, type SetStateAction, type RefObject } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { Label } from '@/components/ui/Label';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Button } from '@/components/ui/Button';
-import { AlertBox } from '@/components/ui/AlertBox';
-// STEP4-2: 書き直し対象 entry の参考表示で詳細分析 3 種を再利用。
-// STEP-DA-3 で edit ページ本体の詳細分析 Accordion は削除済み。各 instance の内部 state
-// （useDeepDive 等）は独立なので、左サイド RewriteContextCard 内のみで残る。
-import { NgWordCheck } from '@/components/statement/NgWordCheck';
-import { StructureCheck } from '@/components/statement/StructureCheck';
-import { EvaluationAxisCheck } from '@/components/statement/EvaluationAxisCheck';
-import { detectNgWords } from '@/lib/detectNgWords';
+import { LinkButton } from '@/components/ui/LinkButton';
 import type { ReviewHistoryItem } from '@/lib/statement/review/statementStorage';
-import type { ActivityData } from '@/types/activity';
+import { loadRewriteMemo } from '@/lib/statement/rewrite/rewriteMemoStorage';
+import {
+  deriveRewriteWorkSections,
+  hasAnyWorkAnswer,
+} from '@/lib/statement/rewrite/deriveRewriteWorkSections';
 import {
   clearStatementPrepareFollowUpAnswers,
   type StatementPrepareFollowUpAnswers,
@@ -59,12 +57,12 @@ export type InputFormViewProps = {
   // ① 大学軸 prepare の履歴。1 件以上あれば左サイド欄で「整理メモ履歴」として優先表示し、
   // prepareSummary 単体表示は履歴 0 件時の fallback に下げる。
   prepareHistory: UniversityPrepareEntry[];
-  // STEP4-2: ④ → ② への書き直し対象。non-null なら左サイド上部に「書き直し中：参考メモ」
-  // Card を表示する。本文 textarea 自体は page.tsx 側で mount-init に 1 回 prefill 済み。
+  // 履歴 1 件削除 callback。各 entry の expanded footer から呼ばれる。confirm は親側で実行。
+  onDeletePrepareEntry: (id: string) => void;
+  // STEP4-2 / 命名整理: ④ → ② への書き直し対象。non-null なら左サイド上部に
+  // 「前回の分析（書き直し対象）」breadcrumb Card を表示し、深掘りは analysis page へ link 誘導する。
+  // 本文 textarea 自体は page.tsx 側で mount-init に 1 回 prefill 済み。
   rewriteContext: ReviewHistoryItem | null;
-  // 書き直し対象の詳細分析（NgWordCheck）が require する activity data。
-  // page.tsx 側で既に load 済みのものを props で渡す。
-  activities: ActivityData | null;
   prepareFollowUps: StatementPrepareFollowUpAnswers;
   setPrepareFollowUps: Dispatch<SetStateAction<StatementPrepareFollowUpAnswers>>;
   showReferenceNotes: boolean;
@@ -88,8 +86,8 @@ export function InputFormView({
   mounted,
   prepareSummary,
   prepareHistory,
+  onDeletePrepareEntry,
   rewriteContext,
-  activities,
   prepareFollowUps, setPrepareFollowUps,
   showReferenceNotes, setShowReferenceNotes,
   loading,
@@ -108,7 +106,7 @@ export function InputFormView({
           <Input
             value={university}
             onChange={(e) => setUniversity(e.target.value)}
-            placeholder="例：○○大学"
+            placeholder="〇〇大学"
           />
         </div>
         <div>
@@ -116,7 +114,7 @@ export function InputFormView({
           <Input
             value={faculty}
             onChange={(e) => setFaculty(e.target.value)}
-            placeholder="例：国際文化学部"
+            placeholder="〇〇学部"
           />
         </div>
         <div className="sm:col-span-2">
@@ -124,7 +122,7 @@ export function InputFormView({
           <Input
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
-            placeholder="例：国際文化学科"
+            placeholder="〇〇学科"
           />
         </div>
       </div>
@@ -137,7 +135,15 @@ export function InputFormView({
       {/* STEP4-2: ④ → ② への書き直し対象の参考メモ。左サイド最上部に置き、
           書き直し中であることを明示する。本文 textarea には mount-init で 1 回 prefill 済み。 */}
       {mounted && rewriteContext !== null && (
-        <RewriteContextCard entry={rewriteContext} activities={activities} />
+        <RewriteContextCard entry={rewriteContext} />
+      )}
+
+      {/* STEP-WORK-3: rewriteMemo.workAnswers を read-only bullet として表示する。
+          source は rewrite/[id] で書いた axisKey × questionKey の string map。
+          ここでは AI summary を作らず、render-time に「軸 → 質問 → 回答」へ derive するだけ。
+          回答 0 件なら card 自体を出さない（rewrite/[id] への動線は上の RewriteContextCard 参照）。 */}
+      {mounted && rewriteContext !== null && (
+        <RewriteWorkSummaryCard entry={rewriteContext} />
       )}
 
       {/* ① 大学軸 prepare の履歴一覧（最新が先頭）。1 件以上あればここを優先表示し、
@@ -152,7 +158,10 @@ export function InputFormView({
           <ul className="space-y-2">
             {prepareHistory.map((entry) => (
               <li key={entry.id}>
-                <PrepareHistoryEntryDetails entry={entry} />
+                <PrepareHistoryEntryDetails
+                  entry={entry}
+                  onDelete={() => onDeletePrepareEntry(entry.id)}
+                />
               </li>
             ))}
           </ul>
@@ -201,7 +210,7 @@ export function InputFormView({
           <Card className="bg-amber-50 border-amber-100">
             <div className="flex items-start justify-between gap-3 mb-1">
               <h3 className="text-sm font-bold text-amber-900">
-                追加メモ
+                整理メモへの追記
               </h3>
               {/* STEP 19: 追加メモのみを消す。下書き本文 textarea には触れない。 */}
               <button
@@ -212,7 +221,7 @@ export function InputFormView({
                 }}
                 className="shrink-0 text-xs text-amber-700/70 hover:text-amber-900 underline underline-offset-2"
               >
-                追加メモを消す
+                追記を消す
               </button>
             </div>
             <p className="text-xs text-amber-800/80 mb-4 leading-relaxed">
@@ -248,7 +257,7 @@ export function InputFormView({
                 onClick={() => setShowReferenceNotes((v) => !v)}
                 className="text-xs text-gray-500 hover:text-gray-800 underline underline-offset-2"
               >
-                {showReferenceNotes ? '参考メモを隠す' : '参考メモを見る'}
+                {showReferenceNotes ? '整理素材を隠す' : '整理素材を見る'}
               </button>
             </div>
           )}
@@ -303,12 +312,17 @@ export function InputFormView({
 
 // ── 左サイド欄の履歴 1 件分 ───────────────────────────────────────
 // 閉じた状態: 大学名 / 学部 / 学科 / 作成日。
-// 開いた状態: summary 5 項目 + 回答ありの question[]。
+// 開いた状態: summary 5 項目 + 回答ありの question[] + 削除ボタン（footer）。
 // 本文 textarea には自動挿入しない（参考情報として表示するだけ）。
+// 削除ボタンは details の expanded body 内（最下部）に置く。
+//   - summary（header）に置くと <details> の toggle と click が干渉するため避ける
+//   - 展開してから削除する流れになり、ユーザーが内容を確認してから消す safety にもなる
 function PrepareHistoryEntryDetails({
   entry,
+  onDelete,
 }: {
   entry: UniversityPrepareEntry;
+  onDelete: () => void;
 }) {
   const filledQuestions = entry.questions.filter(
     (q) => q.answer.trim().length > 0,
@@ -367,6 +381,15 @@ function PrepareHistoryEntryDetails({
             </ol>
           </section>
         )}
+        <div className="mt-3 pt-3 border-t border-blue-50 flex justify-end">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="text-xs text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+          >
+            この整理メモを削除
+          </button>
+        </div>
       </div>
     </details>
   );
@@ -381,22 +404,43 @@ function formatHistoryDate(isoString: string): string {
   return `${y}/${m}/${day}`;
 }
 
-// ── STEP4-2: 書き直し対象の参考メモ Card ─────────────────────────
+// ── 書き直し対象の breadcrumb Card ─────────────────────────────
 // ④ /statement/improve の「この内容をもとに書き直す」CTA から
-// ?rewriteFrom=<id> 経由で来た場合に、左サイド最上部で表示する参考情報。
-// 本文 textarea は page.tsx 側で mount-init に prefill 済み。ここでは表示専用。
-// 改善アクション / 弱い点 / 良い点（折りたたみ）/ 詳細分析（折りたたみ）を出す。
+// ?rewriteFrom=<id> 経由で来た場合に、左サイド最上部で「いま何を書き直しているか」
+// を示すだけの軽量カード。本文 textarea は page.tsx 側で mount-init に prefill 済み。
+// 改善ポイント / 詳細分析の中身は /statement/improve/analysis/[id] に責務集約済みのため、
+// ここからは link で誘導するだけにして edit を「執筆する場」に寄せる。
+// improve flow 内なので戻り先は improve 専用 analysis（view-only の
+// /statement/analysis/[id] には飛ばさない、STEP-IA-1）。
+// 同様に「書き直し方針メモ」も /statement/improve/rewrite/[id] に責務集約済みで、
+// 当 Card では inline 表示せず memo が存在する時だけ link を露出する。
 function RewriteContextCard({
   entry,
-  activities,
 }: {
   entry: ReviewHistoryItem;
-  activities: ActivityData | null;
 }) {
+  // memo の有無だけ確認する。本文はここに出さない（edit を「考える画面」に戻さないため）。
+  // 親（InputFormView）が `mounted && rewriteContext !== null` でゲートしているため
+  // SSR / hydration 期にこの Card は描画されない。useMemo の同期 read は安全。
+  //
+  // STEP-WORK-4: rewriteMemo は v2 で text と workAnswers の 2 つの artifact を持つため、
+  // 「record が存在するか」ではなく「text/workAnswers のどちらかに中身があるか」で
+  // 「書き直し準備を編集する →」link を出すよう責務を分離。
+  // 表示文言も「方針メモ」→「書き直し準備」に一般化（workAnswers も対象に含む）。
+  const { hasTextMemo, hasWorkAnswers } = useMemo(() => {
+    const record = loadRewriteMemo(entry.id);
+    return {
+      hasTextMemo: (record?.text ?? '').trim().length > 0,
+      hasWorkAnswers: hasAnyWorkAnswer(record?.workAnswers),
+    };
+  }, [entry.id]);
+  const hasRewriteArtifact = hasTextMemo || hasWorkAnswers;
   return (
     <Card className="bg-violet-50 border-violet-100">
       <div className="flex items-start justify-between gap-2 mb-1">
-        <h3 className="text-sm font-bold text-violet-900">書き直し中：参考メモ</h3>
+        <h3 className="text-sm font-bold text-violet-900">
+          前回の分析（書き直し対象）
+        </h3>
         <span className="shrink-0 text-base font-bold text-violet-700 tabular-nums leading-none mt-0.5">
           {entry.result.overallScore}
           <span className="text-[10px] font-normal ml-0.5">/100</span>
@@ -406,94 +450,109 @@ function RewriteContextCard({
         {entry.university || '（大学未入力）'}
         {entry.faculty ? `　${entry.faculty}` : ''}
         {entry.department ? `　${entry.department}` : ''}
-        {' '}
-        の過去添削結果を参考に、下の本文を書き直せます。
       </p>
-
-      <AlertBox variant="warning" className="mb-3">
-        <h4 className="text-xs font-semibold text-yellow-800 mb-2">
-          優先度順の改善アクション
-        </h4>
-        <ol className="space-y-1.5">
-          {entry.result.actions.map((a, i) => (
-            <li key={i} className="text-xs text-yellow-900 flex gap-2">
-              <span className="font-bold shrink-0">{i + 1}.</span>
-              <span className="leading-relaxed">{a}</span>
-            </li>
-          ))}
-        </ol>
-      </AlertBox>
-
-      <AlertBox variant="error" className="mb-3">
-        <h4 className="text-xs font-semibold text-red-800 mb-2">弱い点</h4>
-        <ul className="space-y-1">
-          {entry.result.weaknesses.map((w, i) => (
-            <li key={i} className="text-xs text-red-700 flex gap-2">
-              <span>△</span>
-              <span className="leading-relaxed">{w}</span>
-            </li>
-          ))}
-        </ul>
-      </AlertBox>
-
-      {entry.result.strengths.length > 0 && (
-        <details className="group bg-white rounded-lg border border-violet-100 mb-3">
-          <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-slate-700">
-              良い点（{entry.result.strengths.length}）
-            </span>
-            <span className="text-slate-400 transition-transform group-open:rotate-180 inline-block">
-              ▾
-            </span>
-          </summary>
-          <ul className="space-y-1 px-3 pb-3">
-            {entry.result.strengths.map((s, i) => (
-              <li key={i} className="text-xs text-green-700 flex gap-2">
-                <span>✓</span>
-                <span className="leading-relaxed">{s}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
+      <LinkButton
+        href={`/statement/improve/analysis/${encodeURIComponent(entry.id)}`}
+        variant="primary"
+        size="sm"
+        className="w-full"
+      >
+        改善レポートを見る →
+      </LinkButton>
+      {hasRewriteArtifact && (
+        <LinkButton
+          href={`/statement/improve/rewrite/${encodeURIComponent(entry.id)}`}
+          variant="secondary"
+          size="sm"
+          className="w-full mt-2"
+        >
+          📝 書き直し準備を編集する →
+        </LinkButton>
       )}
-
-      <details className="group bg-white rounded-lg border border-violet-100">
-        <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-slate-700">
-            詳細分析の要点（NGワード・構造・評価軸）
-          </span>
-          <span className="text-slate-400 transition-transform group-open:rotate-180 inline-block">
-            ▾
-          </span>
-        </summary>
-        <div className="px-3 pb-3 pt-1 space-y-3">
-          <NgWordCheck
-            issues={detectNgWords(
-              entry.essay,
-              activities,
-              entry.university,
-              entry.faculty,
-            )}
-            // 書き直しは本ページの本文 textarea で行うため、内部 deep-dive CTA は no-op に縛る。
-            onStartRewrite={noopRewrite}
-            onInsertStarterHint={noopInsert}
-          />
-          <StructureCheck text={entry.essay} />
-          <EvaluationAxisCheck
-            university={entry.university}
-            faculty={entry.faculty}
-            text={entry.essay}
-          />
-        </div>
-      </details>
     </Card>
   );
 }
 
-function noopRewrite(_phrase: string, _answers: string[]): void {
-  // 書き直し対象の参考メモ内では rewrite CTA は無効化。書き直しは本ページの本文 textarea で。
-}
+// ── 今回直すこと（workAnswers の read-only 表示）─────────────────
+// rewrite/[id] で書いた axisKey × questionKey の自由回答を、本文を書きながら
+// 参照する read-only パネルとして表示する。edit を「執筆する場」に寄せる方針上、
+// このパネルは表示専用 — 編集導線は rewrite/[id] へのインライン link のみ持つ。
+//
+// source: rewriteMemo.workAnswers
+// derive: render-time（deriveRewriteWorkSections に切り出し済み）。
+//   AI summary や snapshot は保存しない（analysis = master 方針）。
+//
+// STEP-WORK-4:
+//   - 表示崩れ対策で 1 回答に max-h + 自動スクロール + break-words を入れる
+//     （ペーストされた極端な長文 / URL も左カラムを壊さない）
+//   - 空 state（回答 0 件）の時は card を完全に隠さず、薄い案内に切り替えて
+//     rewrite/[id] への導線を保つ。edit 側で入力させない方針は維持。
+//
+// 親（InputFormView）が `mounted && rewriteContext !== null` でゲートしているため
+// SSR / hydration 期にこの Card は描画されない。useMemo の同期 read は安全。
+function RewriteWorkSummaryCard({ entry }: { entry: ReviewHistoryItem }) {
+  const sections = useMemo(() => {
+    const workAnswers = loadRewriteMemo(entry.id)?.workAnswers;
+    return deriveRewriteWorkSections(entry, workAnswers);
+  }, [entry]);
 
-function noopInsert(_hint: string): void {
-  // 同上。
+  const rewriteHref = `/statement/improve/rewrite/${encodeURIComponent(entry.id)}`;
+
+  if (sections.length === 0) {
+    return (
+      <Card className="bg-violet-50/60 border-violet-100">
+        <h3 className="text-sm font-bold text-violet-900 mb-1">今回直すこと</h3>
+        <p className="text-xs text-violet-700/80 mb-3 leading-relaxed">
+          まだ改善ポイント別ワークの回答がありません。書き直し準備で、本文に入れる素材を整理できます。
+        </p>
+        <Link
+          href={rewriteHref}
+          className="text-xs text-violet-700 hover:text-violet-900 underline underline-offset-2"
+        >
+          書き直し準備を開く →
+        </Link>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="bg-violet-50 border-violet-100">
+      <div className="flex items-baseline justify-between gap-2 mb-1">
+        <h3 className="text-sm font-bold text-violet-900">今回直すこと</h3>
+        <Link
+          href={rewriteHref}
+          className="shrink-0 text-[11px] text-violet-700/80 hover:text-violet-900 underline underline-offset-2"
+        >
+          編集 →
+        </Link>
+      </div>
+      <p className="text-xs text-violet-700/80 mb-4 leading-relaxed">
+        書き直し準備で書いた素材です。執筆中の参考として読んでください。
+      </p>
+      <ul className="space-y-4 list-none">
+        {sections.map((sec) => (
+          <li key={sec.axisKey}>
+            <p className="text-[12px] font-bold text-violet-900 mb-1.5">
+              ● {sec.label}
+            </p>
+            <ul className="space-y-1.5 list-none pl-3">
+              {sec.filled.map((q) => (
+                <li
+                  key={q.key}
+                  className="text-sm text-slate-700 leading-relaxed break-words"
+                >
+                  <span className="font-semibold text-violet-900/80">
+                    {q.label}：
+                  </span>
+                  <span className="whitespace-pre-wrap break-words block max-h-40 overflow-y-auto">
+                    {q.answer}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }

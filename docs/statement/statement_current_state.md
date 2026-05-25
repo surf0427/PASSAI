@@ -4,13 +4,18 @@
 
 ## ページ構成
 
+責務分離: analysis = 理解 / rewrite = 整理 / edit = 執筆
+
 - `/statement` — エントリ画面（使い方ガイド + 「下書きを添削する」/「書く内容を整理する」の選択）
-- `/statement/edit` — 下書き添削画面（整理メモ・追加メモ表示、表示 ON/OFF 切替、2 カラム UI、追加メモ削除、AI 添削、履歴）
-- `/statement/prepare` — 整理フロー
-- `/statement/score` — 完成度スコア表示（保存済み正規化スコアを表示）
+- `/statement/edit` — **執筆**画面。本文 textarea + AI 添削。左カラムに整理素材（prepare summary / 履歴 / 追記）と、`?rewriteFrom=<id>` 時の breadcrumb（analysis link + 方針メモ link）
+- `/statement/prepare` — 整理フロー（執筆素材生成）
+- `/statement/score` — 完成度スコア表示（保存済み正規化スコアを表示、view 専用）
 - `/statement/compare` — 合格ライン比較（同上）
-- `/statement/improve` — 改善トップ（同上）
-- `/statement/improve/[slug]` — 改善詳細
+- `/statement/improve` — 過去添削一覧 hub（クリックで `/statement/analysis/[id]` へ遷移）
+- `/statement/analysis/[id]` — **理解**ページ。actions / weaknesses / strengths + 詳細分析 3 種（NGワード・構造・評価軸）を集約。master = `statementReviewHistory.result`
+- `/statement/improve/rewrite/[id]` — **整理**ページ。元本文（details）+ 書き直し方針メモ（rewriteMemo、reviewId 単位の autosave）+ 書き直しの参考例（details）+ ②へ書き直す CTA
+
+旧 `/statement/improve/[slug]`（軸別ガイド書き直し）は撤去済み（STEP-ORPHAN-2 / STEP-MEMO-1〜2）。
 
 ## 整理フロー
 

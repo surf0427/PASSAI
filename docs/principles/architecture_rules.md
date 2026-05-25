@@ -155,9 +155,9 @@ active 開発と衝突するため今は触らないが、いずれ着手すべ�
 
 - **lib 直下の statement family（13 ファイル）→ `lib/statement/` 集約**
   - 対象: `statement*` prefix 8 ファイル + `detectStatementPrepare*` / `evaluateStatementPrepare*` / `getStatementDraftStructureGuide` / `buildStatementPrepareMaterials` 系 5 ファイル。
-  - 加えて statement で使う汎用評価ロジック（`admissionEvaluationAxes`, `deepDiveQuestions`, `detectNgWords`, `structureAnalysis`, `passLineComparison`, `scoreRank`, `improvementSuggestions`, `rewriteGuides`, `qualityDeepDive`）も同タイミングでの集約候補。
+  - 加えて statement で使う汎用評価ロジック（`admissionEvaluationAxes`, `detectNgWords`, `structureAnalysis`, `passLineComparison`, `scoreRank`, `improvementSuggestions`）も同タイミングでの集約候補。
   - 着手タイミング: statement 機能の active 開発（STEP マーカー消化）が落ち着き、`?? app/statement/...` の untracked ディレクトリが解消された後。
-  - note: `lib/statementTypes.ts` は STEP3 で `types/statement.ts` に移動済み。
+  - note: `lib/statementTypes.ts` は STEP3 で `types/statement.ts` に移動済み。`rewriteGuides` / `deepDiveQuestions` / `qualityDeepDive` は STEP-ORPHAN-2 / STEP-ORPHAN-3 で撤去済み。
 
 - **大型 API route の lib 切り出し**
   - 対象: `app/api/interview-feedback/route.ts` (338行), `app/api/essay-review/route.ts` (277行), `app/api/statement-prepare/route.ts` (247行), `app/api/matching/route.ts` (243行)。
@@ -165,10 +165,9 @@ active 開発と衝突するため今は触らないが、いずれ着手すべ�
   - 着手タイミング: 各機能の active 開発が落ち着いた時点。新規 route は `lib/README.md` の責務境界ルールを守る。
 
 - **`components/` 直下のフラット 7 ファイル → `components/statement/` への集約**
-  - 対象: `NgWordCheck.tsx`, `RewriteGuide.tsx`, `StructureCheck.tsx`, `EvaluationAxisCheck.tsx`, `DeepDivePanel.tsx`, `QualityDeepDive.tsx`, `StructureMapping.tsx`。
-  - 全て statement 機能専用と確認済み（grep で 1 利用元のみ。`DeepDivePanel` / `QualityDeepDive` / `StructureMapping` は他コンポーネント内部からのみ参照される helper）。
-  - 移動を保留する理由: statement の active 開発（prepare / score / improve / compare）と `app/statement/edit/page.tsx` の import 競合。
-  - 着手タイミング: statement 機能の現行 STEP が一段落した時点。
+  - 旧対象: `NgWordCheck.tsx`, `RewriteGuide.tsx`, `StructureCheck.tsx`, `EvaluationAxisCheck.tsx`, `DeepDivePanel.tsx`, `QualityDeepDive.tsx`, `StructureMapping.tsx`。
+  - 経緯: STEP-ORPHAN-3 で全 7 ファイルとも撤去済み（analysis page が `detectNgWords` / `analyzeStructure` / `getEvaluationAxes` / `checkAxis` の純関数を直接呼ぶ rebuild により、Component wrapper 群が完全 orphan 化）。`components/statement/` ディレクトリも空になり削除済み。
+  - この trigger は **消化済み**（集約不要のまま解消）。
   - note: `BasicInfoSummary.tsx` は STEP2 で `components/shared/` へ移動済み。
 
 - **feature-local convention の統一**

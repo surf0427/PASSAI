@@ -9,8 +9,8 @@
 //   - 詳細分析へは「詳細分析を見る →」LinkButton で /statement/analysis/[id] に遷移
 //
 // STEP-DA-2 の変更:
-//   - 削除: AlertBox 3 種（改善アクション / 弱い点 / 良い点）
-//   - 削除: Accordion 本文・詳細分析（NgWordCheck / StructureCheck / EvaluationAxisCheck）
+//   - 削除: AlertBox 3 種（改善アクション / 弱い点 / 良い点）→ /statement/analysis/[id] へ集約
+//   - 削除: Accordion 本文・詳細分析 → /statement/analysis/[id] へ集約
 //   - 削除: RadarSummary / ScoreBarCard × 5 / ImprovementPriority
 //   - 追加: AxisGapCard × 5（評価項目 / 現在 / 目安 / あと N 点 / 改善方向性）
 //   - 追加: 「詳細分析を見る →」LinkButton → /statement/analysis/{entry.id}
@@ -19,9 +19,16 @@
 //   - statementReviewHistory の保存・削除ロジック（read のみ）
 //   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
 //   - ② edit / ④ improve / /statement/analysis/[id]
-//   - 書き直し導線（③ は view 専用、改善始める CTA は付けない）
+//
+// 責務境界（score = view / dashboard）:
+//   - score 直結で /statement/improve/rewrite/[id] への CTA は持たない
+//   - score 直結で /statement/edit?rewriteFrom= への CTA も持たない
+//   - 改善動線の入り口は「詳細分析を見る →」（= /statement/analysis/[id]）の 1 本のみ
+//   - 主導線: score → analysis → rewrite → edit（rewrite skip / edit skip は出さない）
+//   - 例外: 履歴ゼロ時の NoHistoryYet は「志望理由書を書く」→ /statement/edit を出す
+//     （これは "rewrite" ではなく "first write"。view する対象が無い場合の代替起点）
 
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -32,6 +39,7 @@ import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
 import { DashboardSummary } from '@/components/ScoreDashboard/DashboardSummary';
 import {
   loadReviewHistory,
+  deleteReviewHistoryItem,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
 import { statementResultToScore } from '@/lib/statement/score/statementScore';
@@ -57,17 +65,35 @@ export default function StatementScorePage() {
     getMountedServerSnapshot,
   );
 
-  // 履歴は read のみ（保存は ② edit から、削除はここでは扱わない）。
-  const history = useMemo<ReviewHistoryItem[]>(
-    () => (isMounted ? loadReviewHistory() : []),
-    [isMounted],
-  );
+  // 履歴は read + delete のみ（save は ② edit 側）。
+  // localStorage の sync 用に useState + mount-init useEffect パターンを採用：
+  //   - 初期値 [] で SSR / 初回 client render を hydration セーフに揃える
+  //   - mount 後に loadReviewHistory() を 1 度実行して seed
+  //   - delete 時は handleDelete から setHistory(loadReviewHistory()) で再 sync
+  //   - 表示の gate（NoHistoryYet を SSR 中に出さない）は isMounted で行うので flicker なし
+  const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (isMounted) setHistory(loadReviewHistory());
+  }, [isMounted]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 詳細表示中の履歴 id。null なら一覧表示。
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const selected =
     selectedId === null ? null : history.find((h) => h.id === selectedId) ?? null;
+
+  function handleDelete(id: string) {
+    const ok = window.confirm(
+      'この志望理由書の履歴を削除しますか？この操作は元に戻せません。',
+    );
+    if (!ok) return;
+    deleteReviewHistoryItem(id);
+    setHistory(loadReviewHistory());
+    // 表示中の詳細 entry を削除した場合は一覧表示に戻す（per spec）。
+    if (selectedId === id) setSelectedId(null);
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -92,6 +118,7 @@ export default function StatementScorePage() {
         <HistoryListView
           history={history}
           onSelect={(id) => setSelectedId(id)}
+          onDelete={handleDelete}
         />
       )}
 
@@ -99,6 +126,7 @@ export default function StatementScorePage() {
         <HistoryDetailView
           entry={selected}
           onBack={() => setSelectedId(null)}
+          onDelete={handleDelete}
         />
       )}
     </div>
@@ -131,9 +159,11 @@ function NoHistoryYet() {
 function HistoryListView({
   history,
   onSelect,
+  onDelete,
 }: {
   history: ReviewHistoryItem[];
   onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   return (
     <>
@@ -142,11 +172,13 @@ function HistoryListView({
       </p>
       <ul className="space-y-3">
         {history.map((item) => (
-          <li key={item.id}>
+          // 削除ボタンと選択ボタンを sibling にして「button 入れ子」を避ける。
+          // 選択 button に `pr-12` を入れて削除 button 領域と内容を視覚的に分離。
+          <li key={item.id} className="relative">
             <button
               type="button"
               onClick={() => onSelect(item.id)}
-              className="block w-full text-left rounded-xl border border-slate-200 bg-white px-4 py-4 hover:border-blue-300 hover:shadow-sm transition-all"
+              className="block w-full text-left rounded-xl border border-slate-200 bg-white px-4 py-4 pr-12 hover:border-blue-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-center justify-between gap-3 mb-2">
                 <p className="text-sm font-semibold text-slate-800 truncate">
@@ -168,6 +200,17 @@ function HistoryListView({
                 {previewEssay(item.essay)}
               </p>
             </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(item.id);
+              }}
+              className="absolute top-2 right-2 text-xs text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+              aria-label="この履歴を削除"
+            >
+              削除
+            </button>
           </li>
         ))}
       </ul>
@@ -181,9 +224,11 @@ function HistoryListView({
 function HistoryDetailView({
   entry,
   onBack,
+  onDelete,
 }: {
   entry: ReviewHistoryItem;
   onBack: () => void;
+  onDelete: (id: string) => void;
 }) {
   const score = statementResultToScore(entry.result);
   const passLineItems = breakdownToPassLineItems(score.breakdown);
@@ -264,11 +309,21 @@ function HistoryDetailView({
       </section>
 
       {/* STEP-NAV-3: 詳細を最後まで読んだ後、上端の小型 underline link まで戻らずに
-          一覧へ戻れるよう、最下部にも副ボタンを置く。onBack は既存 prop を流用。 */}
-      <div className="mt-6">
+          一覧へ戻れるよう、最下部にも副ボタンを置く。onBack は既存 prop を流用。
+          削除は危険操作なので右側に小さく寄せ、primary CTA とは色・大きさで明確に格差をつける。
+          「志望理由書機能一覧に戻る」は本ページの「簡易結果」位置には置かず、最終詳細ページ
+          である /statement/analysis/[id]（フル分析レポート）の末尾に配置している。 */}
+      <div className="mt-6 flex items-center justify-between gap-3">
         <Button variant="secondary" onClick={onBack}>
           ← 一覧に戻る
         </Button>
+        <button
+          type="button"
+          onClick={() => onDelete(entry.id)}
+          className="text-xs text-red-600 px-3 py-2 rounded hover:bg-red-50 transition-colors"
+        >
+          この履歴を削除
+        </button>
       </div>
     </>
   );
@@ -277,7 +332,8 @@ function HistoryDetailView({
 // ── 各評価軸の俯瞰カード ──────────────────────────────────────────
 // 旧 ScoreBarCard を「現在 / 目安 / あと何点 / 改善方向性」を 1 枚にまとめた form に拡張。
 // 白背景・薄い border・テキスト主体で、AlertBox 系の色付き矩形に頼らない。
-// 「改善を始める」CTA は意図的に置かない（③ は view 専用、書き直し導線は ② edit / ④ improve）。
+// 「改善を始める」/「書き直す」CTA は意図的に置かない。③ score は view 専用で、改善動線
+// （analysis → rewrite → edit）の入り口は HistoryDetailView 下部の「詳細分析を見る →」1 本に集約。
 
 const STATUS_STYLES: Record<
   ComparisonResult['status'],

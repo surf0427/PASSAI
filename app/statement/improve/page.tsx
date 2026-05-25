@@ -1,43 +1,42 @@
 'use client';
 
-// ④「書き直す」機能（do）の入口。
-// STEP-IMP-2 で score 俯瞰 UI を撤去、続く STEP で中継 hub も撤去、さらに続く STEP で
-// 一覧クリックの遷移先を analysis page に変更し、④ の自然なフローを整えた。
+// 「書き直す」機能の入口。過去添削の一覧 hub。
+// 責務: analysis = 理解 / rewrite = 整理 / edit = 執筆 の中の「rewrite cycle 入口」。
 //
 // 役割:
 //   - 過去に書いた志望理由書（statementReviewHistory）の一覧を表示
-//   - 各エントリは `<Link>` で /statement/analysis/<id>（分析レポート）へ直接遷移
-//   - 詳細 hub（"この志望理由書を書き直しますか？" の中継ページ）は持たない
-//   - 完成度スコア俯瞰 UI（TotalScoreCard / RankBadge / DashboardSummary / AxisGapCard）も持たない
+//   - 各エントリは `<Link>` で /statement/improve/analysis/<id>（improve 専用 analysis）へ遷移
+//   - 完成度スコア俯瞰 UI（score page 側に分離）は持たない
 //
-// ④ 全体の流れ:
-//   /statement/improve            (この一覧)
+// rewrite cycle のフロー:
+//   /statement/improve                       ← 過去添削の一覧（このページ）
 //     → カードクリック
-//   /statement/analysis/<id>      (改善点 + 詳細分析を読む)
+//   /statement/improve/analysis/<id>          ← 改善ポイント（actions / weaknesses + 改善の方向）
 //     → 「書き直し準備へ進む →」
-//   /statement/improve/rewrite/<id>  (Before/After + 書き直しメモ)
+//   /statement/improve/rewrite/<id>           ← 整理（rewriteMemo + Before/After 参考例）
 //     → 「②で本文を書き直す →」
-//   /statement/edit?rewriteFrom=<id>  (本文 prefill + 添削)
+//   /statement/edit?rewriteFrom=<id>          ← 執筆（本文 prefill + 添削）
 //
-// ③ /statement/score との責務分離:
-//   - ③ = 完成度を俯瞰する view 機能（一覧 + 詳細 hub あり）
-//   - ④ = 書き直しを始める do 機能（一覧から直接 analysis レポートへ）
+// /statement/score との責務分離:
+//   - score = 完成度を俯瞰する view 機能（read-only、AxisGapCard 5 軸）。詳細は
+//     /statement/analysis/[id]（view-only analysis）で読める。rewrite には誘導しない。
+//   - improve = 書き直しを始める do 機能。/statement/improve/analysis/[id] は改善ポイントを
+//     上位に置き、rewrite CTA を持つ improve 専用 analysis。view と do の analysis page
+//     を分離することで、shared page による責務混入を防ぐ（STEP-IA-1）。
 //
 // 触らない:
 //   - statementReviewHistory の保存・削除ロジック（read のみ）
 //   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
-//   - ② edit / ③ score / /statement/analysis/[id]
-//   - /statement/improve/[slug] サブルート（orphan 維持）
-//   - /statement/improve/rewrite/[id]（page 3 = STEP-IMP-1、analysis page 経由で到達）
-//   - /statement/analysis/[id]（page 2 = analysis レポート、本ページの遷移先）
+//   - edit / score / /statement/analysis/[id] / /statement/improve/rewrite/[id]
 
-import { useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
 import {
   loadReviewHistory,
+  deleteReviewHistoryItem,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
 
@@ -53,11 +52,26 @@ export default function StatementImprovePage() {
     getMountedServerSnapshot,
   );
 
-  // 履歴は read only。saveReviewHistory / delete / clear は本ページから一切呼ばない。
-  const history = useMemo<ReviewHistoryItem[]>(
-    () => (isMounted ? loadReviewHistory() : []),
-    [isMounted],
-  );
+  // 履歴は read + delete のみ。save は ② edit 側、clear は本ページから呼ばない。
+  // localStorage の sync 用に useState + mount-init useEffect パターンを採用：
+  //   - 初期値 [] で SSR / 初回 client render を hydration セーフに揃える
+  //   - mount 後に loadReviewHistory() を 1 度実行して seed
+  //   - delete 時は handleDelete から setHistory(loadReviewHistory()) で再 sync
+  const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (isMounted) setHistory(loadReviewHistory());
+  }, [isMounted]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  function handleDelete(id: string) {
+    const ok = window.confirm(
+      'この志望理由書の履歴を削除しますか？この操作は元に戻せません。',
+    );
+    if (!ok) return;
+    deleteReviewHistoryItem(id);
+    setHistory(loadReviewHistory());
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -76,7 +90,9 @@ export default function StatementImprovePage() {
       </div>
 
       {isMounted && history.length === 0 && <NoHistoryYet />}
-      {isMounted && history.length > 0 && <HistoryListView history={history} />}
+      {isMounted && history.length > 0 && (
+        <HistoryListView history={history} onDelete={handleDelete} />
+      )}
     </div>
   );
 }
@@ -105,13 +121,19 @@ function NoHistoryYet() {
 }
 
 // ── 一覧表示 ─────────────────────────────────────────────────────
-// 各カードは <Link> で /statement/analysis/<id>（分析レポート）へ直接遷移する。
+// 各カードは <Link> で /statement/improve/analysis/<id>（improve 専用 analysis）へ遷移する。
 // 旧版では in-page state（selectedId）で詳細 hub に切り替えていたが、hub の情報が薄く
 // 1 クリック余計に挟まる UX だったため撤去した。視覚的なカード形状は維持。
-// 「書き直し準備（/statement/improve/rewrite/<id>）」は analysis page 下部の CTA
+// 「書き直し準備（/statement/improve/rewrite/<id>）」は improve 専用 analysis page 下部の CTA
 // 経由で到達する。本ページから rewrite prep に直接飛ばすと、改善点を読まずに
 // 書き始めることになり、④ の意図と合わない。
-function HistoryListView({ history }: { history: ReviewHistoryItem[] }) {
+function HistoryListView({
+  history,
+  onDelete,
+}: {
+  history: ReviewHistoryItem[];
+  onDelete: (id: string) => void;
+}) {
   return (
     <>
       <p className="text-sm text-slate-600 mb-4 leading-relaxed">
@@ -119,10 +141,12 @@ function HistoryListView({ history }: { history: ReviewHistoryItem[] }) {
       </p>
       <ul className="space-y-3">
         {history.map((item) => (
-          <li key={item.id}>
+          // 削除 button を Link と sibling にし、Link の navigation と干渉させない。
+          // 削除側で preventDefault + stopPropagation を defensive に呼んでおく。
+          <li key={item.id} className="relative">
             <Link
-              href={`/statement/analysis/${encodeURIComponent(item.id)}`}
-              className="block w-full text-left rounded-xl border border-slate-200 bg-white px-4 py-4 hover:border-blue-300 hover:shadow-sm transition-all"
+              href={`/statement/improve/analysis/${encodeURIComponent(item.id)}`}
+              className="block w-full text-left rounded-xl border border-slate-200 bg-white px-4 py-4 pr-12 hover:border-blue-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-center justify-between gap-3 mb-2">
                 <p className="text-sm font-semibold text-slate-800 truncate">
@@ -144,6 +168,18 @@ function HistoryListView({ history }: { history: ReviewHistoryItem[] }) {
                 {previewEssay(item.essay)}
               </p>
             </Link>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete(item.id);
+              }}
+              className="absolute top-2 right-2 text-xs text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+              aria-label="この履歴を削除"
+            >
+              削除
+            </button>
           </li>
         ))}
       </ul>

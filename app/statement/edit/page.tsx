@@ -29,12 +29,9 @@ import {
 } from '@/lib/statement/prepare/statementPrepareStorage';
 import {
   loadUniversityPrepareHistory,
+  deleteUniversityPrepareEntry,
   type UniversityPrepareEntry,
 } from '@/lib/statement/prepare/universityPrepareHistory';
-import {
-  loadRewriteDrafts,
-  type RewriteDraftRecord,
-} from '@/lib/statement/rewrite/rewriteDraftStorage';
 import type { ActivityData } from '@/types/activity';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { WallHittingResult } from '@/types/analysis';
@@ -164,16 +161,6 @@ function mapApiResponse(data: ApiReviewResponse): StatementResult {
   };
 }
 
-// ── 書き直しメモ section の表示用 axis ラベル ───────────────────────
-// PASS_LINE_TARGETS / breakdown ラベルの subset を local に持つ（cross-file 依存を増やさない）。
-const REWRITE_AXIS_LABELS: Record<string, string> = {
-  logic:         '論理構造',
-  specificity:   '具体性',
-  universityFit: '大学との一致',
-  futureGoal:    '将来目標',
-  originality:   '独自性',
-};
-
 // ── ページ本体 ────────────────────────────────────────────────────
 
 // マウント前 false / マウント後 true を返す flag（SSR/hydration セーフ）。
@@ -188,7 +175,10 @@ const getMountedServerSnapshot = () => false;
 // （Next.js 16 の prerender bailout warning を抑える）。本体は実装は維持。
 function StatementPageInner() {
   // form 入力（value 属性が render に直結するので SSR-stable の空値で初期化、useEffect で seeding）。
-  // 後段の mount-init useEffect で draft / basicInfo.preferences[0] から復元する。
+  // 後段の mount-init useEffect で復元する。
+  //   - statementText: ?rewriteFrom=<id> の essay → draft の statementText の優先順で復元
+  //   - university / faculty / department: rewriteFrom の entry からのみ prefill する。
+  //     draft / basicInfo からは prefill しない（STEP-EDIT-NOPREFILL：per-visit で明示的に選ばせる）。
   const [university, setUniversity] = useState('');
   const [faculty, setFaculty] = useState('');
   const [department, setDepartment] = useState('');
@@ -226,23 +216,23 @@ function StatementPageInner() {
   // ① 大学軸 prepare の履歴。配列 / 最大 10 件 / 先頭が最新。
   // 履歴が 1 件以上あれば左サイド欄で「整理メモ履歴」を優先表示し、
   // 旧 prepareSummary（最新 1 枚）の表示は履歴 0 件時の fallback に下ろす。
-  const prepareHistory = useMemo<UniversityPrepareEntry[]>(
-    () => (isMounted ? loadUniversityPrepareHistory() : []),
-    [isMounted],
-  );
+  // useState + mount-init useEffect パターン：delete 後に setPrepareHistory で再 sync する。
+  // useMemo にすると delete 時の再評価トリガが無く invalidate 不能なため useState 化。
+  const [prepareHistory, setPrepareHistory] = useState<UniversityPrepareEntry[]>([]);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (isMounted) setPrepareHistory(loadUniversityPrepareHistory());
+  }, [isMounted]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  // 「書き直しメモ」 section 用。空 text の draft は drop。statementText は触らない参照表示専用。
-  // SSR 時は []、mount 後に load して filter する既存の useMemo[isMounted] パターンを踏襲。
-  const rewriteDraftEntries = useMemo<Array<[string, RewriteDraftRecord]>>(
-    () => {
-      if (!isMounted) return [];
-      const all = loadRewriteDrafts();
-      return Object.entries(all).filter(
-        ([, d]) => d && d.text.length > 0,
-      ) as Array<[string, RewriteDraftRecord]>;
-    },
-    [isMounted],
-  );
+  function handleDeletePrepareEntry(id: string) {
+    const ok = window.confirm(
+      'この整理メモを削除しますか？この操作は元に戻せません。',
+    );
+    if (!ok) return;
+    deleteUniversityPrepareEntry(id);
+    setPrepareHistory(loadUniversityPrepareHistory());
+  }
 
   // C1 mitigation: StudentProfile を useMemo 化して submit ごとの再 derivation を停止する。
   // canonical 不在の legacy user で getStudentProfileForFeature→toStudentProfile が
@@ -275,36 +265,20 @@ function StatementPageInner() {
   const focusKey: StatementImprovementTargetSection | null =
     mounted && isFocusKey(focusParam) ? focusParam : null;
 
-  // STEP-NAV-1: 添削結果直下の「↑ 本文を修正する」ボタンが scrollIntoView 先として使う。
-  // STEP-DA-3: handleStartRewrite / handleInsertStarterHint と textareaRef は、
-  // edit ページから詳細分析（NgWordCheck の deep-dive）を切り離したため削除済み。
+  // 添削結果直下の「↑ 本文を修正する」ボタンが scrollIntoView 先として使う。
+  // 詳細分析は /statement/analysis/[id] に責務集約済み（edit には持ち込まない）。
   const inputSectionRef = useRef<HTMLElement>(null);
-
-  // 書き直しメモのコピー。statementText には触らない（PASSAI 思想: 本文の自動書き換えはしない）。
-  // toastTimerRef は触らず fire-and-forget。
-  // 連打時に短い flicker が出る可能性はあるが副作用は限定的（user 起点アクション）。
-  async function handleCopyRewrite(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setToast('コピーしました');
-      setTimeout(() => setToast(''), 2000);
-    } catch {
-      // clipboard 拒否時は silent
-    }
-  }
 
   const [result, setResult] = useState<StatementResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
 
   // STEP4-2: ④ → ② への書き直し対象履歴の context。?rewriteFrom=<id> が指す
   // ReviewHistoryItem を mount-init useEffect で 1 回だけ load する。
   // mount 後は不変（書き直し対象は per-visit で固定）。
-  // 左サイド欄の「書き直し中：参考メモ」表示に使う。本文 textarea には自動反映しない
-  //（prefill は mount-init で 1 回のみ）。
+  // 左サイド最上部の「前回の分析（書き直し対象）」breadcrumb 表示に使う。
+  // 本文 textarea には自動反映しない（prefill は mount-init で 1 回のみ）。
   const [rewriteContext, setRewriteContext] = useState<ReviewHistoryItem | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // STEP5.13: mount 後に localStorage から実値を取得し、form 入力 + mutable state にセットする。
   // 残存している setState 群は以下の理由で本 effect でしか実現できない:
@@ -314,10 +288,8 @@ function StatementPageInner() {
   //     + mount 後 setState で post-hydration に統一する従来パターンを維持する。
   //   - remainingCount / prepareFollowUps は mutable で後段の submitReview 成功時等に
   //     setState される。lazy init + useMemo では mutability を表現できない。
-  //   - draft が無いときは basicInfo.preferences[0] から form を seed する条件付きロジックを
-  //     伴うため、ここで loadBasicInfo() を 1 度だけローカル変数として読み直している
-  //     （useMemo 側の basicInfo は同等値を後段で返すが、mount-init はまだ undefined の
-  //     可能性があるためローカルに取り直す）。
+  //   - rewriteFrom が指す履歴 entry の prefill は mount-init の 1 回だけ実行する。
+  //     STEP-EDIT-NOPREFILL: draft / basicInfo からの u/f/d seeding は停止済み（本文のみ復元）。
   // 真の external system (localStorage) sync で、A (lazy init) / B (useSyncExternalStore) /
   // C (派生化) では SSR 安全性を保てない genuine side-effect。eslint-disable は本 effect
   // 内のみで limited に閉じる。
@@ -343,22 +315,16 @@ function StatementPageInner() {
     }
 
     if (!rewritePrefilled) {
+      // STEP-EDIT-NOPREFILL: 大学 / 学部 / 学科は draft / basicInfo から自動 prefill しない。
+      // 「今回の提出先を明示的に選ばせる」UX 方針（per-visit で u/f/d を再入力させる）。
+      //   - draft からは statementText のみ復元する（書きかけの本文は保持）
+      //   - basicInfo.preferences[0] からの seeding は完全に停止する
+      //   - rewriteFrom 経由（上記 if 分岐）はユーザーの明示的選択なので例外的に prefill 継続
+      // saveDraft 側は u/f/d を含めて従来どおり保存する（shape 不変）。次回アクセス時に
+      // u/f/d だけ復元をスキップする方針なので autosave / submit には影響しない。
       const draft = loadDraft();
       if (draft) {
-        setUniversity(draft.university);
-        setFaculty(draft.faculty);
-        setDepartment(draft.department);
         setStatementText(draft.statementText);
-      } else {
-        // 初回アクセスで下書きがない場合は basicInfo の第一志望を初期値に入れる。
-        // ユーザーは画面上で上書きできる。department が空なら空欄のまま。
-        const basic = loadBasicInfo();
-        const pref = basic?.preferences?.[0];
-        if (pref) {
-          setUniversity(pref.university ?? '');
-          setFaculty(pref.faculty ?? '');
-          setDepartment(pref.department ?? '');
-        }
       }
     }
 
@@ -366,13 +332,6 @@ function StatementPageInner() {
     setPrepareFollowUps(getStatementPrepareFollowUpAnswers());
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  // unmount 時に残タイマーをクリアする
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-    };
-  }, []);
 
   // API呼び出し・バリデーション・エラー処理・state更新をまとめた共通処理
   // validate      : 呼び出し前に行う入力チェック。エラーメッセージを返すか、問題なければ null を返す
@@ -598,60 +557,9 @@ function StatementPageInner() {
 
       <BasicInfoSummary basicInfo={basicInfo} />
 
-      {/* ── 書き直しメモ ──────────────────────────────────────────────
-          /improve/[slug] で保存された書き直し下書きを、本文の近くで参照できる軽い section。
-          statementText には自動反映せず、コピー経由でユーザーが手で取り込む。
-          PASSAI 思想: AI が代わりに書くのではなく、受験生が自分の言葉で整える。 */}
-      {mounted && rewriteDraftEntries.length > 0 && (
-        <section className="bg-blue-50 border border-blue-100 rounded-xl p-4 sm:p-5 mb-6">
-          <h2 className="text-sm font-bold text-slate-900 mb-1">
-            書き直しメモ
-          </h2>
-          <p className="text-xs text-slate-600 leading-relaxed mb-4">
-            保存した書き直しを見ながら、本文を自分の言葉で整えられます。
-          </p>
-          <div className="space-y-2">
-            {rewriteDraftEntries.map(([axisId, draft]) => {
-              const axisLabel = REWRITE_AXIS_LABELS[axisId] ?? axisId;
-              return (
-                <details
-                  key={axisId}
-                  className="group bg-white rounded-lg border border-slate-200"
-                >
-                  <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 py-3 flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-slate-800">
-                      {axisLabel}
-                    </span>
-                    <span className="text-xs text-slate-500 tabular-nums flex items-center gap-2">
-                      {draft.text.length}文字
-                      <span className="text-slate-400 transition-transform group-open:rotate-180 inline-block">
-                        ▾
-                      </span>
-                    </span>
-                  </summary>
-                  <div className="px-4 pb-4 pt-1">
-                    <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words mb-3">
-                      {draft.text}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleCopyRewrite(draft.text)}
-                      className="text-xs text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900"
-                    >
-                      コピー
-                    </button>
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* STEP8.4: 入力フォーム section は InputFormView へ logical split 済み。
-          STEP-DA-3: rewriteGuide / showInsertedHint / textareaRef は edit ページの詳細分析
-          切り離しに伴い削除済み（書き直しガイドの起点だった NgWordCheck deep-dive が
-          /statement/analysis/[id] 側に移ったため）。 */}
+      {/* 入力フォーム section は InputFormView へ logical split 済み。
+          詳細分析・書き直しガイドは /statement/analysis/[id] に集約（edit からは breadcrumb の
+          analysis link で誘導するだけ）。 */}
       <InputFormView
         university={university}
         setUniversity={setUniversity}
@@ -664,8 +572,8 @@ function StatementPageInner() {
         mounted={mounted}
         prepareSummary={prepareSummary}
         prepareHistory={prepareHistory}
+        onDeletePrepareEntry={handleDeletePrepareEntry}
         rewriteContext={rewriteContext}
-        activities={activities}
         prepareFollowUps={prepareFollowUps}
         setPrepareFollowUps={setPrepareFollowUps}
         showReferenceNotes={showReferenceNotes}
@@ -702,12 +610,6 @@ function StatementPageInner() {
           深掘り分析（NgWord / Structure / EvaluationAxis）は /statement/analysis/[id] に集約。
           edit からは ReviewResultView の「完成度スコアを見る →」（③ /statement/score）を経由して
           そこから「詳細分析を見る →」（/statement/analysis/{id}）に進む 2 段構造になる。 */}
-
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-sm px-5 py-2.5 rounded-lg shadow-lg pointer-events-none">
-          {toast}
-        </div>
-      )}
     </div>
   );
 }

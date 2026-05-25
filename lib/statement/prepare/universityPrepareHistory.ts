@@ -6,7 +6,10 @@
 //     新フローでも appendUniversityPrepareEntry() の中で同 key に summary だけ
 //     書き戻すため、② サイド欄は無変更で動く。
 //   - 本 history は「過去ログ一覧」表示のために配列で保持する。最大 10 件。先頭が最新。
-//     append only（個別削除 helper は将来 STEP で追加する想定）。
+//     個別削除は deleteUniversityPrepareEntry(id) を使う。clear は clearUniversityPrepareHistory。
+//     ※ 本 helper では statement_prepare_summary（最新 1 枚）には触れない。
+//       理由：UI 上は「履歴」を消すだけで、「最新整理メモ」の単体表示はそのまま残しておく
+//       のがユーザー期待。連動削除はせず別 store として扱う。
 //
 // 触らない:
 //   - 既存 `statement_prepare_summary` の shape / signature / updatedAt 契約。
@@ -149,6 +152,12 @@ export function appendUniversityPrepareEntry(
     inputSignature: '',
   };
   saveStatementPrepareSummary(summaryForSync);
+}
+
+export function deleteUniversityPrepareEntry(id: string): void {
+  const existing = loadUniversityPrepareHistory();
+  const updated = existing.filter((item) => item.id !== id);
+  safeSetStorage(HISTORY_KEY, updated);
 }
 
 export function clearUniversityPrepareHistory(): void {

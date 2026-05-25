@@ -599,6 +599,16 @@ function SummaryStep({
           別の大学で整理する
         </Button>
       </div>
+
+      {/* 整理メモを確認し終えたユーザーが、自然に他機能（書く / 過去結果を見る / 改善する等）へ
+          移れるよう、ページ末尾に志望理由書機能一覧への戻り導線を置く。
+          上の primary CTA「志望理由書を書きに行く →」と視覚的に分離するため、
+          別行 + border 区切り + secondary で目立たない navigation footer 扱いにする。 */}
+      <div className="mt-10 pt-6 border-t border-slate-100 flex justify-center">
+        <LinkButton href="/statement" variant="secondary" size="md">
+          志望理由書機能一覧に戻る
+        </LinkButton>
+      </div>
     </>
   );
 }

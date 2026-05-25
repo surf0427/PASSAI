@@ -19,7 +19,6 @@ export type ImprovementItem = {
 export type ImprovementSuggestion = ImprovementItem & {
   comment: string;
   reasoning: string;
-  route: string;
 };
 
 // 軸別の「改善の方向性」テキスト。AI接続時はここを動的差し替え可能にする。
@@ -50,20 +49,6 @@ export const IMPROVEMENT_REASONINGS: Record<string, string> = {
     '読み手は1日に多数の志望理由書を読みます。独自性が薄い文章は記憶に残りにくくなる可能性があります。',
 };
 
-// 軸別の深掘り修正ページへのルート。STEP4 への入口。
-export const IMPROVEMENT_ROUTES: Record<string, string> = {
-  logic: '/statement/improve/logic',
-  specificity: '/statement/improve/specificity',
-  universityFit: '/statement/improve/university-fit',
-  futureGoal: '/statement/improve/future-goal',
-  originality: '/statement/improve/originality',
-};
-
-// ページ冒頭の優先順位ノート。UI 側に直書きしないため lib に集約。
-// improve を「作業入口」として見せるトーンに統一（compare 連想の「差分」「改善」を排除）。
-export const PRIORITY_NOTE_TEXT =
-  'すべてを同時に直す必要はありません。まずはここから書き直してみましょう。';
-
 export function getImprovementSuggestions(
   currentItems: EvaluationItem[],
   limit = 2,
@@ -79,6 +64,16 @@ export function getImprovementSuggestions(
     diff: r.diff,
     comment: IMPROVEMENT_COMMENTS[r.id] ?? '',
     reasoning: IMPROVEMENT_REASONINGS[r.id] ?? '',
-    route: IMPROVEMENT_ROUTES[r.id] ?? '/statement/improve',
   }));
+}
+
+// rewriteMemo.workAnswers の外側 key に使う stable 識別子。
+// 表示用 label は将来変わりうるが、id は passLineComparison の axis id（logic /
+// specificity / universityFit / futureGoal / originality）に揃えてあり、ストレージ
+// 互換のために変更しない。
+// 単純に id を返すだけだが、「storage key として何を使うか」の contract を 1 箇所に
+// 集中させるために helper として export しておく（呼び出し側で label を key に
+// 使ってしまう事故を避ける）。
+export function getImprovementWorkKey(item: ImprovementItem): string {
+  return item.id;
 }
