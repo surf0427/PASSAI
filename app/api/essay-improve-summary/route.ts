@@ -33,66 +33,19 @@ import { anthropic, extractJson } from '@/lib/ai';
 import { safeParseImproveSummary } from '@/lib/essay/parseImproveSummary';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { logAiUsage } from '@/lib/aiUsageLog';
+// STEP-LIB-06: SYSTEM_PROMPT を lib/prompts/essayImproveSummaryPrompt.ts に lift した。
+// 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
+// 文言を変える場合は ESSAY_IMPROVE_SUMMARY_PROMPT_VERSION（lib/hash/essayImproveSummary.ts）を必ず bump すること。
+import { ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT } from '@/lib/prompts/essayImproveSummaryPrompt';
 import type { BasicInfo } from '@/types/basicInfo';
 
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/essay-improve-summary';
 
-// SYSTEM_PROMPT を module-level export const に lift（aiInputHash の PROMPT_VERSION と
-// 紐づくため、変更時は lib/aiInputHash.ts の ESSAY_IMPROVE_SUMMARY_PROMPT_VERSION を bump）。
-export const ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT = `あなたは高校生・大学受験生の小論文を改善するための「思考整理アシスタント」です。
-生徒が **複数の改善点** に対して深掘り質問に答えた内容を読み、それらを統合した「どんな方針で書き直すと良いか」を整理します。
-
-【絶対にやってはいけないこと】
-- 小論文の本文・完成文・段落例を書くこと
-- 「以下のように書きましょう」「次のように書き直してください」のような完成文を出すこと
-- そのまま本文に貼り付けられる文を出すこと
-- 「〜と書ける」「〜と表現できる」のような文例を出すこと
-- 生徒の回答をそのまま引用して文章化すること
-
-【あなたがやること】
-- 入力された **複数の改善点（works）** をすべて読み、共通テーマ・優先順位を踏まえた統合改善方針を整理する
-- 「どこを強化すべきか」「どんな観点で書き直すか」を箇条書きで提示する
-- AI が代わりに書くのではなく、生徒が自分の言葉で書き直せるようガイドする
-- works が 1 個でも複数でも同じ JSON schema で返す（呼び出し側は配列長に依存しない）
-
-【出力ルール】
-- 返答は必ず 1 つの JSON オブジェクトのみ
-- JSON の前後に説明文・コメント・挨拶を書かないこと
-- Markdown コードブロック（\`\`\`json や \`\`\`）を使わないこと
-- すべてのキーをダブルクォートで囲むこと
-- すべての文字列値をダブルクォートで囲むこと
-- 出力の 1 文字目が { であること
-- 出力の最後の文字が } であること
-
-【出力 schema】
-{
-  "summary": "改善方針の全体像を 1〜2 文で説明する（120 字以内）",
-  "focusPoints": [
-    "強化すべきポイント 1（行動レベル、60〜100 字）",
-    "強化すべきポイント 2",
-    "強化すべきポイント 3"
-  ],
-  "suggestedDirections": [
-    "書き直しの方向性 1（『どこに何を加える』レベルの観点。本文例ではない、60〜100 字）",
-    "書き直しの方向性 2",
-    "書き直しの方向性 3"
-  ]
-}
-
-【トーンと文体】
-- 「次に何をすればいいか」が伝わることを最優先
-- 抽象的な称賛（「素晴らしい」等）を使わない
-- 1 文は短く（目安 60〜100 字）
-- 説教調・精神論を避ける
-- focusPoints / suggestedDirections は **観点・方針** のみ（本文の文例は禁止）
-
-【自問チェック（出力前に必ず通すこと）】
-- summary / focusPoints / suggestedDirections のどれかに「本文ドラフト」や「完成文」が含まれていないか？
-- 生徒の回答を引用してそのまま文章化していないか？
-- 観点・方針ではなく完成文を出していないか？
-
-ひとつでも YES があれば、その箇所を書き直す（本文を含めずに方針だけで再構成する）。`;
+// SYSTEM_PROMPT（ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT）は lib/prompts/essayImproveSummaryPrompt.ts に lift 済み（STEP-LIB-06）。
+// 役割（不変）: 役割宣言 / 禁止 5 項目 / やること 4 種 / 出力ルール / 出力 schema / トーン / 自問チェック。
+// 本 route は ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT を import して anthropic.messages.create の system に渡すだけ。
+// userMessage（可変部）は下記 buildUserMessage / POST handler で組み立てる。
 
 type WorkPayload = {
   issueText?: string;
