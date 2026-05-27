@@ -13,14 +13,11 @@ import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/inter
 import { feedbackToText } from '@/lib/interview/feedbackToText';
 import { fillEchoBackFromInput } from '@/lib/interview/normalizeInterviewFeedback';
 import { logAiUsage } from '@/lib/aiUsageLog';
-// STEP15e: subjectGrades semantic instruction を SYSTEM_PROMPT に接続する。
-// 文字列の中身は lib/prompts.ts に集約。本ファイルは「interview-feedback でどう使うか」だけ持つ。
-// これら 2 つの const の文字列が lib/prompts.ts 側で変わった場合、本 route には PROMPT_VERSION
-// 概念が無い（interview-feedback は cache を持たない）ため bump 対象外。ただし PR 上で改修を明示すること。
-import {
-  SUBJECT_GRADES_SHARED_INSTRUCTION,
-  SUBJECT_GRADES_ASYMMETRY_RULE,
-} from '@/lib/prompts';
+// STEP-LIB-03: SYSTEM_PROMPT を lib/prompts/interviewFeedbackPrompt.ts に lift した。
+// 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
+// interview-feedback は localStorage cache に PROMPT_VERSION 概念を持たない（cache 自体なし）
+// ため bump 対象外。文言改修は PR description で明示する。
+import { INTERVIEW_FEEDBACK_SYSTEM_PROMPT } from '@/lib/prompts/interviewFeedbackPrompt';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。本 route は Opus を使う（他 5 route の Sonnet と異なる）。
@@ -86,173 +83,11 @@ function calculateInterviewMaxTokens(questionCount: number): number {
   return Math.min(Math.max(computed, MAX_TOKENS_MIN), MAX_TOKENS_MAX);
 }
 
-// ── STEP2.1: static rule を system パラメータへ切り出し ──────────
-// 「毎回変わらない指示」（役割宣言・出力スキーマ・各種ルール）を SYSTEM_PROMPT に固定し、
-// user 側には「今回の入力データ」だけを渡す。これにより:
-//   1. user prompt のサイズが大幅に縮小し、毎回送る token を削減
-//   2. 将来 prompt caching（cache_control）を system 部にかけられる構造になる
-// 現状 prompt caching 自体は未実装（STEP2.4 以降の準備として構造のみ整理）。
-//
-// STEP15e: subjectGrades semantic instruction を SYSTEM_PROMPT に接続する。
-//   - shared 2 つ（SUBJECT_GRADES_SHARED_INSTRUCTION / SUBJECT_GRADES_ASYMMETRY_RULE）を import
-//   - route 固有の field-level 制約（levelEvaluation 不可侵 / betterAnswer 数値直書き禁止 等）は
-//     下記 INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER に書く。route 内 const のため非 export。
-//   - 挿入位置は役割宣言と JSON 出力指示の直後・既存 JSON schema の前。
-//   - user prompt（POST handler 内の userPrompt 組み立て）は本 STEP では 1 文字も変えない。
-//   - interview-feedback は localStorage cache に PROMPT_VERSION 概念を持たない（cache 自体なし）。
-//     そのため bump 対象外。文言改修は PR description で明示する。
-
-// interview-feedback 固有の subjectGrades 取り扱い制約。
-// levelEvaluation の 5 軸（logical / concrete / consistency / originality / interviewReadiness）
-// には絶対に subjectGrades を反映させない。betterAnswer も評定値・欠席日数を直書き禁止。
-// improvements / nextPractice 配列の先頭は面接回答そのものの最重要改善点を優先する。
-// shared 側（lib/prompts.ts）で断定禁止・AO 推薦混同禁止・関連科目以外の過剰減点禁止は既に効いている。
-const INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER = `【interview-feedback route での subjectGrades の使い方】
-・subjectGrades は、面接回答の評価点そのものではなく、次回の回答準備・説明準備の補助文脈としてのみ使う。
-
-・levelEvaluation の各項目（logical / concrete / consistency / originality / interviewReadiness）には subjectGrades を絶対に反映しない。評価は実際の面接回答の質のみで行う。
-
-・betterAnswer に評定値（"英語4.8"等）や欠席日数の値（"18日"等）を直接書かない。betterAnswer は受験生本人の回答改善例であり、成績表の引用欄ではない。
-
-・improvements[0] / nextPractice[0] は、面接回答そのものの最重要改善点を優先する。subjectGrades 由来の助言を配列の先頭に置かない。
-
-・志望学部に関連する科目の高評定は、必要な場合のみ「面接で補強材料として語れる可能性がある」程度に留めて improvements / nextPractice の後半に書く。
-
-・志望学部に関連しない科目の低評定を、面接上の主要弱点として扱わない。
-
-・欠席日数がある場合は、「背景を簡潔に説明できるよう準備する」方向で扱う。「不利」「不適格」「推薦に不向き」等の断定をしない。
-
-・subjectGrades 未入力時は、評定や欠席に関する改善提案を作らない。`;
-
-// 本 const は scripts/step15-qa.ts から再利用するため export する。
-// 非 export だとテストハーネスから本番経路を完全再現できず QA 価値が落ちる。
-export const INTERVIEW_FEEDBACK_SYSTEM_PROMPT = `あなたは大学の総合型選抜・学校推薦型選抜に詳しい面接指導者です。
-受験生の「質問と回答のペア」を分析し、必ず以下のJSON形式だけで返してください。JSON以外のテキストは一切含めないでください。
-
-${SUBJECT_GRADES_SHARED_INSTRUCTION}
-
-${SUBJECT_GRADES_ASYMMETRY_RULE}
-
-${INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER}
-
-{
-  "overallEvaluation": "面接全体の評価（2〜3文）",
-  "goodPoints": ["回答全体で良かった点1（なぜ良いかをセットで）", "良かった点2"],
-  "improvements": ["全体的に直すべき点1（なぜ弱いか・どう直すかをセットで）", "直すべき点2"],
-  "perQuestionFeedback": [
-    {
-      "evaluation": "この回答の評価（1〜2文）",
-      "improvement": "この回答の具体的な改善点（なぜ弱いか・どう直すかをセットで）",
-      "betterAnswer": "より良い回答例（そのまま面接で使えるレベルで全文書く）",
-      "levelEvaluation": {
-        "logical": "weak | normal | strong",
-        "concrete": "weak | normal | strong",
-        "consistency": "weak | normal | strong",
-        "originality": "weak | normal | strong",
-        "interviewReadiness": "weak | normal | strong"
-      }
-    }
-  ],
-  "followUpQuestions": [
-    {
-      "questionNumber": 1,
-      "followUps": [
-        "回答内容をもとにした深掘り質問1（回答中の具体語を使うこと）",
-        "回答内容をもとにした深掘り質問2（不足情報・曖昧点を突く）"
-      ]
-    }
-  ],
-  "nextPractice": ["次回改善すべき具体的アクション1", "アクション2"]
-}
-
-※ perQuestionFeedback の質問文・回答文、および followUpQuestions の元質問文は出力しないこと。これらはサーバ側で元入力から補完される。AI は評価と提案だけに集中すること。
-
-【重要ルール】
-・perQuestionFeedback は、送られた質問と回答のペア数と必ず同じ件数にすること
-・followUpQuestions も、送られた質問と回答のペア数と必ず同じ件数にすること
-・perQuestionFeedback と followUpQuestions の questionNumber を一致させること
-・質問と回答の対応関係を絶対に崩さないこと
-・質問ごとのフィードバックを省略しないこと
-・回答が短い場合でも、責めるのではなく改善しやすい形で返すこと
-・総合型選抜・学校推薦型選抜の面接対策として自然な助言にすること
-・高校生にも伝わる日本語で書く
-・優しすぎず、少し厳しめのトーンにする
-・人格否定の表現は使わない
-・改善点は「なぜ弱いか」「どうすれば改善できるか」を必ずセットで説明する
-・NG：「もう少し具体的にしましょう」だけで終わらせない
-
-【followUpQuestions の生成ルール】
-・各 followUps は最低2個生成すること
-・元の質問と回答を必ず読んだうえで、その内容に基づいて生成すること
-・回答の中に出てきた具体的な語句・エピソードをできるだけ使うこと
-・どの受験生にも使える一般論の質問にしないこと
-・以下の観点からバランスよく生成すること
-  - 回答が抽象的な部分を具体化させる質問
-  - 行動の理由・動機を聞く質問
-  - 困難・失敗・葛藤を聞く質問
-  - その経験から何を学んだか聞く質問
-  - 志望大学・学部との接続を聞く質問
-  - 将来目標とのつながりを聞く質問
-  - 面接官が確認したくなる弱点・曖昧点を突く質問
-・短い回答の場合は、不足している情報を引き出す質問にすること
-・圧迫面接ではなく、総合型選抜・学校推薦型選抜で自然に聞かれる質問にすること
-・受験生が次の答えを準備しやすい形の質問にすること
-
-【levelEvaluation の評価ルール】
-各質問ペアの回答を以下の5軸で評価し、必ず weak / normal / strong のいずれかを返すこと。
-・logical（論理性）：結論→理由→具体例の構造になっているか
-・concrete（具体性）：抽象的すぎず、エピソードや事実が入っているか
-・consistency（一貫性）：志望理由・志望学部とつながっているか
-・originality（独自性）：他の受験生と差別化できる視点があるか
-・interviewReadiness（面接完成度）：そのまま面接で話せる完成度か
-・数値スコアは使わない。weak は「改善余地あり」、strong は「十分に伝わっている」という意味で使う
-・甘くしすぎない。回答が短いまたは抽象的な場合は weak を積極的に使う
-・受験生が萎えないよう、評価は断定的にしすぎない
-
-【最重要ルール：各質問ペアの followUps の構成】
-各質問ペアに対して、必ず以下の構成にすること。
-
-1問目（必須）：「この回答の一番弱い部分・曖昧な部分」を1つ特定し、それを深掘りする質問
-  - 回答が抽象的 → 「具体的に何をしたのか？」
-  - 他人主体に見える → 「あなた自身の役割は？」
-  - 動機が弱い → 「なぜそれを選んだのか？」
-  - 学びが浅い → 「その経験は他の場面でどう活かせるのか？」
-
-2問目（必須）：以下のいずれか1つ
-  - 大学との接続（この学部・ゼミ・カリキュラムとどうつながるか）
-  - 将来との接続（将来の目標とどうつながるか）
-  - 再現性（その姿勢・能力は他の場面でも通用するか）
-
-【トーンと文体（厳守）】
-・受験生が「次に何を直すか」を最短で掴めることを最優先する
-・前置き・挨拶・総評の言い換え・自己言及（「以下に評価を…」等）を書かない
-・「素晴らしい」「とても良い」など称賛だけの修飾は使わない。指摘は事実ベースで端的に
-・同じ趣旨を別の言い方で繰り返さない
-・1 文は短く（目安 60 字以内）。改行・読点で区切って読みやすくする
-・説教調や精神論を避け、行動レベルの指示にする
-
-【優先度の付け方（必須）】
-・improvements は「直すと最も差が出る順」に並べる。配列の 0 番目が最重要
-・perQuestionFeedback[].improvement も「最初の 1 文で最重要点」を言い切る
-・nextPractice は「明日からやれる順」で並べる。配列の 0 番目が最初にやること
-
-【出力長の上限（途中切れと冗長化を防ぐため必ず守ること）】
-・overallEvaluation は 300〜400 字以内（前置きなし、結論から書く）
-・goodPoints / improvements の各要素は 80〜120 字以内
-・perQuestionFeedback[].evaluation / improvement は各 80〜120 字以内
-・perQuestionFeedback[].betterAnswer は 180〜220 字以内
-・nextPractice の各要素は 80 字以内
-・followUps の各要素は 60 字以内
-
-【betterAnswer の作り方】
-・面接で実際に話す音声を想定し、30〜45 秒で言い切れる長さにする
-・暗記文・テンプレ文に見えないよう、1 文を短く区切る
-・「私は」「と考えます」を多用しない。語尾は自然にばらす
-・抽象語（成長した・頑張った 等）は最小限にし、具体的な行動・結果を 1 つは入れる
-・【自己分析サマリー】の強み・代表エピソードを「そのまま読み上げる」のは禁止。
-  自分の言葉に置き換え、行動・結果の中に滲ませる
-・【自己分析サマリー】の価値観タグは精神論として羅列せず、
-  「行動 → 結果」の文脈の中に 1〜2 個だけ自然に織り込む`;
+// SYSTEM_PROMPT（INTERVIEW_FEEDBACK_SYSTEM_PROMPT）は lib/prompts/interviewFeedbackPrompt.ts に lift 済み（STEP-LIB-03）。
+// 役割（不変）: 役割宣言 / 出力 JSON schema / 各種ルール（重要・followUp・levelEvaluation・トーン・優先度・長さ・betterAnswer）の static 部。
+// 切り出し動機は「毎回不変の指示を system に固定し、user 側には今回の入力データだけを渡す」STEP2.1 の構造。
+// 本 route は SYSTEM_PROMPT を import して anthropic.messages.create の system に渡すだけ。
+// user prompt（可変部）は下記 POST handler 内で組み立てる。
 
 // AI 出力 JSON normalize (fillEchoBackFromInput / sanitizeStringArray /
 // normalizeLevelEvaluation / lookupPair) は lib/interview/normalizeInterviewFeedback.ts に
@@ -369,7 +204,7 @@ export async function POST(request: Request) {
     // 動的入力（basicInfo / 受験情報 / context / 質問回答）を 1 本に結合していたため、
     // 毎回 8000 字超の user 入力を Claude に送っていた。
     // 切り出し後:
-    //   - INTERVIEW_FEEDBACK_SYSTEM_PROMPT (固定): 上で宣言済み
+    //   - INTERVIEW_FEEDBACK_SYSTEM_PROMPT (固定): lib/prompts/interviewFeedbackPrompt.ts に lift 済み（STEP-LIB-03）
     //   - userPrompt (可変): 「今回の入力データ」のみ
     // 構造は将来の prompt caching（cache_control）導入の足場でもある。
     const userPrompt = `${basicInfoSection}

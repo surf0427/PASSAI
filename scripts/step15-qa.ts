@@ -52,9 +52,8 @@ import {
   MATCHING_SYSTEM_PROMPT,
   buildMatchingUserPrompt,
 } from '../lib/matching/matchingPrompt';
-// STEP15e: interview-feedback の SYSTEM_PROMPT を route.ts から import。
-// route 本体にある POST function は呼ばないが、module 読み込み時に副作用は発生しない（pure 定義のみ）。
-import { INTERVIEW_FEEDBACK_SYSTEM_PROMPT } from '../app/api/interview-feedback/route';
+// STEP15e: interview-feedback の SYSTEM_PROMPT を import（STEP-LIB-03 で lib/prompts/ に lift 済み）。
+import { INTERVIEW_FEEDBACK_SYSTEM_PROMPT } from '../lib/prompts/interviewFeedbackPrompt';
 import { buildBasicInfoPromptSection } from '../lib/buildBasicInfoPromptSection';
 import { buildInterviewStudentProfileContext } from '../lib/contextBuilders/interviewContext';
 // STEP15f: analysis (wallHitting) の SYSTEM_PROMPT / user prompt builder を import。
