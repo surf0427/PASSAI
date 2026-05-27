@@ -33,6 +33,8 @@ import {
 } from '@/lib/essay/workspaceOps';
 import { buildBasicInfoForAi } from '@/lib/essay/buildBasicInfoForAi';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
+// STEP-PAGE-06 で page.tsx の JSX block から切り出した pure props component（ステップ 2 のみ）。
+import { MiniThoughtFields } from './components/MiniThoughtFields';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { FormField } from '@/components/ui/FormField';
@@ -698,67 +700,17 @@ export default function EssayPracticePage() {
         </section>
       )}
 
-      {/* ── ステップ2：ミニ思考欄 ── */}
+      {/* ── ステップ2：ミニ思考欄（JSX 本体は ./components/MiniThoughtFields.tsx に切り出し済み、STEP-PAGE-06）── */}
       {currentStep === 2 && (
-        <section className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-          <h2 className="text-base font-semibold text-gray-700 mb-2">ミニ思考欄</h2>
-          <p className="text-sm text-gray-500 mb-6">
-            短くてOKです。完璧に書く必要はありません。まずは考えの起点を作りましょう。
-          </p>
-
-          {/* 結論 */}
-          <div className="mb-6">
-            <FormField
-              label="① あなたの結論（1文）"
-              hint="完璧な結論でなくて大丈夫です。思いついた順で書いてみましょう。"
-            >
-              <Input
-                type="text"
-                value={conclusion}
-                onChange={(e) => setConclusion(e.target.value)}
-                placeholder="〇〇は△△だと考える"
-              />
-            </FormField>
-          </div>
-
-          {/* 理由① */}
-          <div className="mb-6">
-            <FormField
-              label="② 理由①"
-              hint="短くてOK。1 文で書いてみてください。"
-            >
-              <Input
-                type="text"
-                value={reasonOne}
-                onChange={(e) => setReasonOne(e.target.value)}
-                placeholder="理由を1文で書いてください"
-              />
-            </FormField>
-          </div>
-
-          {/* 理由② */}
-          <div className="mb-8">
-            <FormField
-              label="③ 理由②"
-              hint="①と違う角度から。1 つしか思いつかなければ空欄でも大丈夫です。"
-            >
-              <Input
-                type="text"
-                value={reasonTwo}
-                onChange={(e) => setReasonTwo(e.target.value)}
-                placeholder="別の視点から理由を書いてください"
-              />
-            </FormField>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setCurrentStep(3)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
-          >
-            本文入力へ進む
-          </button>
-        </section>
+        <MiniThoughtFields
+          conclusion={conclusion}
+          setConclusion={setConclusion}
+          reasonOne={reasonOne}
+          setReasonOne={setReasonOne}
+          reasonTwo={reasonTwo}
+          setReasonTwo={setReasonTwo}
+          onProceed={() => setCurrentStep(3)}
+        />
       )}
 
       {/* ── ステップ3：本文入力 ── */}
