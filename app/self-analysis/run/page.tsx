@@ -35,8 +35,12 @@ import { decideSummarizeMode } from '@/lib/summarizeMode';
 import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { UsageNote } from '@/components/shared/UsageNote';
-import { AiInlineThinking, ImprovementList } from '@/components/shared/result';
+import { AiInlineThinking } from '@/components/shared/result';
 import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
+// STEP-PAGE-02 で inline 定義から切り出した pure props component 群。
+//   ImprovementList は AnalysisResultCard 内に閉じたため page 側 import から除外済み。
+import { ActivityDataPreview } from './components/ActivityDataPreview';
+import { AnalysisResultCard } from './components/AnalysisResultCard';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
@@ -683,92 +687,6 @@ export default function SelfAnalysisPage() {
 
 // LoadingSpinner（ローカル定義）は components/shared/result/AiInlineThinking に
 // 統合されたため削除済み。ボタン内ローディング表示は <AiInlineThinking> を使う。
-
-function ActivityDataPreview({ activityData }: { activityData: ActivityData }) {
-  const counts = [
-    { label: '部活動', count: activityData.clubActivities.length },
-    { label: 'ボランティア', count: activityData.volunteerActivities.length },
-    { label: '留学', count: activityData.studyAbroadActivities.length },
-    { label: '探究', count: activityData.researchActivities.length },
-    { label: 'アルバイト', count: activityData.partTimeJobActivities.length },
-    { label: '資格', count: activityData.certificationActivities.length },
-    { label: 'コンテスト', count: activityData.contestActivities.length },
-    { label: '読書', count: activityData.readingActivities.length },
-    { label: '趣味', count: activityData.hobbyActivities.length },
-  ].filter((c) => c.count > 0);
-
-  return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl p-5">
-      <h2 className="text-sm font-bold text-gray-600 mb-3">読み込んだ活動データ</h2>
-      {counts.length === 0 ? (
-        <p className="text-gray-400 text-sm">活動データが空です</p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {counts.map((c) => (
-            <span
-              key={c.label}
-              className="bg-white border border-gray-200 rounded-full px-3 py-1 text-sm text-gray-700"
-            >
-              {c.label} {c.count}件
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AnalysisResultCard({ analysis }: { analysis: WallHittingResult }) {
-  return (
-    <div className="space-y-4">
-      {/* 要約 */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-5">
-        <h3 className="text-sm font-bold text-blue-800 mb-2">あなたの活動ストーリー</h3>
-        <p className="text-sm text-blue-900 leading-relaxed">{analysis.summary}</p>
-      </div>
-
-      {/* 強み / 補強ポイントの 2 カラム
-          外側の bg-green-50 / bg-orange-50 のカラーカード wrapper と h3 見出しは raw 維持。
-          リスト本体だけを ImprovementList に置換する（色は variant 標準の green-700 /
-          orange-700 になり、現行の green-900 / orange-900 から軽微にライト化する）。
-          density="relaxed" で space-y-1.5 にし、現行 space-y-2 にできるだけ近づける。
-          StrengthWeaknessGrid 自体は使えない：当該 grid は「per-column の card 無し・
-          青/オレンジ・xs サイズ」で設計されており、ここで使うと per-column card と
-          色（緑→青）が両方変わって視覚インパクトが大きいため。 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* 強み */}
-        <div className="bg-green-50 border border-green-200 rounded-xl p-5">
-          <h3 className="text-sm font-bold text-green-800 mb-3">強み</h3>
-          <ImprovementList
-            items={analysis.strengths}
-            variant="success"
-            density="relaxed"
-          />
-        </div>
-
-        {/* 弱み・補強ポイント */}
-        <div className="bg-orange-50 border border-orange-200 rounded-xl p-5">
-          <h3 className="text-sm font-bold text-orange-800 mb-3">補強ポイント</h3>
-          <ImprovementList
-            items={analysis.weaknesses}
-            variant="warning"
-            density="relaxed"
-          />
-        </div>
-      </div>
-
-      {/* 将来とのつながり */}
-      <div className="bg-purple-50 border border-purple-200 rounded-xl p-5">
-        <h3 className="text-sm font-bold text-purple-800 mb-3">将来とのつながり（仮説）</h3>
-        <ul className="space-y-2">
-          {analysis.futureConnections.map((f, i) => (
-            <li key={i} className="flex gap-2 text-sm text-purple-900">
-              <span className="text-purple-400 mt-0.5 shrink-0">→</span>
-              <span>{f}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
+// ActivityDataPreview / AnalysisResultCard は STEP-PAGE-02 で
+// app/self-analysis/run/components/ 配下へ切り出し済み。本ファイルでは pure props
+// rendering の result component を import して使うだけ。
