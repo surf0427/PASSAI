@@ -8,8 +8,7 @@ import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildInterviewUniversityContext } from '@/lib/buildInterviewUniversityContext';
 import { getAdmissionFocusContextForUser } from '@/lib/admissionFocus/getAdmissionFocusContextForUser';
 import { parseFacultyName } from '@/lib/parseFacultyName';
-import { toStudentProfile } from '@/lib/studentProfile';
-import { isStudentProfile } from '@/lib/studentProfileStorage';
+import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/interviewContext';
 import { feedbackToText } from '@/lib/interview/feedbackToText';
 import { fillEchoBackFromInput } from '@/lib/interview/normalizeInterviewFeedback';
@@ -293,11 +292,10 @@ export async function POST(request: Request) {
     // TODO: クライアント側（InterviewRecordForm）も getStudentProfileForFeature 経由で
     //   studentProfile を送る形に移行する。今は server-side 受け口だけ先行整備。
     const wallHittingResult: WallHittingResult | null = body.wallHittingResult ?? null;
-    const studentProfileFromBody: StudentProfile | null = isStudentProfile(body.studentProfile)
-      ? body.studentProfile
-      : null;
-    const studentProfile: StudentProfile | null =
-      studentProfileFromBody ?? (wallHittingResult ? toStudentProfile(wallHittingResult) : null);
+    const studentProfile: StudentProfile | null = getStudentProfileFromRequest({
+      body,
+      fallbackSource: wallHittingResult,
+    });
 
     // 不正データを弾いたうえで正規化する
     const rawQuestionsAndAnswers = body.questionsAndAnswers;

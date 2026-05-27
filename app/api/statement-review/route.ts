@@ -3,7 +3,7 @@ import {
   STATEMENT_REVIEW_SYSTEM_PROMPT,
   buildStatementReviewPrompt,
 } from '@/lib/statement/review/statementPrompt';
-import { isStudentProfile } from '@/lib/studentProfileStorage';
+import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 // admissionFocus wiring (getAdmissionFocusContextForUser) は PR9 で
 // lib/admissionFocus/* の commit と同時に再導入する。本 PR では未接続。
 // buildStatementReviewPrompt の admissionFocusContext は optional のため、
@@ -31,9 +31,7 @@ export async function POST(req: Request) {
   const wallHittingResult: WallHittingResult | null = body.wallHittingResult ?? null;
   // 新規: クライアントが localStorage の canonical StudentProfile を送ってきた場合に受ける。
   // 形が壊れていれば null として扱い、wallHittingResult 側 fallback に任せる。
-  const studentProfile: StudentProfile | null = isStudentProfile(body.studentProfile)
-    ? body.studentProfile
-    : null;
+  const studentProfile: StudentProfile | null = getStudentProfileFromRequest({ body });
 
   if (!essay.trim()) {
     return Response.json({ error: '志望理由書本文を入力してください' }, { status: 400 });

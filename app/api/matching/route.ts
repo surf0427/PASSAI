@@ -44,8 +44,7 @@ import {
   buildUniversityContextsFromBasicInfo,
   findUniversityContextByName,
 } from '@/lib/matching/buildUniversityContextsFromBasicInfo';
-import { toStudentProfile } from '@/lib/studentProfile';
-import { isStudentProfile } from '@/lib/studentProfileStorage';
+import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 // STEP15d: prompt 文字列の組み立ては lib/matching/matchingPrompt.ts に切り出した。
 //   - MATCHING_SYSTEM_PROMPT: 役割宣言 + subjectGrades semantic instruction + 出力ルール / schema
 //   - buildMatchingUserPrompt: 候補大学 1 件分の dynamic data セクション
@@ -177,8 +176,7 @@ export async function POST(req: Request) {
     //   2. 無ければ selfAnalysis (= WallHittingResult) から toStudentProfile() で派生（後方互換）
     // TODO: クライアント側（admission-matching）も getStudentProfileForFeature 経由で
     //   studentProfile を送る形に移行する。今は server-side 受け口だけ先行整備。
-    const studentProfileFromBody = isStudentProfile(body.studentProfile) ? body.studentProfile : null;
-    const studentProfile = studentProfileFromBody ?? toStudentProfile(selfAnalysis);
+    const studentProfile = getStudentProfileFromRequest({ body, fallbackSource: selfAnalysis });
 
     const candidates = await generateUniversityCandidates(selfAnalysis, results);
     // PR9d-2 / C3 marker:

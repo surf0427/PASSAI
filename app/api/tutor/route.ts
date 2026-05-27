@@ -35,6 +35,7 @@ import { checkServerRateLimit } from '@/lib/serverRateLimit';
 import { TUTOR_MODEL } from '@/lib/aiInputHash';
 import { TUTOR_SYSTEM_PROMPT, buildTutorUserPrompt } from '@/lib/tutor/tutorPrompt';
 import { buildTutorPromptContext } from '@/lib/contextBuilders/tutor/buildTutorPromptContext';
+import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 import type { TutorIntent, PreferredProfileField } from '@/lib/tutor/types';
 
 // ── 定数 ─────────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     contextString = buildTutorPromptContext({
       basicInfo: body.basicInfo ?? null,
-      studentProfile: body.studentProfile ?? null,
+      studentProfile: getStudentProfileFromRequest({ body }),
       intent,
       preferredProfileField,
       statementDraft: intent === 'statement' ? body.statementDraft ?? null : null,
