@@ -61,6 +61,8 @@ import {
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ReviewResult } from '@/lib/essayPracticeStorage';
 import type { EssayWorkspace } from '@/types/essay';
+// STEP-PAGE-04 で inline 定義から切り出した pure props component。
+import { GuardScreen } from './components/GuardScreen';
 
 // SSR-stable mount flag。既存ページと同形パターン。
 const subscribeMount = () => () => {};
@@ -500,32 +502,5 @@ export default function EssayRewritePage() {
 }
 
 // ─── 表示専用 sub-component ─────────────────────────────────────────
-
-function GuardScreen({
-  backHref,
-  backLabel,
-  title,
-  body,
-}: {
-  backHref: string;
-  backLabel: string;
-  title: string;
-  body: string;
-}) {
-  return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
-      <div className="mb-6">
-        <Link
-          href={backHref}
-          className="text-xs text-gray-500 hover:text-gray-700"
-        >
-          {backLabel}
-        </Link>
-      </div>
-      <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
-        <h1 className="text-lg font-semibold text-gray-800 mb-2">{title}</h1>
-        <p className="text-sm text-gray-600">{body}</p>
-      </div>
-    </div>
-  );
-}
+// GuardScreen は STEP-PAGE-04 で ./components/GuardScreen.tsx へ切り出し済み。
+// 本ファイルは import して 4 つの guard 経路で使うだけ。
