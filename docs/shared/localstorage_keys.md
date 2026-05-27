@@ -38,6 +38,24 @@
 
 - `interviewQuestionsCache`（[`lib/interviewQuestionCache.ts`](../../lib/interviewQuestionCache.ts), JSON）— `/api/interview-questions` の input hash + 生成済み `TwoLayerInterviewQuestions` の同居 cache。同一入力（basicInfo / statementDraft / studentProfile / activitySummary / model / promptVersion）なら AI call を skip して保存済み 2 層質問を復元する。`legacy` fallback 経路は保存対象外。route 側には cache を入れずクライアント側のみで管理する。
 
+## essay STEP A で追加された key
+
+- `essayWorkspaces`（[`lib/essayWorkspaceStorage.ts`](../../lib/essayWorkspaceStorage.ts), JSON）— 小論文 `EssayWorkspace[]` の正本配列（LRU 最大 10 件）。レビュー履歴（append-only、最大 20 件）と改善ワーク状態（`improvementInProgress` 単数）を含む。Phase 1 の改善フローで利用予定。legacy `essayPracticeReview` から初回読み込み時に 1 件 migration される（idempotent、legacy key は残す）。STEP A は migration のみ。書き込み経路の dual-write 化は STEP B 以降。
+
+## essay STEP F で追加された key
+
+- `essayImproveSummaryInputHash`（[`lib/essay/improveSummaryCache.ts`](../../lib/essay/improveSummaryCache.ts), JSON）— `/api/essay-improve-summary` の input hash + 生成済み `ImprovementSummary` の同居 cache。同入力（issueText / axis / deepQuestions / answers / essayBodySnapshot / themeText / mini / basicInfo / templateVersion / model / promptVersion）なら AI call を skip して保存済み方針を復元する。本文ドラフト禁止 prompt（ai_policy 準拠）と `ESSAY_IMPROVE_SUMMARY_PROMPT_VERSION = 1` を組で運用する。
+
+## essay STEP I（Phase 1 リリース時点）の退役方針
+
+essay Phase 1 リリース時点では、以下を **削除せず維持** する:
+
+- `essayPracticeReview` / `essayPracticeData`（legacy 保存先）
+- `/essay-practice` の dual-write（legacy + `essayWorkspaces` の両方書き込み）
+- legacy migration 経路（`essayPracticeReview` → `essayWorkspaces` の 1 件移行）
+
+理由: rollback safety。Phase 1 の workspace 経路にいずれかの bug が見つかった場合、旧 code に戻すだけで legacy のみで運用復帰できる経路を残す。判断見直しは Phase 2 完了後とする。
+
 ## storage 配置ルール
 
 - すべての `*Storage.ts` は `lib/` 直下に配置する（flat な命名規則）。

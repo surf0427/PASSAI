@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
+import Link from 'next/link';
 import {
   saveEssayProgress,
   saveReviewResult,
@@ -21,6 +22,16 @@ import {
   saveEssayReviewCache,
 } from '@/lib/essayReviewCache';
 import { logAiCache } from '@/lib/aiCacheLog';
+import {
+  loadEssayWorkspace,
+  loadEssayWorkspaces,
+  upsertEssayWorkspace,
+} from '@/lib/essayWorkspaceStorage';
+import {
+  appendInitialReview,
+  createInitialWorkspace,
+} from '@/lib/essay/workspaceOps';
+import { buildBasicInfoForAi } from '@/lib/essay/buildBasicInfoForAi';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
@@ -108,6 +119,12 @@ export default function EssayPracticePage() {
   const [reviewHistory, setReviewHistory] = useState<ReviewResult[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
+  // essay STEP B: 現セッションに対応する EssayWorkspace の id。
+  // - null = まだ workspace 未作成（初回 review 時に新規作成）
+  // - 値あり = 既存 workspace に再添削の review を append
+  // - handleReset（新しいテーマで始める）で null に戻す
+  // - 既存の reviewResult / reviewHistory / essayPracticeReview とは独立（dual-write 用）
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string | null>(null);
   // savedReview は (1) マウント時に loadReviewResult() で初期化し、
   // (2) API 添削成功時 (handleEssayReview の最後) に上書きされる。
   // post-API の上書き値だけを useState で持ち、マウント時の値は useMemo([isMounted]) で結合する
@@ -133,6 +150,18 @@ export default function EssayPracticePage() {
     [isMounted],
   );
 
+  // essay STEP A: legacy essayPracticeReview → essayWorkspaces への migration を
+  // mount 後に 1 回発火させる。戻り値は使わない（UI には反映しない）。
+  //   - migration は idempotent（essayWorkspaces キーが既に存在すれば no-op）
+  //   - useEffect ではなく useMemo を使うのは、本ファイルが localStorage 経由の
+  //     mount-after 処理を useSyncExternalStore + useMemo パターンに統一しており、
+  //     useEffect 内 setState の禁則を避ける方針（上記コメント参照）
+  //   - Strict Mode の double-invocation も idempotent により安全
+  // STEP B 以降で workspace を実際に読み込む際にここを書き換える。
+  useMemo(() => {
+    if (isMounted) loadEssayWorkspaces();
+  }, [isMounted]);
+
   // 今回の小論文練習で使う志望校・入試方式（selectedEssayTarget）。
   // - pre-mount: 空（hydration mismatch を避ける）
   // - post-mount: basicInfo.preferences[0] / basicInfo.examTypes[0] を初期値として表示
@@ -157,42 +186,11 @@ export default function EssayPracticePage() {
 
   // 添削/壁打ち API に渡す basicInfo は preferences[0] / examTypes を
   // selectedEssayTarget で差し替える。localStorage の basicInfo 本体は変更しない。
-  const basicInfoForAi = useMemo<BasicInfo | null>(() => {
-    const target = selectedEssayTarget;
-    const hasAnyTarget =
-      target.university.trim() !== '' ||
-      target.faculty.trim() !== '' ||
-      target.department.trim() !== '';
-    // preferences[0] へ詰める志望校（型に合わせて preferences 形に変換）。
-    const preferenceFromTarget = {
-      university: target.university,
-      faculty: target.faculty,
-      department: target.department,
-    };
-    // examType が選ばれていれば examTypes はその 1 件のみで上書き。
-    // 未選択ならオリジナルの basicInfo.examTypes を尊重する。
-    const overrideExamTypes = (original: string[] | undefined): string[] => {
-      const trimmed = target.examType.trim();
-      if (trimmed !== '') return [trimmed];
-      return original ?? [];
-    };
-    if (!basicInfo) {
-      if (!hasAnyTarget && target.examType.trim() === '') return null;
-      return {
-        name: '',
-        grade: '',
-        track: '',
-        preferences: [preferenceFromTarget],
-        examTypes: overrideExamTypes(undefined),
-      };
-    }
-    const rest = (basicInfo.preferences ?? []).slice(1);
-    return {
-      ...basicInfo,
-      preferences: [preferenceFromTarget, ...rest],
-      examTypes: overrideExamTypes(basicInfo.examTypes),
-    };
-  }, [basicInfo, selectedEssayTarget]);
+  // Phase 2 STEP P で lib/essay/buildBasicInfoForAi.ts に extract（戻り値 shape 不変）。
+  const basicInfoForAi = useMemo<BasicInfo | null>(
+    () => buildBasicInfoForAi(basicInfo, selectedEssayTarget),
+    [basicInfo, selectedEssayTarget],
+  );
 
   // selectedEssayTarget からテーマ候補を導出する。
   // lib/essayThemes.ts は大学DB（lib/universities.ts 経由）の admission_policy を
@@ -280,6 +278,50 @@ export default function EssayPracticePage() {
     }
   }
 
+  // essay STEP B: 添削成功時の dual-write。
+  // legacy essayPracticeReview への保存 (saveReviewResult) は既存通り走らせた上で、
+  // 同じ review entry を essayWorkspaces にも追記する。
+  //
+  // 仕様:
+  //   - 同セッション (currentWorkspaceId 一致) なら既存 workspace に append
+  //   - 未作成なら createInitialWorkspace で新規構築してから append
+  //   - 既存 workspace でも target/theme/mini は最新値で更新（条件再編集に追従）
+  //   - body と updatedAt は appendInitialReview が更新する
+  //   - workspace.id を state に記録（同セッション中の再添削で再利用）
+  //
+  // best-effort:
+  //   try/catch で握り console.warn のみ。legacy 保存は既に成功している前提なので、
+  //   この経路の失敗はユーザー UX に伝播させない。
+  function persistReviewToWorkspace(reviewResult: ReviewResult) {
+    try {
+      const target = {
+        university: selectedEssayTarget.university,
+        faculty: selectedEssayTarget.faculty,
+        department: selectedEssayTarget.department,
+        examType: selectedEssayTarget.examType,
+      };
+      const theme = {
+        text: essayTheme,
+        type: essayThemeType,
+        source: essayThemeSource,
+        reason: essayThemeReason,
+      };
+      const mini = { conclusion, reasonOne, reasonTwo };
+
+      const existing = currentWorkspaceId ? loadEssayWorkspace(currentWorkspaceId) : null;
+      const baseWorkspace = existing
+        ? { ...existing, target, theme, mini }
+        : createInitialWorkspace({ target, theme, mini, body: essayBody });
+
+      const updated = appendInitialReview(baseWorkspace, reviewResult, essayBody);
+      upsertEssayWorkspace(updated);
+      setCurrentWorkspaceId(updated.id);
+    } catch (e) {
+      // legacy essayPracticeReview への保存は既に完了している。ユーザー側には何も表示しない。
+      console.warn('[essay STEP B] dual-write to essayWorkspaces failed', e);
+    }
+  }
+
   async function handleReviewEssay() {
     // STEP5.11: input hash cache を先に判定する。
     // 同入力なら AI を呼ばずに保存済み review を復元する。
@@ -324,6 +366,8 @@ export default function EssayPracticePage() {
       setSavedReview(saved);
       setCurrentStep(5);
       saveEssayProgress({ hasContent: true, hasReview: true });
+      // essay STEP B: legacy 保存と同時に essayWorkspaces にも dual-write（best-effort）。
+      persistReviewToWorkspace(newResult);
       return;
     }
     logAiCache({ route: 'api/essay-review', action: 'miss', inputHash });
@@ -372,6 +416,8 @@ export default function EssayPracticePage() {
         savedAt: new Date().toISOString(),
         review: newResult,
       });
+      // essay STEP B: legacy 保存と同時に essayWorkspaces にも dual-write（best-effort）。
+      persistReviewToWorkspace(newResult);
     } catch {
       setReviewError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {
@@ -406,10 +452,52 @@ export default function EssayPracticePage() {
     setChatRemainingCount(CHAT_MAX_COUNT);
     setChatLoading(false);
     setChatError('');
+    // essay STEP B: 新しいテーマで始める = 新セッション。
+    // 次回の persistReviewToWorkspace で新 workspace が作られるよう id を解除する。
+    // 既存 workspace の localStorage 上のデータは保持される（LRU 退役を待つ）。
+    setCurrentWorkspaceId(null);
   }
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+      {/* essay STEP I: hub への戻り link。/essay/results / 改善フローへの導線を確保。
+          ステップ進行中も常時表示で、ユーザーが小論文系の他経路（過去結果閲覧・改善）に
+          いつでも抜けられる状態にしておく。 */}
+      <div className="mb-6">
+        <Link
+          href="/essay"
+          className="text-xs text-gray-500 hover:text-gray-700"
+        >
+          ← 小論文トップへ
+        </Link>
+      </div>
+
+      {/* Phase 2 STEP P: 新 architecture（/essay/structure / /essay/write）への
+          deprecation banner。/essay-practice 自体は削除しないが、新フロー誘導を出す。
+          rollback safety のため legacy ページは引き続き利用可能。 */}
+      <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
+        <p className="text-sm font-semibold text-blue-700 mb-1">
+          新しい小論文機能が利用できます
+        </p>
+        <p className="text-xs text-gray-600 mb-3 leading-relaxed">
+          整理して書く・いきなり書くの 2 つのフローに分かれた新 architecture を試せます。
+          このページも引き続きご利用いただけます。
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/essay/structure"
+            className="inline-flex items-center justify-center font-medium rounded-xl text-xs px-3 py-1.5 bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+          >
+            整理して書く →
+          </Link>
+          <Link
+            href="/essay/write"
+            className="inline-flex items-center justify-center font-medium rounded-xl text-xs px-3 py-1.5 border border-brand-200 text-brand-700 bg-white hover:bg-brand-50 transition-colors"
+          >
+            いきなり書く →
+          </Link>
+        </div>
+      </div>
 
       {/* ── ページタイトル・説明 ── */}
       <div className="mb-6">

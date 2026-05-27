@@ -4,12 +4,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { loadActivityData } from '@/lib/activityStorage';
 import { loadWallHittingResult } from '@/lib/wallHittingStorage';
-import { loadAnalyzeState, saveAnalyzeState } from '@/lib/analyzeStorage';
+import { loadAnalyzeState } from '@/lib/analyzeStorage';
 import { loadMatchingInput, loadMatchingResult } from '@/lib/admissionMatchingStorage';
 import { loadEssayProgress } from '@/lib/essayPracticeStorage';
 import { loadDraft, loadReviewHistory } from '@/lib/statement/review/statementStorage';
@@ -157,14 +156,11 @@ function getStatus(statuses: Record<string, ProgressStatus>, href: string): Prog
 export default function HomePage() {
   const router = useRouter();
 
-  // Home → 自己分析は必ず①活動確認(confirm)から始める
-  function handleGoToSelfAnalysis() {
-    const savedState = loadAnalyzeState();
-    if (savedState) {
-      saveAnalyzeState({ ...savedState, step: 'confirm' });
-    }
-    router.push('/self-analysis');
-  }
+  // STEP-NAV-2: 旧 handleGoToSelfAnalysis（analyzeState.step を 'confirm' に
+  // 戻してから /self-analysis に push する処理）は撤去。リセット責務は
+  // /self-analysis hub のカード①「0から自己PRを書く」(startFresh) に集約済み。
+  // /home → /self-analysis は hub に着地するだけで、開始 / 再開の選択は
+  // hub のカードで行う。
 
   const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -302,25 +298,16 @@ export default function HomePage() {
                 </p>
               </div>
               <div className="mt-auto pt-1">
-                {/* self-analysis は Home で onClick ハンドラ経由なので Button、
-                    他は遷移のみなので LinkButton。両者は同じスタイル系列。 */}
-                {feature.href === '/self-analysis' ? (
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={handleGoToSelfAnalysis}
-                  >
-                    {getButtonLabel(status)}
-                  </Button>
-                ) : (
-                  <LinkButton
-                    href={feature.href}
-                    variant="primary"
-                    size="md"
-                  >
-                    {getButtonLabel(status)}
-                  </LinkButton>
-                )}
+                {/* STEP-NAV-2: 全 feature とも純粋な遷移になったので LinkButton に統一。
+                    self-analysis だけ Button + onClick だったのは旧 reset 側効を行うため
+                    の分岐で、責務を hub に移したため不要になった。 */}
+                <LinkButton
+                  href={feature.href}
+                  variant="primary"
+                  size="md"
+                >
+                  {getButtonLabel(status)}
+                </LinkButton>
               </div>
             </Card>
           );

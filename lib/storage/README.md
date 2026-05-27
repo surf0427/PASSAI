@@ -100,8 +100,10 @@ raw string ストレージには以下のコメントを必ず付けること:
 | `statementPrepareFollowUpAnswers` | `lib/statementPrepareStorage.ts` | JSON | 志望理由書 整理メモの深掘り回答（弱点別） |
 | `statement_prepare_limit` | `lib/statementPrepareLimit.ts` | JSON | 志望理由書 整理メモ AI 日次回数（daily limit） |
 | `statement_rewrite_memo` | `lib/statement/rewrite/rewriteMemoStorage.ts` | JSON | reviewId（`statementReviewHistory` の id）単位の「書き直し方針メモ」。`/statement/improve/rewrite/[id]` でユーザーが書く整理 artifact。`Partial<Record<reviewId, { text, updatedAt, version?: 2, workAnswers?: Partial<Record<string, Partial<Record<string, string>>>> }>>`。v1 record（`version` 無し）は後方互換で透過 load される。`workAnswers` は改善ポイント別ワークの回答（外側 key = axis/improvement key、内側 key = 質問 id）。AI 出力・bullet snapshot は持たない（analysis = master 方針、edit 側は render-time derive）。旧 `statement_rewrite_drafts`（軸別、撤去済み）の後継。user の localStorage に旧 key の残骸が残っていても誰も読まないため放置 |
-| `essayPracticeData` | `lib/essayPracticeStorage.ts` | JSON | 小論文練習の進捗状態（途中保存） |
-| `essayPracticeReview` | `lib/essayPracticeStorage.ts` | JSON | 小論文添削結果の保存 |
+| `essayPracticeData` | `lib/essayPracticeStorage.ts` | JSON | 小論文練習の進捗状態（途中保存）。essay STEP I で Phase 1 中は **維持** 方針確定（rollback safety） |
+| `essayPracticeReview` | `lib/essayPracticeStorage.ts` | JSON | 小論文添削結果の保存。essay STEP B 以降は `essayWorkspaces` への dual-write の片側として運用。Phase 1 中は **削除しない**（rollback safety） |
+| `essayWorkspaces` | `lib/essayWorkspaceStorage.ts` | JSON | 小論文 `EssayWorkspace[]` の正本配列（LRU 10 件）。review append-only 履歴と改善ワーク状態を含む。essay STEP A 新規・STEP B で `/essay-practice` 添削成功時に dual-write 化。Phase 2 完了まで dual-write 維持 |
+| `essayImproveSummaryInputHash` | `lib/essay/improveSummaryCache.ts` | JSON | `/api/essay-improve-summary` の input hash + 生成済み `ImprovementSummary` の同居 cache。essay STEP F 新規。同入力なら AI call を skip して保存済み方針を復元する |
 | `passai_diagnosis_result` | `lib/diagnosisStorage.ts` | JSON | 受験タイプ診断結果（LP → 診断 → 結果動線で再訪復元用） |
 | `deepDiveUsage` | `lib/dailyLimit.ts` | JSON | 壁打ち（深掘り質問）日次制限（daily limit） |
 | `selfAnalysisUsage` | `lib/dailyLimit.ts` | JSON | 自己分析 日次制限（daily limit） |
