@@ -16,6 +16,8 @@ import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { buildSelfPRDraftSeed } from '@/lib/buildSelfPRDraftSeed';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
+// STEP-PAGE-05 で page.tsx の empty-state JSX block から切り出した pure props component。
+import { EmptyState } from './components/EmptyState';
 
 // ── 日時フォーマット ──────────────────────────────────────────────
 
@@ -542,40 +544,14 @@ function SelfPrPageInner() {
         </div>
 
         {selfPRs.length === 0 ? (
-          // STEP-NAV-3: hub の②「書いた自己PRを添削する」着地経路を成立させるため、
-          // empty-state を「直接自己PRを書く / 自己分析から始める」の 2 択に統一する。
-          // hasSelfAnalysis は headline 文言の微差にだけ使う（経路は両方とも同じ 2 ボタン）。
-          //   - 直接自己PRを書く: 既存 createNewPR() を流用（空 PR を 1 件作って自動 open）。
-          //     daily limit は従来どおり selfAnalysisLimit.canUse で disable 連動。
-          //   - 自己分析から始める: /self-analysis (hub) に戻して 4 カードから選び直す経路。
-          // selfPRs[] の構造 / API / cache には何も触らない。
-          <div className="text-center py-24">
-            <p className="text-gray-400 text-base mb-3">
-              {hasSelfAnalysis ? 'まだ自己PR添削はありません' : 'まだ自己PRはありません'}
-            </p>
-            <p className="text-gray-500 text-sm mb-8 leading-relaxed">
-              本文をそのまま貼って添削するか、<br />
-              自己分析から整理して書き始めるか選べます。
-            </p>
-            <div className="flex flex-col items-center gap-3 max-w-sm mx-auto">
-              <button
-                type="button"
-                onClick={createNewPR}
-                disabled={!selfAnalysisLimit.canUse(usage)}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors"
-              >
-                {selfAnalysisLimit.canUse(usage)
-                  ? '直接自己PRを書く'
-                  : '直接自己PRを書く（本日の上限）'}
-              </button>
-              <Link
-                href="/self-analysis"
-                className="w-full inline-block text-center border border-blue-300 text-blue-600 hover:bg-blue-50 font-semibold px-8 py-3 rounded-lg text-base transition-colors"
-              >
-                自己分析から始める →
-              </Link>
-            </div>
-          </div>
+          // STEP-NAV-3 設計意図と JSX 本体は ./components/EmptyState.tsx に切り出し済み（STEP-PAGE-05）。
+          // selfAnalysisLimit.canUse(usage) は親側で boolean に確定して props で渡す。
+          // 経路（onCreateNewPR = createNewPR）と cache contract は不変。
+          <EmptyState
+            hasSelfAnalysis={hasSelfAnalysis}
+            canCreateNewPR={selfAnalysisLimit.canUse(usage)}
+            onCreateNewPR={createNewPR}
+          />
         ) : (
           <div className="grid gap-4">
             {selfPRs.map((pr) => (
