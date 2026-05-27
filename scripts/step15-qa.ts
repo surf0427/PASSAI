@@ -71,9 +71,9 @@ import {
   buildSummarizePrompt,
 } from '../lib/prompts';
 // STEP15h: essay-review / essay-chat の SYSTEM_PROMPT を import。
-// essay-review は STEP-LIB-04 で lib/prompts/ に lift 済み。essay-chat は route.ts に同居のまま。
+// essay-review は STEP-LIB-04、essay-chat は STEP-LIB-05 で lib/prompts/ に lift 済み。
 import { ESSAY_REVIEW_SYSTEM_PROMPT } from '../lib/prompts/essayReviewPrompt';
-import { ESSAY_CHAT_SYSTEM_PROMPT } from '../app/api/essay-chat/route';
+import { ESSAY_CHAT_SYSTEM_PROMPT } from '../lib/prompts/essayChatPrompt';
 
 // type-only imports（runtime に持ち出さない / localStorage 経路を引きずらない）
 import type { BasicInfo } from '../types/basicInfo';
