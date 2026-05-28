@@ -104,9 +104,14 @@ export default function AdmissionMatchingPage() {
   // - finally で必ず null に戻し orphan controller を残さない
   // - handleShowCached は fetch しないため controller を作らない（cache hit 不変）
   const abortControllerRef = useRef<AbortController | null>(null);
-  // STEP6.7: 旧 aiError state を削除。エラー UI は handleStartMatching の catch にある
-  //   alert(...) を正式 UX として採用済み。inline banner は writer が存在せず dead branch
-  //   だったため削除した（state / render / setter まとめて廃止）。
+  // STEP-QA-FIX-01-MATCHING-ALERTS: 旧 STEP6.7 で alert() を正式 UX としていたが、
+  //   STEP-RELEASE-QA-01 で blocking modal が UX 一貫性を損なう (QA-01) と判定されたため、
+  //   aiError state を復活させて inline banner に置換した。
+  //   - matching 失敗時 / cached 読み込み失敗時の異常系で setAiError(...) を立てる
+  //   - handleStartMatching / handleShowCached の冒頭で setAiError('') してクリア
+  //   - 表示は ConfirmView の直上に inline banner として render
+  //   - livePartial の amber banner と同形の inline pattern（pattern を統一）
+  const [aiError, setAiError] = useState('');
   const [hasCachedResult, setHasCachedResult] = useState(false);
   // STEP6.7: cachedTimestamp は 4 経路で更新される ──
   //   (1) mount-init: cache 存在時に loadAiMatchAdviceTimestamp() を反映
@@ -346,6 +351,8 @@ export default function AdmissionMatchingPage() {
     setLiveMatchingLevel(level);
     // STEP6.2/6.3: cached 表示中から「再診断する」で呼ばれた場合に live 表示へ切り替える。
     setCachedSnapshot(null);
+    // STEP-QA-FIX-01-MATCHING-ALERTS: 新規 attempt 開始で前回の error banner をクリア。
+    setAiError('');
     setAiLoading(true);
     setAiLoadingStartedAt(Date.now());
 
@@ -374,7 +381,10 @@ export default function AdmissionMatchingPage() {
         return;
       }
       console.error(error);
-      alert('マッチングに失敗しました。もう一度お試しください。');
+      // STEP-QA-FIX-01-MATCHING-ALERTS: blocking alert() を inline banner に置換。
+      // UI 表示は ConfirmView の直上 (return 文付近)。次の handleStartMatching /
+      // handleShowCached で setAiError('') により自動クリア。
+      setAiError('マッチングに失敗しました。もう一度お試しください。');
     } finally {
       setAiLoading(false);
       setAiLoadingStartedAt(null);
@@ -414,10 +424,14 @@ export default function AdmissionMatchingPage() {
   //   - hasRunMatching=true で結果ページへ遷移
   //   - 注: live state（liveAiAdvices / liveMatchingLevel）は意図的に書き換えない（live を汚さない）
   function handleShowCached() {
+    // STEP-QA-FIX-01-MATCHING-ALERTS: 再度クリックでも banner を更新できるよう冒頭でクリア。
+    setAiError('');
     const cached = loadAiMatchAdviceCache();
     if (!cached) {
-      // hasCachedResult が true だったのに読めない = データ破損などの異常系
-      alert('保存済みの結果を読み込めませんでした。');
+      // hasCachedResult が true だったのに読めない = データ破損などの異常系。
+      // STEP-QA-FIX-01-MATCHING-ALERTS: blocking alert() を inline banner に置換。
+      // ConfirmView に留まったまま (setHasRunMatching を立てない) banner だけ出す。
+      setAiError('保存済みの結果を読み込めませんでした。');
       return;
     }
     // STEP6.3: cache 由来の表示データは cachedSnapshot に集約。
@@ -527,17 +541,35 @@ export default function AdmissionMatchingPage() {
       />
     </>
   ) : (
-    <ConfirmView
-      missingItems={missingItems}
-      basicFormData={basicFormData}
-      activityData={activityData}
-      wallHitting={wallHitting}
-      selfPRs={selfPRs}
-      hasCachedResult={hasCachedResult}
-      cachedTimestamp={cachedTimestamp}
-      onStartMatching={handleStartMatching}
-      onShowCached={handleShowCached}
-    />
+    <>
+      {/* STEP-QA-FIX-01-MATCHING-ALERTS: 旧 alert() の置換先。
+          matching 失敗 / cached 読み込み失敗の異常系を inline banner で通知し、
+          ConfirmView をそのまま表示したまま再試行を促す。
+          partial fail (amber, livePartial) と区別するため red 系で render する。
+          banner は次の handleStartMatching / handleShowCached 冒頭で setAiError('')
+          により自動クリア。 */}
+      {aiError && (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-6">
+          <p
+            role="alert"
+            className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800"
+          >
+            {aiError}
+          </p>
+        </div>
+      )}
+      <ConfirmView
+        missingItems={missingItems}
+        basicFormData={basicFormData}
+        activityData={activityData}
+        wallHitting={wallHitting}
+        selfPRs={selfPRs}
+        hasCachedResult={hasCachedResult}
+        cachedTimestamp={cachedTimestamp}
+        onStartMatching={handleStartMatching}
+        onShowCached={handleShowCached}
+      />
+    </>
   );
 }
 
