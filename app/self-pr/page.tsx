@@ -16,8 +16,11 @@ import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { buildSelfPRDraftSeed } from '@/lib/buildSelfPRDraftSeed';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
-// STEP-PAGE-05 で page.tsx の empty-state JSX block から切り出した pure props component。
+// STEP-PAGE-05 / 05b で page.tsx の list view JSX block から切り出した pure props component。
+//   - EmptyState : selfPRs.length === 0 の case
+//   - PrListItem : selfPRs.map(...) 内側の 1 件分カード
 import { EmptyState } from './components/EmptyState';
+import { PrListItem } from './components/PrListItem';
 
 // ── 日時フォーマット ──────────────────────────────────────────────
 
@@ -58,12 +61,8 @@ function computeSeedInputHash(
   return h.toString(36);
 }
 
-// タイトルが未入力の場合に本文冒頭20文字を使う
-function resolveTitle(pr: SelfPR): string {
-  if (pr.title && pr.title.trim()) return pr.title.trim();
-  if (pr.text.trim()) return pr.text.trim().slice(0, 20) + (pr.text.trim().length > 20 ? '…' : '');
-  return '（本文未入力）';
-}
+// STEP-PAGE-05b: resolveTitle は PrListItem 内側に移送した（唯一の consumer のため）。
+// formatDateTime は editor view header でも使用するため page-local に温存。
 
 // ── ページ本体 ───────────────────────────────────────────────────
 
@@ -555,62 +554,13 @@ function SelfPrPageInner() {
         ) : (
           <div className="grid gap-4">
             {selfPRs.map((pr) => (
-              <div
+              <PrListItem
                 key={pr.id}
-                className="relative bg-white border border-gray-200 hover:border-blue-300 hover:shadow-sm rounded-xl transition-all overflow-hidden"
-              >
-                {/* カード本体: クリックで自己PR添削フォームを開く */}
-                <button
-                  type="button"
-                  onClick={() => openPR(pr)}
-                  className="w-full text-left p-6 pr-16"
-                >
-                  {/* 上段：回数・日時・添削済みバッジ */}
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
-                      {pr.index}回目
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {formatDateTime(pr.createdAt ?? pr.updatedAt)} 作成
-                    </span>
-                    {pr.latestResult && (
-                      <span className="text-xs text-green-600 font-medium ml-auto shrink-0">
-                        添削済み
-                      </span>
-                    )}
-                  </div>
-
-                  {/* タイトル */}
-                  <p className="text-sm font-semibold text-gray-700 mb-1">
-                    {resolveTitle(pr)}
-                  </p>
-
-                  {/* 本文プレビュー */}
-                  <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">
-                    {pr.text || '（本文未入力）'}
-                  </p>
-                </button>
-
-                {/* 自己分析の深掘りへの導線 */}
-                <div className="border-t border-gray-100 px-6 py-3">
-                  <button
-                    type="button"
-                    onClick={goToSelfAnalysisAnswering}
-                    className="text-sm font-semibold text-blue-600 hover:text-blue-800"
-                  >
-                    自己分析の深掘りを修正する →
-                  </button>
-                </div>
-
-                {/* 削除ボタン */}
-                <button
-                  type="button"
-                  onClick={() => deletePR(pr.id)}
-                  className="absolute top-4 right-4 text-xs text-gray-300 hover:text-red-500 hover:bg-red-50 rounded px-2 py-1 transition-colors"
-                >
-                  削除
-                </button>
-              </div>
+                pr={pr}
+                onSelect={() => openPR(pr)}
+                onDelete={() => deletePR(pr.id)}
+                onGoToSelfAnalysisAnswering={goToSelfAnalysisAnswering}
+              />
             ))}
           </div>
         )}
