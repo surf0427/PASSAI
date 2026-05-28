@@ -16,7 +16,7 @@
 //   - AI prompt / PROMPT_VERSION
 //   - 添削 API / スコア計算 / Supabase
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
@@ -109,12 +109,15 @@ export default function StatementPrepareUniversityPage() {
   );
 
   // 過去ログ一覧（参考表示用、最大 10 件）。
-  const [history, setHistory] = useState<UniversityPrepareEntry[]>([]);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    setHistory(loadUniversityPrepareHistory());
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // localStorage を source of truth として useMemo で派生する version-counter パターン：
+  //   - SSR / 初回 client render は isMounted=false で [] を返し hydration セーフ
+  //   - mount 後は loadUniversityPrepareHistory() を直接読む
+  //   - handleSummarize で appendUniversityPrepareEntry した後に bump して再評価
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const history = useMemo<UniversityPrepareEntry[]>(() => {
+    void historyVersion;
+    return isMounted ? loadUniversityPrepareHistory() : [];
+  }, [isMounted, historyVersion]);
 
   // フロー state
   const [step, setStep] = useState<Step>('select_uni');
@@ -234,7 +237,7 @@ export default function StatementPrepareUniversityPage() {
         generationMode: 'deterministic',
       };
       appendUniversityPrepareEntry(entry);
-      setHistory(loadUniversityPrepareHistory());
+      setHistoryVersion((v) => v + 1);
       setSummary(data);
       setStep('summary');
     } catch {
