@@ -331,6 +331,11 @@ function StatementPageInner() {
 
     setRemainingCount(getRemainingStatementReviewCount());
     setPrepareFollowUps(getStatementPrepareFollowUpAnswers());
+    // searchParams は mount で 1 回だけ read する intentional one-shot。deps 追加で
+    // 再実行されると u/f/d/statementText/rewriteContext を上書きし、ユーザー編集が
+    // 失われる。詳細 rationale は L284-296 のブロックコメント、audit は
+    // docs/principles/exhaustive_deps_audit.md を参照。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
