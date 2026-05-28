@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { AiMatchAdvice, EligibilityResult } from '@/types/matching';
 import type { AdmissionMatchingInput } from '@/types/admissionMatchingInput';
 import { buildMatchingResults } from '@/lib/matching/suggestUniversities';
@@ -33,6 +33,14 @@ import { ConfirmView, ResultView } from './components';
 // STEP6.13: toBasicInfo 変換ヘルパーは @/lib/matching/toBasicInfo へ移動済み。
 //   pure domain helper のため orchestration layer (page.tsx) から除去した。
 
+// STEP-PAGE-FIX-01: SSR-stable mount flag。loadFreshMatchingInputSnapshot() は localStorage
+// 依存のため SSR では null を返したい。useSyncExternalStore の getServerSnapshot/getSnapshot で
+// setState なしにこの semantics を表現する（他 page と同形パターン）。これにより mount useEffect 内の
+// setMatchingInput / setLoading が不要になり、`react-hooks/set-state-in-effect` 違反を解消する。
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
+
 // ── ページ本体 ───────────────────────────────────────────────────
 
 export default function AdmissionMatchingPage() {
@@ -47,7 +55,22 @@ export default function AdmissionMatchingPage() {
   //   admissionMatchingInput key への write は handleStartMatching の collectAndSaveMatchingInput
   //   のみに集約された。これに伴い home の "in_progress" 判定タイミングが
   //   「ページを開いた瞬間」→「診断開始ボタンを押した瞬間」へ変更されている。
-  const [matchingInput, setMatchingInput] = useState<AdmissionMatchingInput | null>(null);
+  // STEP-PAGE-FIX-01: 旧 `useState<AdmissionMatchingInput | null>(null)` + mount useEffect の
+  //   `setMatchingInput(input)` を、isMounted + useMemo の derived value に置き換えた。
+  //   mount 1 回限りの restore で writer が存在しなかったため、state の必要性が無い。
+  //   SSR ではまだ isMounted=false で null を返し、hydration 後に loadFreshMatchingInputSnapshot()
+  //   の結果に切り替わる。挙動（旧 effect 後の matchingInput 値）と完全等価。
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
+  const matchingInput = useMemo<AdmissionMatchingInput | null>(() => {
+    if (!isMounted) return null;
+    const input = loadFreshMatchingInputSnapshot();
+    // basicInfo が無いと downstream 経路が成立しないため null に倒す（旧 effect の if-guard と同形）。
+    return input.basicInfo ? input : null;
+  }, [isMounted]);
   // STEP6.3: STEP6.2 で導入した cachedResultsSnapshot（MatchingResult[] 単体）を
   //   AiMatchAdviceCache（{results, aiAdvices, matchingLevel}）に拡張。cache 表示時の
   //   results / aiAdvices / matchingLevel を 1 つの snapshot から取り出す形に統合した。
@@ -58,7 +81,10 @@ export default function AdmissionMatchingPage() {
   // で 200 を返したときに、live 結果画面に小さい注意文を出すための flag。
   // 全成功時 = false。cache snapshot 表示時は対象外（保存形式は変えていない）。
   const [livePartial, setLivePartial] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // STEP-PAGE-FIX-01: 旧 `useState(true)` + mount effect の `setLoading(false)` を
+  //   isMounted から derive する形に変更。loading=true の唯一の writer が mount effect だったため、
+  //   isMounted の否定で機能的に等価（SSR / hydration 直後は loading=true、mount 後は false）。
+  const loading = !isMounted;
   const [aiLoading, setAiLoading] = useState(false);
   // STEP6.7: 旧 aiError state を削除。エラー UI は handleStartMatching の catch にある
   //   alert(...) を正式 UX として採用済み。inline banner は writer が存在せず dead branch
@@ -152,57 +178,44 @@ export default function AdmissionMatchingPage() {
   const displayAiAdvices = cachedSnapshot ? cachedSnapshot.aiAdvices : liveAiAdvices;
   const displayMatchingLevel = cachedSnapshot ? cachedSnapshot.matchingLevel : liveMatchingLevel;
 
+  // STEP-PAGE-FIX-01: dev observability。snapshot 内容 + 不足項目の dev 警告。
+  //   旧 mount useEffect (matching input restore) と統合していたが、matchingInput を
+  //   useMemo 化したため、log だけを別 effect に切り出した。matchingInput が確定した
+  //   瞬間（isMounted=true で 1 回）のみ発火する semantics は維持。
+  //   UI 側の missing 警告（confirm 画面の黄色枠）とは別経路の dev-only ログで、guard は
+  //   devLog / devWarn helper 内に閉じ込め済み（production では no-op）。
   useEffect(() => {
-    // STEP6.8: mount-init は意味的に独立した 3 セクションを順に実行する。
-    //   custom hook 化や関数切り出しは禁止スコープのため、境界はコメントで明示する。
-    //   ────────────────────────────────────────────────────────────────
-    //   (1) matching input restore  — read-only snapshot を取って state へ反映
-    //   (2) cache existence/timestamp restore — 「以前の診断結果を見る」CTA 用
-    //   (3) hydration-safe loading gate を解除（Recipe X）
-    //   ────────────────────────────────────────────────────────────────
-
-    // ── (1) matching input restore ────────────────────────────────
-    // STEP6.6: mount restore は read-only snapshot に変更（admissionMatchingInput key への
-    //   write を伴わない）。これにより「matching ページを開いただけで進捗 in_progress 化」
-    //   する旧挙動はなくなり、in_progress は「診断開始ボタンを押した瞬間」に切り替わる
-    //   （= handleStartMatching の collectAndSaveMatchingInput が走ったとき）。
-    //   ローカル変数名は state alias と衝突しないよう input にしている。
-    const input = loadFreshMatchingInputSnapshot();
-
-    // STEP6.8/6.14: dev observability。snapshot 内容 + 不足項目の dev 警告。
-    //   UI 側の missing 警告（confirm 画面の黄色枠）とは別経路の dev-only ログ。
-    //   guard は devLog / devWarn helper 内に閉じ込め済み。
+    if (!matchingInput) return;
     devLog("=== MATCHING INPUT DATA ===");
     devLog({
-      savedAt: input.savedAt,
-      basicInfo: input.basicInfo,
-      activityData: input.activityData,
-      selfPRs_count: input.selfPRs.length,
-      selfPRs: input.selfPRs,
-      wallHittingResult: input.wallHittingResult,
+      savedAt: matchingInput.savedAt,
+      basicInfo: matchingInput.basicInfo,
+      activityData: matchingInput.activityData,
+      selfPRs_count: matchingInput.selfPRs.length,
+      selfPRs: matchingInput.selfPRs,
+      wallHittingResult: matchingInput.wallHittingResult,
     });
-    if (!input.basicInfo)           devWarn("MISSING: basicInfo（基本情報が未入力）");
-    if (!input.activityData)        devWarn("MISSING: activityData（活動整理が未入力）");
-    if (input.selfPRs.length === 0) devWarn("MISSING: selfPRs（自己分析添削が未入力）");
-    if (!input.wallHittingResult)   devWarn("MISSING: wallHittingResult（AI壁打ちが未実施）");
+    if (!matchingInput.basicInfo)           devWarn("MISSING: basicInfo(基本情報が未入力)");
+    if (!matchingInput.activityData)        devWarn("MISSING: activityData(活動整理が未入力)");
+    if (matchingInput.selfPRs.length === 0) devWarn("MISSING: selfPRs(自己分析添削が未入力)");
+    if (!matchingInput.wallHittingResult)   devWarn("MISSING: wallHittingResult(AI壁打ちが未実施)");
+  }, [matchingInput]);
 
-    if (input.basicInfo) {
-      // STEP6.5: 旧 4 setter (setBasicFormData / setActivityData / setSelfPRs / setWallHitting)
-      //   を 1 件に集約。derived (results / missingItems) は useMemo 側で recompute される。
-      setMatchingInput(input);
-    }
-
-    // ── (2) cache existence / timestamp restore ───────────────────
-    // キャッシュ済み結果があれば「以前の診断結果を見る」ボタンを有効化
+  // STEP-PAGE-FIX-01: cache existence / timestamp restore — 「以前の診断結果を見る」CTA 用。
+  //   hasCachedResult / cachedTimestamp は handleStartMatching / handleShowCached /
+  //   refreshCachedTimestamp / handleReset でも書き換わる genuine state（mount 1 回の derive では
+  //   表現できない）。よって本 effect は意図的に setState を伴う side-effect として残し、
+  //   `react-hooks/set-state-in-effect` は本 block 限定で disable する。matchingInput / loading は
+  //   別経路で derive 化したため、本 effect から除外済み。
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
     if (loadAiMatchAdviceCache()) {
       setHasCachedResult(true);
       const ts = loadAiMatchAdviceTimestamp();
       if (ts) setCachedTimestamp(ts);
     }
-
-    // ── (3) hydration-safe loading gate 解除（Recipe X） ──────────
-    setLoading(false);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ───────────────────────────────────────────────────────────────────
   // STEP6.15: Matching execution handlers
