@@ -3,6 +3,7 @@ import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 // STEP-LIB-05: SYSTEM_PROMPT を lib/prompts/essayChatPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // essay-chat は cache を持たないため PROMPT_VERSION bump 対象外。文言改修は PR description で明示する。
@@ -77,7 +78,7 @@ ${userQuestion}`;
           content: userMessage,
         },
       ],
-    });
+    }, { signal: createTimeoutSignal() });
 
     // max_tokens で途中終了した reply はそのままだと単語の途中で切れて表示されるため、
     // 文字列として返さずに 502 + ユーザー向けメッセージで弾く。

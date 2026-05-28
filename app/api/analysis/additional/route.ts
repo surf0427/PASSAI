@@ -24,6 +24,7 @@ import {
   buildAdditionalQuestionsPrompt,
 } from '@/lib/prompts/additionalQuestionsPrompt';
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
 
@@ -79,7 +80,7 @@ export async function POST(req: Request) {
           }),
         },
       ],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const raw = message.content[0].type === 'text' ? message.content[0].text : '';
 

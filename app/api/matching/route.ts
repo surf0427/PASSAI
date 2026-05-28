@@ -38,6 +38,7 @@ import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { UniversityContext } from '@/types/universityContext';
 import { anthropic } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseJson } from '@/lib/matching/safeParseJson';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import {
@@ -96,7 +97,7 @@ async function generateUniversityDetail(
         },
       ],
       messages: [{ role: 'user', content: buildMatchingUserPrompt(opts) }],
-    });
+    }, { signal: createTimeoutSignal() });
   } catch (error) {
     // network / API error 経路: response が無いため usage は取れない。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });

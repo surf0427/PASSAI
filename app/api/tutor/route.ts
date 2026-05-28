@@ -31,6 +31,7 @@
 import { NextResponse } from 'next/server';
 import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { checkServerRateLimit } from '@/lib/serverRateLimit';
 import { TUTOR_MODEL } from '@/lib/aiInputHash';
 import { TUTOR_SYSTEM_PROMPT, buildTutorUserPrompt } from '@/lib/tutor/tutorPrompt';
@@ -207,7 +208,7 @@ export async function POST(req: Request): Promise<Response> {
         },
       ],
       messages: [{ role: 'user', content: userPrompt }],
-    });
+    }, { signal: createTimeoutSignal() });
   } catch (error) {
     // 本文・prompt は log に出さない（aiUsageLog の方針に従う）。
     console.error('tutor api error', {

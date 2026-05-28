@@ -13,6 +13,7 @@ import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/inter
 import { feedbackToText } from '@/lib/interview/feedbackToText';
 import { fillEchoBackFromInput } from '@/lib/interview/normalizeInterviewFeedback';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 // STEP-LIB-03: SYSTEM_PROMPT を lib/prompts/interviewFeedbackPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // interview-feedback は localStorage cache に PROMPT_VERSION 概念を持たない（cache 自体なし）
@@ -231,6 +232,9 @@ ${qaText}`;
     //   string 形式から TextBlockParam[] 形式に変えるだけで、SYSTEM_PROMPT の中身・出力 schema・
     //   model パラメータ・max_tokens formula は不変。
     //   SDK: @anthropic-ai/sdk@0.91.1 で cache_control: { type: 'ephemeral' } を型安全に指定可能。
+    // 本 route は Opus 4-7 を使い max_tokens が動的に最大 8000 まで膨らむ（質問数依存）。
+    // Sonnet 系よりも 1 トークンあたりの生成時間が長く、長尺出力で 60 秒に迫る可能性があるため
+    // timeout を 90 秒に延長する（STEP-API-TIMEOUT-01）。
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: maxTokens,
@@ -242,7 +246,7 @@ ${qaText}`;
         },
       ],
       messages: [{ role: 'user', content: userPrompt }],
-    });
+    }, { signal: createTimeoutSignal(90_000) });
 
     const textBlock = response.content.find((b) => b.type === 'text');
     const rawText = textBlock?.type === 'text' ? textBlock.text.trim() : '';

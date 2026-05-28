@@ -3,6 +3,7 @@
 // 本文や完成文の代筆はしない。
 
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { checkServerRateLimit } from '@/lib/serverRateLimit';
 import {
   asString,
@@ -111,7 +112,7 @@ export async function POST(req: Request) {
             }),
           },
         ],
-      });
+      }, { signal: createTimeoutSignal() });
     } catch (error) {
       logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
       throw error;

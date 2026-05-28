@@ -1,6 +1,7 @@
 import { buildReasonPrompt } from '@/lib/prompts';
 import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // 本 route は plain text 応答（JSON parse なし）のため parse_failed は発生しない。
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
       max_tokens: 1500,
       temperature: 0.5,
       messages: [{ role: 'user', content: buildReasonPrompt(text) }],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const result = message.content[0].type === 'text' ? message.content[0].text : '';
 

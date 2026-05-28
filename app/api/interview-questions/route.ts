@@ -32,6 +32,7 @@
 
 import { NextResponse } from 'next/server';
 import { anthropic } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { logAiUsage, type AiUsageTokens } from '@/lib/aiUsageLog';
 import { isStudentProfile } from '@/lib/studentProfileStorage';
 import { buildInterviewUniversityContext } from '@/lib/buildInterviewUniversityContext';
@@ -223,7 +224,7 @@ async function runInterviewQuestionGeneration(
         },
       ],
       messages: [{ role: 'user', content: userPrompt }],
-    });
+    }, { signal: createTimeoutSignal() });
   } catch (error) {
     console.error('interview-questions api error', {
       route: ROUTE,

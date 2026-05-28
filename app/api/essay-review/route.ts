@@ -1,4 +1,5 @@
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
@@ -109,7 +110,7 @@ ${essayBody}`;
         },
       ],
       messages: [{ role: 'user', content: userMessage }],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const text = message.content[0].type === 'text' ? message.content[0].text : '';
 

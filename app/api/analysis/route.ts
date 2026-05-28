@@ -35,6 +35,7 @@ import type { UniversityContext } from '@/types/universityContext';
 import { formatActivityData } from '@/lib/formatActivity';
 import { ANALYSIS_SYSTEM_PROMPT, buildWallHittingPrompt } from '@/lib/prompts/analysisPrompt';
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import {
   extractInitialQuestions,
@@ -101,7 +102,7 @@ export async function POST(req: Request) {
           content: buildWallHittingPrompt({ activityText, basicInfo, universityContext }),
         },
       ],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const raw = message.content[0].type === 'text' ? message.content[0].text : '';
 

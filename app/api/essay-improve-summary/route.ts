@@ -30,6 +30,7 @@
 //   route 自体には cache を入れない（既存 essay-review / interview-questions と同方針）。
 
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseImproveSummary } from '@/lib/essay/parseImproveSummary';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { logAiUsage } from '@/lib/aiUsageLog';
@@ -156,7 +157,7 @@ export async function POST(req: Request) {
         },
       ],
       messages: [{ role: 'user', content: userMessage }],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const text =
       message.content[0]?.type === 'text' ? message.content[0].text : '';

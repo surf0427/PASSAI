@@ -1,4 +1,5 @@
 import { anthropic, extractJson } from '@/lib/ai';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 import {
   STATEMENT_REVIEW_SYSTEM_PROMPT,
   buildStatementReviewPrompt,
@@ -81,7 +82,7 @@ export async function POST(req: Request) {
           }),
         },
       ],
-    });
+    }, { signal: createTimeoutSignal() });
 
     const text = message.content[0].type === 'text' ? message.content[0].text : '';
 

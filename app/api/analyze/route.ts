@@ -4,6 +4,7 @@ import { formatActivityData } from '@/lib/formatActivity';
 import { buildAnalyzePrompt } from '@/lib/prompts';
 import { anthropic, extractJson } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { createTimeoutSignal } from '@/lib/aiTimeout';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // NOTE: STEP4.10 時点で grep ベースのクライアント検索では本 route の呼び出し元が見つからなかった。
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
         max_tokens: 1000,
         temperature: 0.5,
         messages: [{ role: 'user', content: buildAnalyzePrompt(activityText) }],
-      });
+      }, { signal: createTimeoutSignal() });
     } catch (error) {
       logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
       throw error;
