@@ -29,7 +29,7 @@
 //   - /api/statement-review / /api/statement-prepare / AI prompt / PROMPT_VERSION
 //   - edit / score / /statement/analysis/[id] / /statement/improve/rewrite/[id]
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -53,16 +53,15 @@ export default function StatementImprovePage() {
   );
 
   // 履歴は read + delete のみ。save は ② edit 側、clear は本ページから呼ばない。
-  // localStorage の sync 用に useState + mount-init useEffect パターンを採用：
-  //   - 初期値 [] で SSR / 初回 client render を hydration セーフに揃える
-  //   - mount 後に loadReviewHistory() を 1 度実行して seed
-  //   - delete 時は handleDelete から setHistory(loadReviewHistory()) で再 sync
-  const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (isMounted) setHistory(loadReviewHistory());
-  }, [isMounted]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // localStorage を source of truth として useMemo で派生する version-counter パターン：
+  //   - SSR / 初回 client render は isMounted=false で [] を返し hydration セーフ
+  //   - mount 後は loadReviewHistory() を直接読む
+  //   - delete 時は setHistoryVersion で bump して再評価
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const history = useMemo<ReviewHistoryItem[]>(() => {
+    void historyVersion;
+    return isMounted ? loadReviewHistory() : [];
+  }, [isMounted, historyVersion]);
 
   function handleDelete(id: string) {
     const ok = window.confirm(
@@ -70,7 +69,7 @@ export default function StatementImprovePage() {
     );
     if (!ok) return;
     deleteReviewHistoryItem(id);
-    setHistory(loadReviewHistory());
+    setHistoryVersion((v) => v + 1);
   }
 
   return (
