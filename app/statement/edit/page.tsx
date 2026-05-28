@@ -274,6 +274,13 @@ function StatementPageInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // 「下書きを保存」押下時の非 blocking フィードバック。/statement/prepare の
+  // quoteToast と同形の self-contained toast（3 秒で自動消失、pointer-events-none）。
+  // STEP-UX-FIX-01-ALERT: 旧 `alert('保存しました')` を置換し、mobile / autosave の
+  // 体験を阻害しないようにした。
+  const [saveToast, setSaveToast] = useState('');
+  const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // STEP4-2: ④ → ② への書き直し対象履歴の context。?rewriteFrom=<id> が指す
   // ReviewHistoryItem を mount-init useEffect で 1 回だけ load する。
   // mount 後は不変（書き直し対象は per-visit で固定）。
@@ -503,7 +510,9 @@ function StatementPageInner() {
 
   function handleSaveDraft() {
     saveDraft({ university, faculty, department, statementText });
-    alert('保存しました');
+    setSaveToast('下書きを保存しました');
+    if (saveToastTimerRef.current !== null) clearTimeout(saveToastTimerRef.current);
+    saveToastTimerRef.current = setTimeout(() => setSaveToast(''), 3000);
   }
 
   function handleReset() {
@@ -616,6 +625,17 @@ function StatementPageInner() {
           深掘り分析（NgWord / Structure / EvaluationAxis）は /statement/analysis/[id] に集約。
           edit からは ReviewResultView の「完成度スコアを見る →」（③ /statement/score）を経由して
           そこから「詳細分析を見る →」（/statement/analysis/{id}）に進む 2 段構造になる。 */}
+
+      {/* 下書き保存の非 blocking toast。alert 置換（STEP-UX-FIX-01-ALERT）。 */}
+      {saveToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-sm px-5 py-2.5 rounded-lg shadow-lg pointer-events-none"
+        >
+          {saveToast}
+        </div>
+      )}
     </div>
   );
 }
