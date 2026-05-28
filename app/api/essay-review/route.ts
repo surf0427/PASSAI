@@ -122,7 +122,7 @@ ${essayBody}`;
         stopReason: message.stop_reason,
         rawTextTail: text.slice(-200),
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_REVIEW_TRUNCATED',
@@ -148,6 +148,8 @@ ${essayBody}`;
       model: MODEL,
       status: parseOk ? 'success' : 'parse_failed',
       usage: message.usage,
+      cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
+      cache_read_input_tokens: message.usage?.cache_read_input_tokens,
     });
     return Response.json(safeParseResult(parsed));
   } catch (error) {

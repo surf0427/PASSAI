@@ -24,11 +24,15 @@ export type AiUsageStatus = 'success' | 'truncated' | 'parse_failed' | 'failed';
 
 // Anthropic SDK の Message.usage と互換のサブセット。
 // cache_creation_input_tokens / cache_read_input_tokens は prompt caching を入れた時点で
-// 追加する（現状は未使用）。SDK 型に直接依存させないことで、将来 model provider を
+// 追加した（STEP-API-OBSERVABILITY-01）。SDK 型に直接依存させないことで、将来 model provider を
 // 増やしたときの境界が崩れにくい。
+// route のローカル helper（interview-questions など）が response.usage を AiUsageTokens として
+// 保持し、後で cache_*_input_tokens を抽出するためにも optional として宣言する必要がある。
 export type AiUsageTokens = {
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
 };
 
 export type LogAiUsageOptions = {
@@ -38,9 +42,24 @@ export type LogAiUsageOptions = {
   // usage が undefined になるのは「response が返る前に例外が起きた経路」。
   // その場合は token 系を null で記録し、failure 回数だけ集計できるようにする。
   usage?: AiUsageTokens;
+  // Anthropic prompt caching の実効性計測用（STEP-API-OBSERVABILITY-01）。
+  //   - cache_creation_input_tokens: 当該 request で cache を新規作成した時の入力 token
+  //   - cache_read_input_tokens    : 当該 request が cache hit して読み出した入力 token
+  // Anthropic SDK は `number | null` を返すため、`number | null | undefined` を受け取れるようにする。
+  // 値が null/undefined なら logAiUsage 内で null に正規化して記録する。
+  // 既存の input_tokens / output_tokens / total_tokens の意味は変えない。
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
 };
 
-export function logAiUsage({ route, model, status, usage }: LogAiUsageOptions): void {
+export function logAiUsage({
+  route,
+  model,
+  status,
+  usage,
+  cache_creation_input_tokens,
+  cache_read_input_tokens,
+}: LogAiUsageOptions): void {
   console.info('ai usage', {
     route,
     model,
@@ -48,5 +67,9 @@ export function logAiUsage({ route, model, status, usage }: LogAiUsageOptions): 
     input_tokens: usage?.input_tokens ?? null,
     output_tokens: usage?.output_tokens ?? null,
     total_tokens: usage ? usage.input_tokens + usage.output_tokens : null,
+    // STEP-API-OBSERVABILITY-01: prompt caching の実効性を計測する。
+    // 既存の input/output/total_tokens フィールドは触らない（observability の後方互換）。
+    cache_creation_input_tokens: cache_creation_input_tokens ?? null,
+    cache_read_input_tokens: cache_read_input_tokens ?? null,
   });
 }

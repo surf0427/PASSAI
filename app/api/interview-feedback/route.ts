@@ -258,7 +258,7 @@ ${qaText}`;
         stopReason: response.stop_reason,
         rawTextTail: rawText.slice(-200),
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: response.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
       return NextResponse.json(
         {
           error: 'AI_FEEDBACK_TRUNCATED',
@@ -276,14 +276,14 @@ ${qaText}`;
       const rawFeedback: unknown = JSON.parse(rawText);
       const feedback = fillEchoBackFromInput(rawFeedback, questionsAndAnswers);
       const improvementSummary = feedbackToText(feedback, previousFeedback);
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: response.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
       return NextResponse.json({ feedback, improvementSummary });
     } catch {
       console.error('interview-feedback parse failed', {
         stopReason: response.stop_reason,
         rawTextTail: rawText.slice(-200),
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
       return NextResponse.json(
         {
           error: 'AI_FEEDBACK_PARSE_FAILED',

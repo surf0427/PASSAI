@@ -131,6 +131,8 @@ export async function POST(req: Request) {
         model: MODEL,
         status: message.stop_reason === 'max_tokens' ? 'truncated' : 'parse_failed',
         usage: message.usage,
+        cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
+        cache_read_input_tokens: message.usage?.cache_read_input_tokens,
       });
       throw error;
     }
@@ -139,14 +141,14 @@ export async function POST(req: Request) {
       console.error('statement-prepare API: invalid shape', parsed);
       // JSON は parse できたが期待 shape ではない（AI schema 違反）。
       // 「AI 出力を期待通りに読み取れなかった」という意味で parse_failed として記録する。
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         { error: '整理に失敗しました。もう一度お試しください。' },
         { status: 500 },
       );
     }
 
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     return Response.json(parsed);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

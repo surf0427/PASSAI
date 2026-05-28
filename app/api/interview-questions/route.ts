@@ -154,7 +154,7 @@ export async function POST(request: Request): Promise<Response> {
   // ── validation A/B/C（明らかな崩れだけ検出）─────────────────
   const v1 = validateInterviewQuestionSet(first.questions, materials);
   if (v1.ok) {
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: first.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: first.usage, cache_creation_input_tokens: first.usage?.cache_creation_input_tokens, cache_read_input_tokens: first.usage?.cache_read_input_tokens });
     return NextResponse.json({ questions: first.questions });
   }
 
@@ -165,7 +165,7 @@ export async function POST(request: Request): Promise<Response> {
     attempt: 1,
     reasons: v1.reasons,
   });
-  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: first.usage });
+  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: first.usage, cache_creation_input_tokens: first.usage?.cache_creation_input_tokens, cache_read_input_tokens: first.usage?.cache_read_input_tokens });
 
   // ── 2 回目（retry, 最大 1 回）───────────────────────────────
   const second = await runInterviewQuestionGeneration(
@@ -189,7 +189,7 @@ export async function POST(request: Request): Promise<Response> {
       reasons: v2.reasons,
     });
   }
-  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: second.usage });
+  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: second.usage, cache_creation_input_tokens: second.usage?.cache_creation_input_tokens, cache_read_input_tokens: second.usage?.cache_read_input_tokens });
   return NextResponse.json({ questions: second.questions });
 }
 
@@ -249,7 +249,7 @@ async function runInterviewQuestionGeneration(
       route: ROUTE,
       stopReason: response.stop_reason,
     });
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: response.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
     return {
       kind: 'http_error',
       response: NextResponse.json(
@@ -271,7 +271,7 @@ async function runInterviewQuestionGeneration(
       stopReason: response.stop_reason,
       reason: error instanceof Error ? error.message : 'unknown',
     });
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
     return {
       kind: 'http_error',
       response: NextResponse.json(

@@ -85,7 +85,7 @@ ${userQuestion}`;
     if (message.stop_reason === 'max_tokens') {
       const rawTail = message.content[0].type === 'text' ? message.content[0].text.slice(-200) : '';
       console.error('essay-chat truncated', { stopReason: message.stop_reason, rawTextTail: rawTail });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_REPLY_TRUNCATED',
@@ -96,7 +96,7 @@ ${userQuestion}`;
     }
 
     const reply = message.content[0].type === 'text' ? message.content[0].text.trim() : '';
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     return Response.json({ reply });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

@@ -93,7 +93,7 @@ export async function POST(req: Request) {
         stopReason: message.stop_reason,
         rawTextTail: text.slice(-200),
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_REVIEW_TRUNCATED',
@@ -106,11 +106,11 @@ export async function POST(req: Request) {
     try {
       const json = extractJson(text);
       const result = JSON.parse(json);
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(result);
     } catch {
       console.error('statement-review parse failed', { rawTextTail: text.slice(-200) });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_REVIEW_PARSE_FAILED',

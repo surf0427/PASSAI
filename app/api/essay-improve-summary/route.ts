@@ -172,6 +172,8 @@ export async function POST(req: Request) {
         model: MODEL,
         status: 'truncated',
         usage: message.usage,
+        cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
+        cache_read_input_tokens: message.usage?.cache_read_input_tokens,
       });
       return Response.json(
         {
@@ -200,6 +202,8 @@ export async function POST(req: Request) {
       model: MODEL,
       status: parseOk ? 'success' : 'parse_failed',
       usage: message.usage,
+      cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
+      cache_read_input_tokens: message.usage?.cache_read_input_tokens,
     });
 
     return Response.json(safeParseImproveSummary(parsed));

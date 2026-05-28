@@ -53,11 +53,13 @@ export async function POST(req: Request) {
         model: MODEL,
         status: message.stop_reason === 'max_tokens' ? 'truncated' : 'parse_failed',
         usage: message.usage,
+        cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
+        cache_read_input_tokens: message.usage?.cache_read_input_tokens,
       });
       throw error;
     }
 
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     return Response.json({ analysis });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

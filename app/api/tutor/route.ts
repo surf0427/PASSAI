@@ -243,6 +243,8 @@ export async function POST(req: Request): Promise<Response> {
       model: TUTOR_MODEL,
       status: 'truncated',
       usage: response.usage,
+      cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
+      cache_read_input_tokens: response.usage?.cache_read_input_tokens,
     });
     return NextResponse.json(
       {
@@ -264,6 +266,8 @@ export async function POST(req: Request): Promise<Response> {
       model: TUTOR_MODEL,
       status: 'failed',
       usage: response.usage,
+      cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
+      cache_read_input_tokens: response.usage?.cache_read_input_tokens,
     });
     return NextResponse.json(
       {
@@ -280,6 +284,8 @@ export async function POST(req: Request): Promise<Response> {
     model: TUTOR_MODEL,
     status: 'success',
     usage: response.usage,
+    cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
+    cache_read_input_tokens: response.usage?.cache_read_input_tokens,
   });
   return NextResponse.json({ reply });
 }

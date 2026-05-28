@@ -111,7 +111,7 @@ export async function POST(req: Request) {
         stopReason: message.stop_reason,
         rawTextTail: raw.slice(-200),
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_SUMMARY_TRUNCATED',
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
         rawTextTail: raw.slice(-200),
         outputTokens: message.usage?.output_tokens,
       });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       return Response.json(
         {
           error: 'AI_SUMMARY_PARSE_FAILED',
@@ -146,7 +146,7 @@ export async function POST(req: Request) {
       );
     }
 
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     return Response.json({ summary });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

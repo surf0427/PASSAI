@@ -105,7 +105,7 @@ async function generateUniversityDetail(
   }
 
   if (message.stop_reason === 'max_tokens') {
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     throw new Error(
       `Claude response was truncated by max_tokens for university ${universityId}. Reduce output length or increase max_tokens.`,
     );
@@ -128,12 +128,12 @@ async function generateUniversityDetail(
     //   layer 情報が出る。**2 重 console.error は intentional**: lib 側はパース失敗の
     //   生 text、route 側は per-call status (parse_failed) + 上位 catch までの伝播を
     //   それぞれ独立 stream として記録する責務分離。集約ログ整理は別 STEP。
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage });
+    logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     throw error;
   }
   const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
 
-  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage });
+  logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
   return { universityId, reason };
 }
 
