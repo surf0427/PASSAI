@@ -219,17 +219,37 @@ mount-init で複数 storage を読み + 条件不一致なら redirect する p
 
 複数候補があるが、相互排他ではない。観測待ちと並走できるものを **括弧内に並走可否** で示す。
 
-| 候補 | 内容 | 並走可 |
-|---|---|---|
-| **A. UX 最終確認** | 本番導線を端から端まで通し、edge case / empty state / error 表示の最終調整 | yes (観測と並走) |
-| **B. 受験相談AI 改善** | `/tutor` の content / prompt / UX 整備。新規機能ではなく既存 page の磨き込み | yes |
-| **C. LP / marketing / release checklist** | 公開前チェック。analytics、SEO、OG image、release notes | yes |
-| **D. API 観測ログ収集準備** | 本番 log destination / dashboard / alert wiring。観測フェーズ自体の準備 | yes (推奨先行) |
-| **E. interview-feedback 圧縮 (API)** | STEP-API-INTERVIEW-01 の本実装 | **観測 1〜2 週間後** |
-| **F. Opus downgrade** | 一部 route の model 切替 | **観測 1〜2 週間後 + 品質検証** |
-| **G. 大型 page 抽出 (継続)** | edit/score 等の追加切り出し | yes (中規模 STEP) |
+| 候補 | 内容 | 並走可 | 状態 |
+|---|---|---|---|
+| **A. UX 最終確認** | 本番導線を端から端まで通し、edge case / empty state / error 表示の最終調整 | yes (観測と並走) | 🟢 進行中 — UX audit phase 1 + UX fix STEP 8 件完了で release blocker S-01/02/03 解消。残: release QA pass + real user test (詳細は [`../ux/ux_audit_phase1.md`](../ux/ux_audit_phase1.md) §14) |
+| **B. 受験相談AI 改善** | `/tutor` の content / prompt / UX 整備。新規機能ではなく既存 page の磨き込み | yes | ⬜ 未着手 |
+| **C. LP / marketing / release checklist** | 公開前チェック。analytics、SEO、OG image、release notes | yes | ⬜ 未着手 |
+| **D. API 観測ログ収集準備** | 本番 log destination / dashboard / alert wiring。観測フェーズ自体の準備 | yes (推奨先行) | ⬜ 未着手 |
+| **E. interview-feedback 圧縮 (API)** | STEP-API-INTERVIEW-01 の本実装 | **観測 1〜2 週間後** | ⬜ 観測待ち |
+| **F. Opus downgrade** | 一部 route の model 切替 | **観測 1〜2 週間後 + 品質検証** | ⬜ 観測待ち |
+| **G. 大型 page 抽出 (継続)** | edit/score 等の追加切り出し | yes (中規模 STEP) | ⬜ 未着手 |
 
-**推奨着手順**: D (観測準備) を先に進めつつ、A or B or C を並走。E / F は観測後。G は工数次第。
+**推奨着手順**: A の残 (release QA pass + real user test) を release 前に消化。並行して D (観測準備) を進める。B / C は release 直前 / 直後。E / F は観測後。G は工数次第。
+
+---
+
+## 8b. UX fix フェーズ (STEP-UX-AUDIT-01 後の実装)
+
+[`../ux/ux_audit_phase1.md`](../ux/ux_audit_phase1.md) の Top10 / release blocker に対する 8 件の STEP を順次実施。runtime UX を改善するが、本フェーズも **PROMPT_VERSION / cache identity / storage 形式 / API route shape を一切変更しない** 不変条件を維持。詳細状況は audit doc §14 を正本とし、本 summary には commit 一覧のみ載せる。
+
+| STEP | commit | 主な変更 |
+|---|---|---|
+| STEP-UX-AUDIT-01 | `de1b906` | audit doc 作成 (`docs/ux/ux_audit_phase1.md`) |
+| STEP-UX-FIX-01-ALERT | `1acd017` | `/statement/edit` の保存 alert → self-contained toast |
+| STEP-UX-FIX-02-STATEMENT-NEXT-ACTION | `0ec5f83` | `ReviewResultView` に 3-button next-action bar |
+| STEP-UX-FIX-04-CONFIRM-DIALOG | `0eeec50` | `components/ui/ConfirmDialog.tsx` 新設 + 4 caller 置換 |
+| STEP-UX-FIX-05-HUB-SUGGEST | `4796364` | `statement` / `self-analysis` / `interview` hub に next-step suggestion |
+| STEP-UX-FIX-06-LOADING-PROGRESS | `e8653f3` | `components/ui/LoadingProgress.tsx` 新設 + 2 caller |
+| STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND | `38a625a` | `LoadingProgress` を主要 4 flow に横展開 |
+| STEP-UX-FIX-06c-CANCEL-WIRING | `0067317` | `AbortController` + cancel button (`/statement/edit` + `/admission-matching`) |
+| STEP-UX-FIX-06d-CANCEL-TAP-TARGET | `104dc7c` | cancel button を mobile 44px tap target に底上げ |
+
+**release blocker 解消状態**: S-01 / S-02 / S-03 すべて主要 flow で解消。残タスクは release 後の品質向上 (詳細は audit doc §14.4)。
 
 ---
 
@@ -237,8 +257,8 @@ mount-init で複数 storage を読み + 条件不一致なら redirect する p
 
 本 summary doc を再生成 / 更新するとき、以下を **絶対に変更しない**:
 
-- 既出 audit doc (`page_fix_audit.md` / `exhaustive_deps_audit.md` / `api_observability_audit.md`) の判定結果 (本 doc は index に徹し、判定の上書きはしない)
-- フェーズ全体の不変条件 (§3.3 / §6 の指標) と矛盾する記述
+- 既出 audit doc (`page_fix_audit.md` / `exhaustive_deps_audit.md` / `api_observability_audit.md` / `../ux/ux_audit_phase1.md`) の判定結果 (本 doc は index に徹し、判定の上書きはしない)
+- フェーズ全体の不変条件 (§3.3 / §6 / §8b の指標) と矛盾する記述
 - PROMPT_VERSION / cache identity / storage 形式
 
 矛盾を見つけたら **audit doc を先に直し、その上で本 doc を更新** する。本 doc が単独で先行することはない。
