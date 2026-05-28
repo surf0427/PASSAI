@@ -28,7 +28,7 @@
 //   - 例外: 履歴ゼロ時の NoHistoryYet は「志望理由書を書く」→ /statement/edit を出す
 //     （これは "rewrite" ではなく "first write"。view する対象が無い場合の代替起点）
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -66,17 +66,23 @@ export default function StatementScorePage() {
   );
 
   // 履歴は read + delete のみ（save は ② edit 側）。
-  // localStorage の sync 用に useState + mount-init useEffect パターンを採用：
-  //   - 初期値 [] で SSR / 初回 client render を hydration セーフに揃える
-  //   - mount 後に loadReviewHistory() を 1 度実行して seed
-  //   - delete 時は handleDelete から setHistory(loadReviewHistory()) で再 sync
-  //   - 表示の gate（NoHistoryYet を SSR 中に出さない）は isMounted で行うので flicker なし
-  const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (isMounted) setHistory(loadReviewHistory());
-  }, [isMounted]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // STEP-PAGE-FIX-02-HISTORIES-SCORE: 旧 `useState([]) + mount-init useEffect で setHistory(...)` を
+  // canonical derive pattern に移行した。`useSyncExternalStore + useMemo + historyVersion` の
+  // 3 点セットで:
+  //   - SSR / 初回 client render: isMounted=false → history=[] （hydration セーフ）
+  //   - mount 後: isMounted=true で loadReviewHistory() を 1 度評価 → 旧 effect と同タイミング
+  //   - delete 時: handleDelete が historyVersion を bump → useMemo が再評価 → storage の最新値を返す
+  //   - 表示の gate（NoHistoryYet を SSR 中に出さない）は isMounted で行うため flicker なし
+  // historyVersion は「storage 側の update があったことを示すモナド単位」で、値そのものに意味はない。
+  // user 入力 (draft) は無く delete のみのため、PREPARE で使った draft state は不要。
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const history = useMemo<ReviewHistoryItem[]>(() => {
+    // historyVersion は body 側で値を使わない「再評価 trigger」のため、
+    // exhaustive-deps が「unnecessary dependency」と警告する。
+    // body 内で void 参照することで意図を明示し、警告を抑える。
+    void historyVersion;
+    return isMounted ? loadReviewHistory() : [];
+  }, [isMounted, historyVersion]);
 
   // 詳細表示中の履歴 id。null なら一覧表示。
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -90,7 +96,9 @@ export default function StatementScorePage() {
     );
     if (!ok) return;
     deleteReviewHistoryItem(id);
-    setHistory(loadReviewHistory());
+    // STEP-PAGE-FIX-02-HISTORIES-SCORE: 旧 setHistory(loadReviewHistory()) を historyVersion bump で代替。
+    // useMemo が次 render で再評価し、storage から削除後の最新値を返す。timing は旧 setState と同等。
+    setHistoryVersion((v) => v + 1);
     // 表示中の詳細 entry を削除した場合は一覧表示に戻す（per spec）。
     if (selectedId === id) setSelectedId(null);
   }
