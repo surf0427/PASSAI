@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   buildInputSignature,
@@ -115,11 +115,22 @@ export default function StatementPreparePage() {
   const [limitStatus, setLimitStatus] = useState<StatementPrepareLimitStatus>(
     () => getStatementPrepareLimitStatus(),
   );
-  // STEP 16: 深掘りメモ。weakPoint key ごとの自由記述。永続化しない。
-  // STEP5.16 補足: line 505 の filledFollowUpAnswers は **gate なし** で line 1027 から消費されるため、
-  // lazy initializer で localStorage 実値を入れると hydration mismatch を起こす。
-  // 従来通り useState({}) + 下方の mount-init useEffect で post-hydration setState 維持する。
-  const [followUpAnswers, setFollowUpAnswers] = useState<FollowUpAnswers>({});
+  // STEP 16: 深掘りメモ。weakPoint key ごとの自由記述。
+  // STEP-PAGE-FIX-02-PREPARE: 旧 `useState({}) + mount-init useEffect で setFollowUpAnswers(...)` を
+  //   restored(useMemo) + draft(useState) の 2 段に分離して `react-hooks/set-state-in-effect`
+  //   違反を解消する。挙動は完全等価:
+  //     - SSR / 初回 client render: isMounted=false → restored={} → followUpAnswers={}（hydration セーフ）
+  //     - mount 後: isMounted=true → restored が storage 値 → followUpAnswers が storage 値
+  //     - user 入力後: draft が non-null → followUpAnswers が draft 値（restored を上書き）
+  //   draft が null のうちは restored を使うため、storage 復元タイミングは旧 effect と同じ。
+  //   handleFollowUpAnswerChange は setFollowUpAnswersDraft を呼ぶ形に振り替え。
+  //   storage への永続化（saveStatementPrepareFollowUpAnswers）は不変。
+  const restoredFollowUpAnswers = useMemo<FollowUpAnswers>(
+    () => (isMounted ? getStatementPrepareFollowUpAnswers() : {}),
+    [isMounted],
+  );
+  const [followUpAnswersDraft, setFollowUpAnswersDraft] = useState<FollowUpAnswers | null>(null);
+  const followUpAnswers: FollowUpAnswers = followUpAnswersDraft ?? restoredFollowUpAnswers;
   // STEP 25: 既存の活動整理 / 自己分析データ。表示専用、書き戻しは行わない。
   // STEP5.16: read-only なので isMounted ガード付きの useMemo 派生に置換。
   // line 531 の `{mounted && (() => { ... })()}` で SSR は描画されないため hydration セーフ。
@@ -146,15 +157,15 @@ export default function StatementPreparePage() {
   // STEP 31: 表示中の summary が「以前作った整理メモを見る」経由で復元された状態か。
   const [viewingSavedSummary, setViewingSavedSummary] = useState(false);
 
-  // STEP5.16: 残存する setState は followUpAnswers のみ。`filledFollowUpAnswers` 派生先
-  // (line 1027) が gate 無しで描画されるため lazy initializer 不可。useState({}) +
-  // 本 effect で post-hydration setState する従来パターンを維持し、scoped で disable する。
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    // STEP 23: 深掘り回答をマウント後に復元（trim 済み・既知 key だけが返ってくる）。
-    setFollowUpAnswers(getStatementPrepareFollowUpAnswers());
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // STEP-PAGE-FIX-02-PREPARE: STEP 23 の「深掘り回答をマウント後に復元」は restoredFollowUpAnswers の
+  // useMemo (isMounted ゲート) で表現済みのため、本 effect は不要になった。
+  // 旧 effect の semantics:
+  //   - mount 後 1 回だけ getStatementPrepareFollowUpAnswers() を読んで state へ反映
+  //   - re-run なし（deps=[]）
+  // 新 semantics（同等）:
+  //   - isMounted が false→true へ遷移する瞬間に useMemo が 1 回だけ getStatementPrepareFollowUpAnswers() を再評価
+  //   - isMounted は subscribeMount=() => () => {}（no-op）のため再 fire しない
+  //   - SSR / 初回 client render の {} と完全等価
 
   async function handleSummarize() {
     if (loading) return;
@@ -368,7 +379,9 @@ export default function StatementPreparePage() {
     value: string,
   ): void {
     const next: FollowUpAnswers = { ...followUpAnswers, [key]: value };
-    setFollowUpAnswers(next);
+    // STEP-PAGE-FIX-02-PREPARE: setFollowUpAnswers → setFollowUpAnswersDraft へ振り替え。
+    // draft が non-null になった以降は restored を上書きする形で followUpAnswers の effective 値を制御する。
+    setFollowUpAnswersDraft(next);
     const filtered: StatementPrepareFollowUpAnswers = {};
     for (const [k, v] of Object.entries(next) as Array<
       [StatementPrepareWeakPointKey, string | undefined]
