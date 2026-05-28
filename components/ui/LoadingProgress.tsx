@@ -111,8 +111,18 @@ export function LoadingProgress({
         </p>
       )}
       {onCancel && (
+        // STEP-UX-FIX-06d-CANCEL-TAP-TARGET: mobile 推奨 touch target 44px を確保するため
+        // size="md" + min-h-[44px] を併用し、横幅は mobile で full-width / sm 以上で auto。
+        // size="md" だけだと既存 BUTTON_SIZE.md (px-4 py-2) が 36-40px 帯になるため、
+        // min-h-[44px] を明示的に重ねて mobile gesture の取りこぼしを防ぐ。
+        // semantics（onCancel callback / 表示条件）は不変。
         <div className="mt-4">
-          <Button variant="secondary" size="sm" onClick={onCancel}>
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={onCancel}
+            className="min-h-[44px] w-full sm:w-auto"
+          >
             キャンセル
           </Button>
         </div>
