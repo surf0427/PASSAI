@@ -55,7 +55,13 @@ export async function POST(req: Request) {
       model: MODEL,
       max_tokens: 1500,
       temperature: 0.3,
-      system: STATEMENT_REVIEW_SYSTEM_PROMPT,
+      system: [
+        {
+          type: 'text',
+          text: STATEMENT_REVIEW_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',

@@ -83,7 +83,13 @@ export async function POST(req: Request) {
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 2000,
-      system: ANALYSIS_SYSTEM_PROMPT,
+      system: [
+        {
+          type: 'text',
+          text: ANALYSIS_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',
