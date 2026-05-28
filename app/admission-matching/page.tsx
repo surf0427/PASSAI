@@ -54,6 +54,10 @@ export default function AdmissionMatchingPage() {
   //   storage 側の AiMatchAdviceCache 型・保存形式は無変更。
   const [cachedSnapshot, setCachedSnapshot] = useState<AiMatchAdviceCache | null>(null);
   const [liveAiAdvices, setLiveAiAdvices] = useState<AiMatchAdvice[]>([]);
+  // STEP-API-MATCHING-01: matching API が partial fail（一部 candidate のみ AI 生成失敗）
+  // で 200 を返したときに、live 結果画面に小さい注意文を出すための flag。
+  // 全成功時 = false。cache snapshot 表示時は対象外（保存形式は変えていない）。
+  const [livePartial, setLivePartial] = useState(false);
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   // STEP6.7: 旧 aiError state を削除。エラー UI は handleStartMatching の catch にある
@@ -281,6 +285,10 @@ export default function AdmissionMatchingPage() {
     const advices = data.advices as AiMatchAdvice[];
     // STEP6.3: API 結果は live 専用 state へ。cache snapshot を汚さない。
     setLiveAiAdvices(advices);
+    // STEP-API-MATCHING-01: partial fail（一部 candidate のみ失敗）を最小 UX で通知する。
+    // response 形式が変わっても既存 advices 読込は壊れない（partial は optional）。
+    // cache 保存はせず、live 表示中のみ flag を立てる。
+    setLivePartial(data.partial === true);
     return advices;
   }
 
@@ -358,6 +366,8 @@ export default function AdmissionMatchingPage() {
     // STEP6.3: live state を初期化（既存挙動を維持）。snapshot 経路は別途破棄。
     setLiveMatchingLevel(null);
     setLiveAiAdvices([]);
+    // STEP-API-MATCHING-01: 再診断に向けて partial 表示も解除。
+    setLivePartial(false);
     // STEP6.7: setAiError('') は dead state クリーンアップだったため削除。
     // STEP6.2/6.3: cached 表示中に reset された場合に snapshot を破棄して live derive に戻す。
     setCachedSnapshot(null);
@@ -416,17 +426,29 @@ export default function AdmissionMatchingPage() {
   //   各 view は props を受け取って render するだけの pure-ish 関数。
   //   state 移動・hook 移動・custom hook 化は STEP6.11 のスコープ外。
   return hasRunMatching ? (
-    <ResultView
-      displayMatchingLevel={displayMatchingLevel}
-      wallHitting={wallHitting}
-      displayResults={displayResults}
-      displayAiAdvices={displayAiAdvices}
-      eligibilityById={eligibilityById}
-      isShowingCached={isShowingCached}
-      cachedTimestamp={cachedTimestamp}
-      onReset={handleReset}
-      onStartMatching={handleStartMatching}
-    />
+    <>
+      {/* STEP-API-MATCHING-01: live で partial fail（一部 candidate の AI 文生成失敗）が
+          発生したときだけ小さい注意文を出す。cache 表示中（isShowingCached=true）は対象外。
+          UI レイアウトを大きく変えないため、ResultView の直上に 1 行 alert として置く。 */}
+      {!isShowingCached && livePartial && (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-6">
+          <p className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+            一部候補の分析に失敗しましたが、取得できた結果を表示しています。
+          </p>
+        </div>
+      )}
+      <ResultView
+        displayMatchingLevel={displayMatchingLevel}
+        wallHitting={wallHitting}
+        displayResults={displayResults}
+        displayAiAdvices={displayAiAdvices}
+        eligibilityById={eligibilityById}
+        isShowingCached={isShowingCached}
+        cachedTimestamp={cachedTimestamp}
+        onReset={handleReset}
+        onStartMatching={handleStartMatching}
+      />
+    </>
   ) : (
     <ConfirmView
       missingItems={missingItems}

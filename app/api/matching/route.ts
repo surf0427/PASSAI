@@ -20,11 +20,15 @@
 // 将来 matching score の調整に admissionFocus signals を deterministic 利用する
 // 案（Option C）は別 STEP で検討可能。
 //
-// ── Promise.all semantics（PR9d-2 / C3 marker） ────────────────
-// 後段 line ~158 で Promise.all を使う。1 大学でも fail すれば全体が fail する。
-// この semantics は **intentional known behavior** として現状維持。
-// partial-fail handling（Promise.allSettled 化 + per-candidate fail-safe）は
-// 別 STEP で扱う（PR9 audit 決定）。
+// ── Promise.allSettled semantics（STEP-API-MATCHING-01 で all-or-nothing から脱却）─
+// 後段の per-candidate AI 呼び出しは Promise.allSettled で並列実行する。
+// 1 大学失敗で全体が reject される旧 Promise.all 構造は廃止（PR9 audit で予告済）。
+//   - fulfilled candidate: そのまま AiMatchAdvice を採用
+//   - rejected candidate : universityId だけ確定させた空 reason の fallback advice を入れる
+//   - 全 candidate 失敗時のみ 500（既存 UX 維持: 空 advices を返さない）
+//   - partial-fail 観測: response に partial / successfulCandidates / failedCandidates を optional 添付
+// per-call logAiUsage は generateUniversityDetail 内で全 status（success / truncated /
+// parse_failed / failed）に出すため、失敗時の token 課金観測は per-call で確保される。
 //
 // TODO: 大学DB が整備されたら以下の処理を追加する
 //   1. UniversityContext[] を受け取った時点で、それぞれの universityId をキーに
@@ -180,15 +184,14 @@ export async function POST(req: Request) {
     const studentProfile = getStudentProfileFromRequest({ body, fallbackSource: selfAnalysis });
 
     const candidates = await generateUniversityCandidates(selfAnalysis, results);
-    // PR9d-2 / C3 marker:
-    //   **Promise.all は 1 大学でも fail すれば全体が reject される** (all-or-nothing)。
-    //   よって外側 catch (line ~190) で 500 response が返り、partial advices は提供しない。
-    //   この挙動は intentional known behavior として PR9 audit で決定済み。
-    //   partial-fail を許容する設計 (Promise.allSettled + per-candidate fallback) は
-    //   独立 STEP で扱う（response shape の拡張・client 側 UI 対応も含めて）。
-    //   per-call logAiUsage は generateUniversityDetail 内で全 status (success/
-    //   truncated/parse_failed/failed) に出すため、失敗時の観測は per-call で確保される。
-    const advices = await Promise.all(
+    // STEP-API-MATCHING-01:
+    //   Promise.allSettled で 5 並列。1 大学失敗で他 4 件の token を浪費しない設計。
+    //   - fulfilled : そのまま AiMatchAdvice を採用
+    //   - rejected  : universityId だけ確定させた空 reason の fallback advice を入れる
+    //   - 全 candidate 失敗時のみ 500（client は alert + 再診断フローへ）
+    //   per-call の logAiUsage は generateUniversityDetail 内で全 status を出すため、
+    //   失敗 candidate の observability は per-call で確保される。
+    const settled = await Promise.allSettled(
       candidates.map((candidate) =>
         generateUniversityDetail({
           result: candidate,
@@ -204,7 +207,42 @@ export async function POST(req: Request) {
         }),
       ),
     );
-    return Response.json({ advices });
+
+    let successfulCandidates = 0;
+    let failedCandidates = 0;
+    const advices: AiMatchAdvice[] = settled.map((res, idx) => {
+      if (res.status === 'fulfilled') {
+        successfulCandidates += 1;
+        return res.value;
+      }
+      failedCandidates += 1;
+      // 失敗 candidate の fallback: universityId だけ確定させ、reason は空文字。
+      // client 側の ResultView は空 reason でも crash せず（type 上 string なので空 OK）、
+      // 既存 UI の deterministic fallback（MatchingResult.* / generateReason.ts 由来）に委ねる。
+      console.error('matching candidate failed', {
+        universityId: candidates[idx].university.id,
+        name: res.reason instanceof Error ? res.reason.name : 'UnknownError',
+      });
+      return { universityId: candidates[idx].university.id, reason: '' };
+    });
+
+    // 全 candidate 失敗 → 既存 UX 維持で 500 を返す（client 側 alert + 再診断）。
+    // 空 advices を返すと UI が「全大学に空 reason」を表示する経路に入ってしまうため。
+    if (successfulCandidates === 0) {
+      console.error('matching: all candidates failed');
+      return Response.json(
+        { error: 'AI matching failed', detail: 'all candidates failed' },
+        { status: 500 },
+      );
+    }
+
+    // partial fail の観測情報を optional 添付。partial=false（全成功）時は既存 shape `{ advices }` のまま。
+    // 既存 client は data.advices だけを読むため、追加 field は無視されても壊れない。
+    const partial = failedCandidates > 0;
+    return Response.json({
+      advices,
+      ...(partial && { partial: true, successfulCandidates, failedCandidates }),
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Matching AI error:', msg);
