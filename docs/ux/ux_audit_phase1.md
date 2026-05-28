@@ -225,6 +225,7 @@ PASSAI を「初見ユーザー」として通し操作したときの **詰ま�
 - ✅ **STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND** (`38a625a`): `/essay-practice` / `/self-analysis/run` (analysis + summarize) / `/interview/questions` に横展開
 - ✅ **STEP-UX-FIX-06c-CANCEL-WIRING** (`0067317`): `/statement/edit` + `/admission-matching` に AbortController + cancel button 接続、AbortError 分岐
 - ✅ **STEP-UX-FIX-06d-CANCEL-TAP-TARGET** (`104dc7c`): cancel button を size="md" + `min-h-[44px] w-full sm:w-auto` で mobile tap target 改善
+- ✅ **STEP-QA-FIX-01-MATCHING-ALERTS** (`c5aeb45`): release QA で検出された `/admission-matching` 異常系 alert 2 件を red inline banner 化、project-wide alert ゼロ達成
 
 ### 12.2. 残候補
 
@@ -267,12 +268,13 @@ UX audit の各 issue に対する実装状況を 1 表に集約。本表が **�
 | STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND | `38a625a` | `/essay-practice` / `/self-analysis/run` (analysis + summarize) / `/interview/questions` | S-03, A-01, A-10 | `LoadingProgress` を主要 4 flow に横展開。`/tutor` は chat-bubble UX 不適合のため見送り |
 | STEP-UX-FIX-06c-CANCEL-WIRING | `0067317` | `/statement/edit` + `/admission-matching` | S-03 | client-side `AbortController` 導入。`useRef<AbortController>` + fetch `signal` + `AbortError` 分岐 (通常 error と分離、cache / history / result 上書きなし) + unmount cleanup |
 | STEP-UX-FIX-06d-CANCEL-TAP-TARGET | `104dc7c` | `components/ui/LoadingProgress.tsx` | S-03 | cancel button を `size="sm"` (24-28px) → `size="md"` + `min-h-[44px] w-full sm:w-auto` で mobile tap target を 44px 以上に底上げ |
+| STEP-QA-FIX-01-MATCHING-ALERTS | `c5aeb45` | `app/admission-matching/page.tsx` | QA-01 (S-01 派生) | `/admission-matching` 異常系の `alert()` 2 件 (matching 失敗 / cached 読み込み失敗) を red inline banner (`aiError` state) に置換。project-wide alert 残存ゼロ達成 |
 
 ### 14.2. release blocker 状態
 
 | blocker | 解消 | 残課題 |
 |---|---|---|
-| S-01 alert | ✅ 完全解消 | なし |
+| S-01 alert | ✅ 完全解消 | STEP-QA-FIX-01 (`c5aeb45`) で project-wide alert ゼロ達成 (`/admission-matching` 異常系 2 件も inline banner 化) |
 | S-02 添削後 next action | ✅ 完全解消 | なし |
 | S-03 AI loading 経過秒 + キャンセル | ✅ 主要 flow 解消 | cancel wiring は `/statement/edit` + `/admission-matching` の 2 flow から開始。他 3 flow (`/essay-practice`, `/self-analysis/run`, `/interview/questions`) への展開は **release 後の品質向上** に分類 (06e) |
 

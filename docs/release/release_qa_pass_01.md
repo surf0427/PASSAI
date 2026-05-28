@@ -3,6 +3,7 @@
 実施日: 2026-05-28
 対象 branch: `feature/supabase-migration`
 直前 commit: `9780437 Update UX audit status`
+最終更新: 2026-05-28 (STEP-QA-NOTE-01 で QA-01 解消を反映)
 
 ## 1. 目的
 
@@ -119,7 +120,7 @@ PASSAI release 直前の QA pass。UX audit (`docs/ux/ux_audit_phase1.md`) 後�
 | `/admission-matching` cancel | `handleCancelMatching` + unmount cleanup + AbortError 分岐 ([page.tsx:394-405](app/admission-matching/page.tsx#L394)) | ✅ |
 | `/admission-matching` partial fail 注意文 | `!isShowingCached && livePartial` で表示 ([page.tsx:509-515](app/admission-matching/page.tsx#L509)) | ✅ |
 | `/admission-matching` cached result 表示 | `handleShowCached` は fetch せず snapshot のみ復元 → AbortController 作らない | ✅ |
-| `/admission-matching` 2 件の `alert()` (catch / cache 異常系) | `alert('マッチングに失敗しました...')` ([page.tsx:377](app/admission-matching/page.tsx#L377)) と `alert('保存済みの結果を読み込めませんでした。')` ([page.tsx:420](app/admission-matching/page.tsx#L420)) が残存 — audit 範囲外だが不整合 | 🟡 |
+| `/admission-matching` 旧 alert() 2 件 (catch / cache 異常系) | ✅ 解消 (STEP-QA-FIX-01-MATCHING-ALERTS, `c5aeb45`)。`aiError` state を復活させて ConfirmView 直上の red inline banner に置換。`livePartial` の amber banner と意味的に区別 (red = 失敗 / amber = 部分成功)。次の `handleStartMatching` / `handleShowCached` 冒頭で `setAiError('')` により自動クリア | ✅ |
 
 ### 3.7. tutor
 
@@ -140,17 +141,17 @@ PASSAI release 直前の QA pass。UX audit (`docs/ux/ux_audit_phase1.md`) 後�
 | `npx tsc --noEmit` | clean | §11 で再確認 |
 | `npx eslint app components hooks` | 0 errors / 0 warnings | §11 で再確認 |
 | 主要 flow page (51 page 中、主要 25 page) | ✅ static-verified | navigation / state 配線正常 |
-| `alert(` 残存 (`app` + `components`) | 2 件 | 全て `/admission-matching` の異常系 catch (詳細 §5.1) |
+| `alert(` 残存 (`app` + `components` + `hooks`) | **0 件** | STEP-QA-FIX-01-MATCHING-ALERTS (`c5aeb45`) で `/admission-matching` 異常系 2 件を inline banner 化 → project-wide alert ゼロ達成 |
 | `window.confirm(` 残存 | 10 件 | A-05 残: `components/activity/*` 9 件 + `interview/history` 1 件 |
 | `LoadingProgress` callers | 5 caller (`/admission-matching`, `/essay-practice`, `/statement/edit`, `/interview/questions`, `/self-analysis/run`) | display gate 全て正しい |
 | `AbortController` 接続済 client flow | 2 件 (`/statement/edit`, `/admission-matching`) | 残 3 主要 flow は STEP-UX-FIX-06e 候補 |
 | `ConfirmDialog` 採用 caller | 4 件 (`/statement/edit`, `/statement/improve`, `/statement/score`, `/self-pr`) | STEP-UX-FIX-04 完了分 |
 | hub next-step suggestion | 3/4 hub (`/statement`, `/self-analysis`, `/interview`) | `/essay` 残 (STEP-UX-FIX-05b 候補) |
 
-pass/fail/not-tested 件数:
-- ✅ pass (code-verified): **30 項目**
-- 🟡 partial / known limitation: **9 項目**（全て audit doc で既出 + release 後対応で十分）
-- ⬜ not tested (runtime): **5 項目**（実機 test 必須）
+pass/fail/not-tested 件数 (STEP-QA-NOTE-01 時点):
+- ✅ pass (code-verified): **31 項目** (QA-01 解消で +1)
+- 🟡 partial / known limitation: **8 項目** (QA-01 解消で -1)
+- ⬜ not tested (runtime): **5 項目** (実機 test 必須)
 - ❌ fail (release blocker 新規発見): **0 項目**
 
 ---
@@ -159,11 +160,11 @@ pass/fail/not-tested 件数:
 
 ### 5.1. 新規発見
 
-| ID | severity | 対象 | 内容 | 推奨対応 |
-|---|---|---|---|---|
-| QA-01 | B | `/admission-matching` page.tsx:377, 420 | catch / cache 異常系で `alert()` 2 件残存。S-01 (`alert('保存しました')`) とは別経路だが、blocking modal は UX 一貫性を損なう | release 後の STEP-UX-FIX-04c-MATCHING-ALERT 候補。non-blocking toast / inline banner 化 |
+| ID | severity | 対象 | 内容 | 推奨対応 | 状態 |
+|---|---|---|---|---|---|
+| QA-01 | B | `/admission-matching` page.tsx:377, 420 | catch / cache 異常系で `alert()` 2 件残存。S-01 (`alert('保存しました')`) とは別経路だが、blocking modal は UX 一貫性を損なう | non-blocking inline banner 化 | ✅ 解消 (STEP-QA-FIX-01-MATCHING-ALERTS, `c5aeb45`)。`aiError` state + red inline banner を ConfirmView 直上に追加。matching failure flow / cache hit / cancel wiring / LoadingProgress / livePartial / cachedSnapshot は完全不変 |
 
-新規 release blocker = **0 件**。
+新規 release blocker = **0 件**。QA-01 は B 級だったが release 前に処理済み → project-wide alert ゼロ達成。
 
 ### 5.2. audit doc 既出 (status を §3 で再確認)
 
@@ -206,9 +207,7 @@ UX audit phase 1 で挙げられた S-01 / S-02 / S-03 は STEP-UX-FIX-01 〜 06
    - 環境変数 / API key / Anthropic SDK の wiring 確認
    - 工数: 半日
 
-3. **`/admission-matching` の 2 件の `alert()` を toast 化** (QA-01)
-   - blocking modal を release 前に取り除くと UX 一貫性が完成する
-   - 半日で実施可能（STEP-UX-FIX-04c 候補）
+~~3. `/admission-matching` の 2 件の `alert()` を toast 化 (QA-01)~~ → ✅ 解消済 (STEP-QA-FIX-01-MATCHING-ALERTS, `c5aeb45`)。red inline banner で置換。
 
 ---
 
@@ -229,15 +228,15 @@ UX audit phase 1 で挙げられた S-01 / S-02 / S-03 は STEP-UX-FIX-01 〜 06
 
 ## 9. 次の action
 
-| 順 | action | owner | timing |
-|---|---|---|---|
-| 1 | 本 QA report レビュー | (project owner) | 即時 |
-| 2 | 本番 smoke test (build + start + main flow) | (release responsible) | release 1 週間前 |
-| 3 | Real user test 準備 (test scenarios / 招集) | (UX) | release 2-3 週間前 |
-| 4 | Real user test 実施 + フィードバック反映 | (UX / dev) | release 1-2 週間前 |
-| 5 | QA-01 (`/admission-matching` alert toast 化) を release 前に処理するか判断 | (project owner) | release 直前 |
-| 6 | release | — | — |
-| 7 | release 後の monitoring (Anthropic usage / error rate / 1 day retention) | (observability) | release 直後 1-2 週 |
+| 順 | action | owner | timing | 状態 |
+|---|---|---|---|---|
+| 1 | 本 QA report レビュー | (project owner) | 即時 | ⬜ |
+| 2 | 本番 smoke test (build + start + main flow) | (release responsible) | release 1 週間前 | ⬜ |
+| 3 | Real user test 準備 (test scenarios / 招集) | (UX) | release 2-3 週間前 | ⬜ |
+| 4 | Real user test 実施 + フィードバック反映 | (UX / dev) | release 1-2 週間前 | ⬜ |
+| ~~5~~ | ~~QA-01 (`/admission-matching` alert toast 化)~~ | (dev) | — | ✅ 解消済 (`c5aeb45`) |
+| 5 | release | — | — | ⬜ |
+| 6 | release 後の monitoring (Anthropic usage / error rate / 1 day retention) | (observability) | release 直後 1-2 週 | ⬜ |
 
 ---
 
@@ -260,13 +259,27 @@ npx tsc --noEmit
 
 npx eslint app components hooks
 → 0 errors / 0 warnings (no output)
+
+grep -rn "alert(" app components hooks (excluding comments/tests)
+→ 0 hits (STEP-QA-NOTE-01 時点)
 ```
 
-実施タイミング: 本 commit (`Add release QA pass report`) 直前。
+実施タイミング:
+- 初回: 本 commit (`dde792c Add release QA pass report`) 直前
+- 更新: STEP-QA-NOTE-01 commit (`Update release QA alert status`) 直前 — QA-01 解消後の再検証
 
 ---
 
-## 12. 関連 doc
+## 12. 更新履歴 (addendum)
+
+| date | STEP | 更新内容 |
+|---|---|---|
+| 2026-05-28 | STEP-RELEASE-QA-01 (`dde792c`) | 本 doc 初版作成。QA-01 を新規 issue として記録 |
+| 2026-05-28 | STEP-QA-NOTE-01 (本 commit) | QA-01 解消反映 (STEP-QA-FIX-01-MATCHING-ALERTS / `c5aeb45`)。alert 残存 2 → 0、pass 件数 30 → 31、partial 9 → 8 に更新。§7 必須 task から alert 撤去項目を削除、§9 next action からも同項目を消化済みに |
+
+---
+
+## 13. 関連 doc
 
 - [`../ux/ux_audit_phase1.md`](../ux/ux_audit_phase1.md) — UX audit 正本 (§14 が実施結果サマリ)
 - [`../principles/cleanup_phase_summary.md`](../principles/cleanup_phase_summary.md) — フェーズ全体 summary (§8b に UX fix フェーズ)
