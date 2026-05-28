@@ -220,7 +220,6 @@ export function InterviewQuestionForm() {
         formData,
         currentCount,
         1,
-        basicInfo,
       );
       setExtraQuestions((prev) => [...prev, ...newQuestions]);
       setAdditionalCounts((prev) => ({ ...prev, [category]: currentCount + 1 }));

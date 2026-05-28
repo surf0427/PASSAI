@@ -1,5 +1,4 @@
 import type { InterviewQuestionFormData } from '../types';
-import type { BasicInfo } from '@/types/basicInfo';
 import type { GeneratedQuestion } from './generateInterviewQuestions';
 
 type QuestionTemplate = {
@@ -100,14 +99,15 @@ const POOL_MAP: Record<string, QuestionTemplate[]> = {
 // 「さらに質問を生成する」ボタンを表示するカテゴリ
 export const EXPANDABLE_CATEGORIES = Object.keys(POOL_MAP);
 
-// alreadyGenerated: すでに追加済みの問数（プールを循環して重複しないようにする）
-// basicInfo は将来 AI 化したときの拡張用（現状はテンプレートで未使用）。
+// alreadyGenerated: すでに追加済みの問数（プールを循環して重複しないようにする）。
+// 旧 signature には AI 化拡張用の `_basicInfo: BasicInfo | null` 引数があったが、現状の
+// deterministic テンプレート実装では未使用のため、no-unused-vars 解消を兼ねて削除した。
+// 将来 AI 化する STEP では必要に応じて再追加する。
 export function generateAdditionalQuestions(
   category: string,
   formData: InterviewQuestionFormData,
   alreadyGenerated: number,
   count = 1,
-  _basicInfo: BasicInfo | null = null,
 ): GeneratedQuestion[] {
   const pool = POOL_MAP[category];
   if (!pool || pool.length === 0) return [];
