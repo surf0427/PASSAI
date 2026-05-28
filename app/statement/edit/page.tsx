@@ -216,14 +216,15 @@ function StatementPageInner() {
   // ① 大学軸 prepare の履歴。配列 / 最大 10 件 / 先頭が最新。
   // 履歴が 1 件以上あれば左サイド欄で「整理メモ履歴」を優先表示し、
   // 旧 prepareSummary（最新 1 枚）の表示は履歴 0 件時の fallback に下ろす。
-  // useState + mount-init useEffect パターン：delete 後に setPrepareHistory で再 sync する。
-  // useMemo にすると delete 時の再評価トリガが無く invalidate 不能なため useState 化。
-  const [prepareHistory, setPrepareHistory] = useState<UniversityPrepareEntry[]>([]);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (isMounted) setPrepareHistory(loadUniversityPrepareHistory());
-  }, [isMounted]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // localStorage を source of truth として useMemo で派生する version-counter パターン：
+  //   - SSR / 初回 client render は isMounted=false で [] を返し hydration セーフ
+  //   - mount 後は loadUniversityPrepareHistory() を直接読む
+  //   - delete 時は setPrepareHistoryVersion で bump して再評価
+  const [prepareHistoryVersion, setPrepareHistoryVersion] = useState(0);
+  const prepareHistory = useMemo<UniversityPrepareEntry[]>(() => {
+    void prepareHistoryVersion;
+    return isMounted ? loadUniversityPrepareHistory() : [];
+  }, [isMounted, prepareHistoryVersion]);
 
   function handleDeletePrepareEntry(id: string) {
     const ok = window.confirm(
@@ -231,7 +232,7 @@ function StatementPageInner() {
     );
     if (!ok) return;
     deleteUniversityPrepareEntry(id);
-    setPrepareHistory(loadUniversityPrepareHistory());
+    setPrepareHistoryVersion((v) => v + 1);
   }
 
   // C1 mitigation: StudentProfile を useMemo 化して submit ごとの再 derivation を停止する。
