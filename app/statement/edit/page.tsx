@@ -619,6 +619,7 @@ function StatementPageInner() {
             block: 'start',
           })
         }
+        onSaveDraft={handleSaveDraft}
       />
 
       {/* STEP-DA-3: 詳細分析 Accordion + DetailAnalysisAccordionView は削除済み。

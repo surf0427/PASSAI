@@ -23,11 +23,15 @@ export type ReviewResultViewProps = {
   // 添削結果直下から本文入力欄へスムーズスクロールするための callback。
   // ref 本体は page.tsx 側に集約し、InputFormView に渡される inputSectionRef を流用する。
   onScrollToInput: () => void;
+  // STEP-UX-FIX-02-STATEMENT-NEXT-ACTION: 添削後の next action bar から「下書きを保存」
+  // を発火するための callback。page.tsx の handleSaveDraft を再利用するので
+  // saveDraft → saveToast 経路は不変。
+  onSaveDraft: () => void;
 };
 
 const AXIS_MAX = 20;
 
-export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewProps) {
+export function ReviewResultView({ result, onScrollToInput, onSaveDraft }: ReviewResultViewProps) {
   return (
     <>
       {result ? (
@@ -82,16 +86,19 @@ export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewPr
         </section>
       )}
 
-      {/* ── 次のステップへ：完成度スコア / 本文修正 ───────────────────
-          完成度スコア = 進む（primary）／本文修正 = 戻り anchor（secondary）。
-          後者は inputSectionRef へスクロールするだけで、新 state / 新 handler 経路を作らない。 */}
+      {/* ── 次にやること：完成度スコア / 本文修正 / 下書き保存 ───────
+          完成度スコア = 進む（primary、③ /statement/score 経由で詳細分析にアクセス）。
+          本文修正 = 戻り anchor（secondary、inputSectionRef へスクロール）。
+          下書き保存 = 既存 handleSaveDraft 再利用（saveToast 経路は不変）。
+          STEP-UX-FIX-02-STATEMENT-NEXT-ACTION で 3 button bar 化。
+          新 state / 新 storage / 新 API は導入していない。 */}
       {result && (
         <section className="mb-10 bg-blue-50 border border-blue-100 rounded-2xl p-5 sm:p-6">
           <p className="text-[11px] font-bold text-blue-700 mb-1 tracking-widest">
-            次のステップ
+            次にやること
           </p>
           <p className="text-sm text-slate-700 leading-relaxed mb-4">
-            添削結果をもとに、完成度スコアで現在地を確認しましょう。
+            この結果をもとに、次の行動を選べます。
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <LinkButton
@@ -104,6 +111,9 @@ export function ReviewResultView({ result, onScrollToInput }: ReviewResultViewPr
             </LinkButton>
             <Button variant="secondary" onClick={onScrollToInput}>
               ↑ 本文を修正する
+            </Button>
+            <Button variant="secondary" onClick={onSaveDraft}>
+              下書きを保存
             </Button>
           </div>
         </section>
