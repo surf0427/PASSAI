@@ -33,10 +33,14 @@ import {
 } from '@/lib/essay/workspaceOps';
 import { buildBasicInfoForAi } from '@/lib/essay/buildBasicInfoForAi';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
-// STEP-PAGE-06 で page.tsx の JSX block から切り出した pure props component（ステップ 2 のみ）。
+// STEP-PAGE-06 / 06b で page.tsx の JSX block から切り出した pure props component。
+//   - MiniThoughtFields: ステップ 2（結論 / 理由①② の input）
+//   - BodyInputFields:   ステップ 3（構成ガイド / ミニ思考欄参照 / 本文 textarea / 文字数 / 進行ボタン）
 import { MiniThoughtFields } from './components/MiniThoughtFields';
+import { BodyInputFields } from './components/BodyInputFields';
 import { Input } from '@/components/ui/Input';
-import { Textarea } from '@/components/ui/Textarea';
+// STEP-PAGE-06b: ステップ 3 本文入力の JSX block を ./components/BodyInputFields.tsx に切り出した。
+// Textarea import は当該 component 内に閉じたため page 側からは除去済み。
 import { FormField } from '@/components/ui/FormField';
 import { ImprovementList } from '@/components/shared/result';
 import {
@@ -713,74 +717,19 @@ export default function EssayPracticePage() {
         />
       )}
 
-      {/* ── ステップ3：本文入力 ── */}
+      {/* ── ステップ3：本文入力（JSX 本体は ./components/BodyInputFields.tsx に切り出し済み、STEP-PAGE-06b）── */}
       {currentStep === 3 && (
-        <section className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-          <h2 className="text-base font-semibold text-gray-700 mb-2">本文入力</h2>
-          <p className="text-sm text-gray-500 mb-6">
-            ミニ思考欄をもとに、自分の言葉で小論文を書いてください。完璧である必要はありません。
-          </p>
-
-          {/* 構成ガイド */}
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
-            <p className="text-xs font-semibold text-gray-500 mb-2">書くときのチェックポイント</p>
-            <ul className="space-y-1">
-              <li className="text-xs text-gray-600">・序論：問題提起を書けているか</li>
-              <li className="text-xs text-gray-600">・本論①：理由①が書けているか</li>
-              <li className="text-xs text-gray-600">・本論②：理由②が書けているか</li>
-              <li className="text-xs text-gray-600">・結論：自分の考えで締めているか</li>
-            </ul>
-          </div>
-
-          {/* ミニ思考欄の参照 */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-5">
-            <p className="text-xs font-semibold text-blue-600 mb-3">ミニ思考欄（参照用）</p>
-            <div className="space-y-2">
-              <div>
-                <span className="text-xs text-blue-500 font-medium">結論：</span>
-                <span className="text-xs text-gray-700">{conclusion || '（未入力）'}</span>
-              </div>
-              <div>
-                <span className="text-xs text-blue-500 font-medium">理由①：</span>
-                <span className="text-xs text-gray-700">{reasonOne || '（未入力）'}</span>
-              </div>
-              <div>
-                <span className="text-xs text-blue-500 font-medium">理由②：</span>
-                <span className="text-xs text-gray-700">{reasonTwo || '（未入力）'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 本文textarea
-              section 見出し（h2「本文入力」）が label を兼ねているため
-              FormField でラップせず Textarea primitive 直に置換。
-              長文用に leading-relaxed と resize-y を className で追加。 */}
-          <div className="mb-3">
-            <Textarea
-              value={essayBody}
-              onChange={(e) => setEssayBody(e.target.value)}
-              rows={15}
-              placeholder={'ここに小論文を書いてください。\nミニ思考欄で書いた内容をもとに広げていきましょう。'}
-              className="leading-relaxed resize-y"
-            />
-          </div>
-
-          {/* 文字数カウント */}
-          <p className="text-xs text-gray-400 mb-8">
-            文字数：{essayBody.length}文字
-          </p>
-
-          <button
-            type="button"
-            onClick={() => {
-              setCurrentStep(4);
-              if (essayBody.trim()) saveEssayProgress({ hasContent: true, hasReview: false });
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
-          >
-            壁打ちAIへ進む
-          </button>
-        </section>
+        <BodyInputFields
+          essayBody={essayBody}
+          setEssayBody={setEssayBody}
+          conclusion={conclusion}
+          reasonOne={reasonOne}
+          reasonTwo={reasonTwo}
+          onProceed={() => {
+            setCurrentStep(4);
+            if (essayBody.trim()) saveEssayProgress({ hasContent: true, hasReview: false });
+          }}
+        />
       )}
 
       {/* ── ステップ4：壁打ちAI相談 ── */}
