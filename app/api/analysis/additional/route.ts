@@ -54,8 +54,10 @@ export async function POST(req: Request) {
     //   - buildAdditionalQuestionsPrompt(...) は dynamic 部だけ（basicInfo / universityContext /
     //     活動データ / existingQuestions）
     //   model / max_tokens / messages の role と shape は STEP3.7 以前から不変。
-    //   prompt caching (cache_control) は付けない（system 候補は短く、Sonnet 4-6 の
-    //   実効 caching 閾値を大きく下回るため）。
+    //   prompt caching (cache_control: 'ephemeral') 配備済み（STEP-API-CACHE-02）。
+    //   STEP-API-MEASURE-01 で system prompt が ~2,191 chars / ~1,100 tokens（中央推定でほぼ
+    //   1,024 tokens 閾値）と計測。閾値未達なら Anthropic 側で silently skip されるため
+    //   low-risk 配備。「再び深掘る」連打など短時間連続呼び出しで cache hit する余地がある。
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 500,

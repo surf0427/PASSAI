@@ -66,8 +66,11 @@ export async function POST(req: Request) {
     //   - buildSummarizePrompt(...) は dynamic 部だけ（basicInfo / universityContext /
     //     活動情報 / AI分析 / 深掘り質問と回答）
     //   model / max_tokens / temperature / messages の role と shape は STEP3.8 以前から不変。
-    //   prompt caching (cache_control) は付けない（system 候補は短く、Sonnet 4-6 の
-    //   実効 caching 閾値を下回るため）。
+    //   prompt caching (cache_control: 'ephemeral') 配備済み（STEP-API-CACHE-02）。
+    //   STEP-API-MEASURE-01 で light ~2,554 chars / deep ~2,699 chars（共に中央推定で
+    //   1,024 tokens を超える境界）と計測。閾値未達なら Anthropic 側で silently skip される
+    //   ため low-risk 配備。getSummarizeSystemPrompt(mode) の light / deep 分岐は不変で、
+    //   選ばれた system 文字列が ephemeral cache 対象になる。
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 1500,

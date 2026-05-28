@@ -78,8 +78,10 @@ export async function POST(req: Request) {
     //   - buildWallHittingPrompt(...) は dynamic 部だけ（basicInfo / universityContext /
     //     【活動データ】 + activityText）
     //   model / max_tokens / messages の role と shape は STEP3.4 から不変。
-    //   prompt caching (cache_control) はまだ付けない（STEP3.4 調査で system が ~1,294 tokens と
-    //   Sonnet 4-6 の実効 caching 閾値を下回るため）。
+    //   prompt caching (cache_control: 'ephemeral') 配備済み（STEP-API-CACHE-01）。
+    //   STEP-API-MEASURE-01 で system prompt が ~4,145 chars / ~2,000 tokens（中央推定）と
+    //   Sonnet 4-6 の 1,024 tokens 閾値を確実に上回ることを確認したうえで配備した。
+    //   同一受験生による再分析 / 再生成で input cache hit による単価割引が期待される。
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 2000,

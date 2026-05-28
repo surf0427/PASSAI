@@ -46,8 +46,10 @@ export async function POST(req: Request) {
     //   - buildStatementReviewPrompt(...) は dynamic 部だけ（basicInfo / university / activity /
     //     wallHitting / examTypeGuidance / essay 本文）
     //   model / max_tokens / temperature / messages の role と shape は STEP3.1 から不変。
-    //   prompt caching (cache_control) はまだ付けない（STEP3.1 調査で system が ~1,589 tokens と
-    //   Sonnet 4-6 の実効 caching 閾値を下回るため）。
+    //   prompt caching (cache_control: 'ephemeral') 配備済み（STEP-API-CACHE-01）。
+    //   STEP-API-MEASURE-01 で system prompt が ~3,614 chars / ~1,800 tokens（中央推定）と
+    //   Sonnet 4-6 の 1,024 tokens 閾値を確実に上回ることを確認したうえで配備した。
+    //   5 分以内の連続「再添削」呼び出しで input cache hit による単価割引が期待される。
     // STEP4b（admissionFocusContext）は PR9 で lib/admissionFocus/* と同時に有効化する。
     // 現状は buildStatementReviewPrompt に admissionFocusContext を渡さず、prompt 側の
     // optional section をスキップしている。旧 v2 と意味等価。
