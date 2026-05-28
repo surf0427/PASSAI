@@ -33,6 +33,7 @@ import {
 } from '@/lib/essay/workspaceOps';
 import { buildBasicInfoForAi } from '@/lib/essay/buildBasicInfoForAi';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
+import { LoadingProgress } from '@/components/ui/LoadingProgress';
 // STEP-PAGE-06 / 06b で page.tsx の JSX block から切り出した pure props component。
 //   - MiniThoughtFields: ステップ 2（結論 / 理由①② の input）
 //   - BodyInputFields:   ステップ 3（構成ガイド / ミニ思考欄参照 / 本文 textarea / 文字数 / 進行ボタン）
@@ -89,6 +90,15 @@ const CHAT_SUGGESTIONS = [
   'もっと具体例ある？',
 ];
 
+// LoadingProgress に渡す sub-message。6 秒ごとに rotate される。
+// 中身は ai prompt とは無関係（UI 上の「待ち時間中の雰囲気」のみ）。
+// STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND で追加。
+const ESSAY_REVIEW_SUB_MESSAGES: readonly string[] = [
+  '本文の構成を確認しています',
+  '評価軸ごとに採点しています',
+  '改善ポイントを整理しています',
+] as const;
+
 // 今回の小論文練習で使う志望校・入試方式（テーマ生成の入力条件）。
 // basicInfo.preferences[0] / basicInfo.examTypes[0] を初期値とするが、
 // ステップ0で自由に書き換え可能。basicInfo 本体は更新せず、API へ渡す basicInfo の
@@ -124,6 +134,11 @@ export default function EssayPracticePage() {
   const [prevReviewResult, setPrevReviewResult] = useState<ReviewResult | null>(null);
   const [reviewHistory, setReviewHistory] = useState<ReviewResult[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
+  // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: 経過秒数表示の起点。reviewLoading=true の
+  // タイミングで Date.now() を捕捉、finally / handleReset で null に戻す。
+  // cache hit 経路では setReviewLoading(true) が立たないため、ここも触らない（display gate
+  // で loadingStartedAt が null なら LoadingProgress は出ない）。
+  const [reviewLoadingStartedAt, setReviewLoadingStartedAt] = useState<number | null>(null);
   const [reviewError, setReviewError] = useState('');
   // essay STEP B: 現セッションに対応する EssayWorkspace の id。
   // - null = まだ workspace 未作成（初回 review 時に新規作成）
@@ -379,6 +394,7 @@ export default function EssayPracticePage() {
     logAiCache({ route: 'api/essay-review', action: 'miss', inputHash });
 
     setReviewLoading(true);
+    setReviewLoadingStartedAt(Date.now());
     setReviewError('');
 
     try {
@@ -428,6 +444,7 @@ export default function EssayPracticePage() {
       setReviewError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {
       setReviewLoading(false);
+      setReviewLoadingStartedAt(null);
     }
   }
 
@@ -448,6 +465,10 @@ export default function EssayPracticePage() {
     setPrevReviewResult(null);
     setReviewHistory([]);
     setReviewLoading(false);
+    // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: orphan startedAt 防止。
+    // 通常 finally で null に戻るが、進行中に handleReset を踏まれても残らないよう
+    // ここでも明示的に null へ戻す。
+    setReviewLoadingStartedAt(null);
     setReviewError('');
     setConclusion('');
     setReasonOne('');
@@ -818,6 +839,21 @@ export default function EssayPracticePage() {
 
           {reviewError && (
             <p className="text-sm text-red-500 mb-4">{reviewError}</p>
+          )}
+          {/* STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: AI 添削中の経過秒 + sub-message ループ。
+              reviewLoading=true かつ startedAt がある間だけ表示。reviewLoading false に戻る
+              と unmount されて setInterval も cleanup される。
+              cache hit 経路では setReviewLoading(true) を立てずに早期 return するため
+              ここは出ない。 */}
+          {reviewLoading && reviewLoadingStartedAt !== null && (
+            <div className="mb-4">
+              <LoadingProgress
+                startedAt={reviewLoadingStartedAt}
+                label="AIが添削しています"
+                subMessages={ESSAY_REVIEW_SUB_MESSAGES}
+                estimatedSeconds={20}
+              />
+            </div>
           )}
           {savedReview?.essayBodySnapshot !== undefined && essayBody !== savedReview.essayBodySnapshot && (
             <p className="text-xs text-amber-600 mb-3">

@@ -34,8 +34,18 @@ import {
   saveInterviewQuestionCache,
 } from '@/lib/interviewQuestionCache';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { LoadingProgress } from '@/components/ui/LoadingProgress';
 
 const CACHE_ROUTE = 'api/interview-questions';
+
+// LoadingProgress に渡す sub-message。6 秒ごとに rotate される。
+// 中身は ai prompt とは無関係（UI 上の「待ち時間中の雰囲気」のみ）。
+// STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND で追加。
+const INTERVIEW_QUESTIONS_SUB_MESSAGES: readonly string[] = [
+  '志望大学・学部の特徴を読み込んでいます',
+  'あなたの活動・志望理由を整理しています',
+  '質問を組み立てています',
+] as const;
 
 // 日次バリエーション seed（PROMPT_VERSION v4 と連動）。
 // JST の `YYYY-MM-DD` を返し、hash 入力 + API body の両方に同値を載せて client/server の
@@ -96,6 +106,11 @@ export function InterviewQuestionForm() {
   );
   // AI 生成中フラグ。送信ボタンの disable / loading 文言切替に使う。
   const [isAiLoading, setIsAiLoading] = useState(false);
+  // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: 経過秒数表示の起点。AI call の cache miss
+  //   path に入る直前に Date.now() を捕捉し、finally で null に戻す。
+  //   cache hit 経路では startedAt を null に維持するため LoadingProgress は出ない
+  //   （display gate `isAiLoading && startedAt !== null`）。
+  const [aiLoadingStartedAt, setAiLoadingStartedAt] = useState<number | null>(null);
   // AI 経路が失敗して deterministic へ fallback したことを Preview の上に小さく告知する。
   const [usedFallback, setUsedFallback] = useState(false);
   // PR8c (H6): cache hit transparency。同入力で interviewQuestionCache から復元したことを
@@ -169,6 +184,9 @@ export function InterviewQuestionForm() {
       // ── API call（cache miss / 不一致時のみ） ─────────────────────────
       // dailySeed は client / server で同値を共有する必要があるため、hash 入力と同じ
       // 値を body にも渡す。server は body の値を直接 prompt に使う（再計算しない）。
+      // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: cache hit path では startedAt を立てず
+      //   LoadingProgress を抑制。ここ（cache miss が確定したタイミング）で起点を捕捉する。
+      setAiLoadingStartedAt(Date.now());
       const response = await fetch('/api/interview-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -206,6 +224,7 @@ export function InterviewQuestionForm() {
       applyFallback();
     } finally {
       setIsAiLoading(false);
+      setAiLoadingStartedAt(null);
     }
   }
 
@@ -314,6 +333,21 @@ export function InterviewQuestionForm() {
         >
           {isAiLoading ? '面接質問を作成中...' : '予想質問を作成する'}
         </Button>
+
+        {/* STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: AI 質問生成中の経過秒 + sub-message ループ。
+            isAiLoading=true かつ startedAt がある間だけ表示。cache hit 経路では
+            startedAt を null に維持するため表示されない（瞬間的に isAiLoading=true が
+            立っても LoadingProgress は出ない）。 */}
+        {isAiLoading && aiLoadingStartedAt !== null && (
+          <div className="mt-6">
+            <LoadingProgress
+              startedAt={aiLoadingStartedAt}
+              label="AIが面接質問を作成しています"
+              subMessages={INTERVIEW_QUESTIONS_SUB_MESSAGES}
+              estimatedSeconds={20}
+            />
+          </div>
+        )}
       </section>
 
       {viewState.mode !== 'idle' && (

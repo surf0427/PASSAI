@@ -35,12 +35,27 @@ import { decideSummarizeMode } from '@/lib/summarizeMode';
 import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { UsageNote } from '@/components/shared/UsageNote';
-import { AiInlineThinking } from '@/components/shared/result';
+import { LoadingProgress } from '@/components/ui/LoadingProgress';
 import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
 // STEP-PAGE-02 で inline 定義から切り出した pure props component 群。
 //   ImprovementList は AnalysisResultCard 内に閉じたため page 側 import から除外済み。
 import { ActivityDataPreview } from './components/ActivityDataPreview';
 import { AnalysisResultCard } from './components/AnalysisResultCard';
+
+// LoadingProgress に渡す sub-message。6 秒ごとに rotate される。
+// 中身は ai prompt とは無関係（UI 上の「待ち時間中の雰囲気」のみ）。
+// STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND で追加。
+const ANALYSIS_SUB_MESSAGES: readonly string[] = [
+  '活動データを読み込んでいます',
+  '強み・弱みを整理しています',
+  '深掘り質問を組み立てています',
+] as const;
+
+const SUMMARIZE_SUB_MESSAGES: readonly string[] = [
+  '回答内容を読み込んでいます',
+  'エピソード単位で整理しています',
+  '自己PRのたたき台にまとめています',
+] as const;
 
 // マウント前 false / マウント後 true を返す flag。
 // loadBasicInfo() は localStorage 依存のため SSR では null を返したい。
@@ -200,6 +215,13 @@ export default function SelfAnalysisPage() {
   const [summarizeError, setSummarizeError] = useState('');
   const [addQuestionsLoading, setAddQuestionsLoading] = useState(false);
   const [addQuestionsError, setAddQuestionsError] = useState('');
+  // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: 経過秒数表示の起点。
+  // - analysisLoadingStartedAt: useWallHitting().run() を呼ぶ handleAnalyze で
+  //   cache miss path に入るタイミングで設定し、try/finally の finally で null に戻す。
+  //   cache hit 経路では loading 自体が立たないため、display gate により表示されない。
+  // - summarizeLoadingStartedAt: handleSummarize の cache miss path で設定し、finally で null。
+  const [analysisLoadingStartedAt, setAnalysisLoadingStartedAt] = useState<number | null>(null);
+  const [summarizeLoadingStartedAt, setSummarizeLoadingStartedAt] = useState<number | null>(null);
 
   // freshAnalysis: APIから取得した新規結果。analysis: 新規 or 復元のいずれか
   const { result: freshAnalysis, loading: analysisLoading, error: analysisError, run: runAnalysis } = useWallHitting(activityData, basicInfo);
@@ -244,7 +266,17 @@ export default function SelfAnalysisPage() {
 
   async function handleAnalyze() {
     if (loading) return;
-    await runAnalysis();
+    // STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: hook 内 cache hit 経路では loading が
+    //   立たないため、display gate `analysisLoading && startedAt !== null` により
+    //   LoadingProgress は表示されない。cache miss 経路では hook が setLoading(true)
+    //   を立てる同 batch で startedAt が non-null になり、表示開始。
+    //   finally で必ず null に戻すことで orphan を防ぐ。
+    setAnalysisLoadingStartedAt(Date.now());
+    try {
+      await runAnalysis();
+    } finally {
+      setAnalysisLoadingStartedAt(null);
+    }
   }
 
   // 「再び深掘る」ボタン: 2問追加生成して既存の質問に追記する
@@ -395,6 +427,7 @@ export default function SelfAnalysisPage() {
     logAiCache({ route: 'api/summarize', action: 'miss', inputHash });
 
     setSummarizeLoading(true);
+    setSummarizeLoadingStartedAt(Date.now());
     setSummarizeError('');
     try {
       const res = await fetch('/api/summarize', {
@@ -447,6 +480,7 @@ export default function SelfAnalysisPage() {
       setSummarizeError('エラーが発生しました。しばらくしてから再試行してください。');
     } finally {
       setSummarizeLoading(false);
+      setSummarizeLoadingStartedAt(null);
     }
   }
 
@@ -555,11 +589,7 @@ export default function SelfAnalysisPage() {
                   disabled={loading}
                   className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold px-8 py-3 rounded-lg text-base transition-colors flex items-center gap-2"
                 >
-                  {loading ? (
-                    <AiInlineThinking>AIが分析中...（30秒ほどかかります）</AiInlineThinking>
-                  ) : (
-                    'AIに分析させる'
-                  )}
+                  {loading ? 'AIが分析中...' : 'AIに分析させる'}
                 </button>
                 {displayedQuestions.length > 0 && (
                   <button
@@ -572,6 +602,19 @@ export default function SelfAnalysisPage() {
                   </button>
                 )}
               </div>
+              {/* STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: AI 分析中の経過秒 + sub-message ループ。
+                  analysisLoading=true かつ startedAt がある間だけ表示。
+                  cache hit 経路では hook 内で setLoading(true) が立たないため出ない。 */}
+              {analysisLoading && analysisLoadingStartedAt !== null && (
+                <div className="mt-6">
+                  <LoadingProgress
+                    startedAt={analysisLoadingStartedAt}
+                    label="AIが分析しています"
+                    subMessages={ANALYSIS_SUB_MESSAGES}
+                    estimatedSeconds={30}
+                  />
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -626,6 +669,20 @@ export default function SelfAnalysisPage() {
                 {freeMemo.length} / {FREE_MEMO_MAX_CHARS}
               </p>
             </div>
+            {/* STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: 活動まとめ生成中の経過秒 + sub-message ループ。
+                summarizeLoading=true かつ startedAt がある間だけ表示。
+                cache hit 経路では setSummarizeLoading(true) が立たないため出ない。
+                addQuestionsLoading は対象外（追加質問の loading は短く、本 STEP の主要 flow には含めない）。 */}
+            {summarizeLoading && summarizeLoadingStartedAt !== null && (
+              <div className="mt-6">
+                <LoadingProgress
+                  startedAt={summarizeLoadingStartedAt}
+                  label="活動まとめを生成しています"
+                  subMessages={SUMMARIZE_SUB_MESSAGES}
+                  estimatedSeconds={20}
+                />
+              </div>
+            )}
             {summary && (
               <div className="mt-4">
                 <button
