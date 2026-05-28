@@ -26,7 +26,7 @@ import { deriveStudentAnalysis } from '@/lib/matching/deriveStudentAnalysis';
 import { buildUniversityContextsFromBasicInfo } from '@/lib/matching/buildUniversityContextsFromBasicInfo';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import type { MatchingInput } from '@/types/matchingInput';
-import { AiThinkingState } from '@/components/shared/result';
+import { LoadingProgress } from '@/components/ui/LoadingProgress';
 // STEP6.12: feature-local components は barrel export 経由でまとめて import。
 import { ConfirmView, ResultView } from './components';
 
@@ -40,6 +40,14 @@ import { ConfirmView, ResultView } from './components';
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
+
+// LoadingProgress に渡す sub-message。6 秒ごとに rotate される。
+// STEP-UX-FIX-06-LOADING-PROGRESS で導入。
+const MATCHING_SUB_MESSAGES: readonly string[] = [
+  'あなたの活動・自己分析を整理しています',
+  '志望校との一致度を計算しています',
+  '志望校別のアドバイスをまとめています',
+] as const;
 
 // ── ページ本体 ───────────────────────────────────────────────────
 
@@ -86,6 +94,9 @@ export default function AdmissionMatchingPage() {
   //   isMounted の否定で機能的に等価（SSR / hydration 直後は loading=true、mount 後は false）。
   const loading = !isMounted;
   const [aiLoading, setAiLoading] = useState(false);
+  // STEP-UX-FIX-06-LOADING-PROGRESS: aiLoading=true に切り替わる時に Date.now() を捕捉。
+  // finally で null に戻し、LoadingProgress unmount で setInterval を cleanup させる。
+  const [aiLoadingStartedAt, setAiLoadingStartedAt] = useState<number | null>(null);
   // STEP6.7: 旧 aiError state を削除。エラー UI は handleStartMatching の catch にある
   //   alert(...) を正式 UX として採用済み。inline banner は writer が存在せず dead branch
   //   だったため削除した（state / render / setter まとめて廃止）。
@@ -325,6 +336,7 @@ export default function AdmissionMatchingPage() {
     // STEP6.2/6.3: cached 表示中から「再診断する」で呼ばれた場合に live 表示へ切り替える。
     setCachedSnapshot(null);
     setAiLoading(true);
+    setAiLoadingStartedAt(Date.now());
 
     try {
       const advices = await handleAiEnhance();
@@ -341,6 +353,7 @@ export default function AdmissionMatchingPage() {
       alert('マッチングに失敗しました。もう一度お試しください。');
     } finally {
       setAiLoading(false);
+      setAiLoadingStartedAt(null);
     }
   };
 
@@ -421,12 +434,14 @@ export default function AdmissionMatchingPage() {
 
   // ── API診断中 ───────────────────────────────────────────────────
 
-  if (aiLoading) {
+  if (aiLoading && aiLoadingStartedAt !== null) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12">
         <h1 className="text-2xl font-bold text-gray-800 mb-8">AI志望校マッチング</h1>
-        <AiThinkingState
-          message="AIがあなたの活動・自己分析・志望校情報をもとに診断しています..."
+        <LoadingProgress
+          startedAt={aiLoadingStartedAt}
+          label="AIがあなたの活動・自己分析・志望校情報をもとに診断しています"
+          subMessages={MATCHING_SUB_MESSAGES}
           estimatedSeconds={30}
         />
       </div>

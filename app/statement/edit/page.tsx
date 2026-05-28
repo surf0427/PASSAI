@@ -52,6 +52,7 @@ import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { LoadingProgress } from '@/components/ui/LoadingProgress';
 // STEP8.5: edit feature 専用 view は app/statement/edit/components/ 配下へ physical split 済み。
 // STEP-DA-3: DetailAnalysisAccordionView は削除（詳細分析は /statement/analysis/[id] に集約）。
 import { InputFormView } from './components/InputFormView';
@@ -172,6 +173,14 @@ const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
+// LoadingProgress に渡す sub-message。6 秒ごとに rotate される。
+// 中身は ai prompt とは無関係（UI 上の「待ち時間中の雰囲気」のみ）。
+const STATEMENT_REVIEW_SUB_MESSAGES: readonly string[] = [
+  '本文の構成を確認しています',
+  '大学・学部の評価軸と照らし合わせています',
+  '改善ポイントを整理しています',
+] as const;
+
 // useSearchParams を本コンポーネントが使うため、default export 側で <Suspense> ラップする
 // （Next.js 16 の prerender bailout warning を抑える）。本体は実装は維持。
 function StatementPageInner() {
@@ -284,6 +293,11 @@ function StatementPageInner() {
   const [result, setResult] = useState<StatementResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // STEP-UX-FIX-06-LOADING-PROGRESS: 経過秒数表示の起点。loading=true のタイミングで
+  // Date.now() を捕捉、finally で null に戻す。loading と完全に同期するが、独立 state に
+  // することで「いつ開始したか」が render 中に一定の参照になり、setInterval が安定する。
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
 
   // 「下書きを保存」押下時の非 blocking フィードバック。/statement/prepare の
   // quoteToast と同形の self-contained toast（3 秒で自動消失、pointer-events-none）。
@@ -446,6 +460,7 @@ function StatementPageInner() {
 
     if (options.clearResultOnStart) setResult(null);
     setLoading(true);
+    setLoadingStartedAt(Date.now());
     setError('');
 
     try {
@@ -504,6 +519,7 @@ function StatementPageInner() {
       setError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {
       setLoading(false);
+      setLoadingStartedAt(null);
     }
   }
 
@@ -615,6 +631,20 @@ function StatementPageInner() {
 
       {error && (
         <p className="text-red-600 text-sm mb-6">{error}</p>
+      )}
+
+      {/* AI 実行中の経過秒 + sub-message ループ。STEP-UX-FIX-06-LOADING-PROGRESS。
+          loading=true かつ startedAt がある間だけ表示。loading false に戻ると unmount
+          されて setInterval も cleanup される。 */}
+      {loading && loadingStartedAt !== null && (
+        <div className="mb-6">
+          <LoadingProgress
+            startedAt={loadingStartedAt}
+            label="AIが添削しています"
+            subMessages={STATEMENT_REVIEW_SUB_MESSAGES}
+            estimatedSeconds={20}
+          />
+        </div>
       )}
 
       {/* STEP8.4: 添削結果エリア・次のステップ CTA は ReviewResultView へ logical split 済み。
