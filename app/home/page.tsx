@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
@@ -153,6 +153,12 @@ function getStatus(statuses: Record<string, ProgressStatus>, href: string): Prog
 
 // ── ページ本体 ───────────────────────────────────────────────────
 
+// SSR-stable mount flag（他ページと同形パターン）。
+// hydration 後に true に切り替わり、storage 読み出しを post-hydration に揃える。
+const subscribeMount = () => () => {};
+const getMountedSnapshot = () => true;
+const getMountedServerSnapshot = () => false;
+
 export default function HomePage() {
   const router = useRouter();
 
@@ -162,46 +168,44 @@ export default function HomePage() {
   // /home → /self-analysis は hub に着地するだけで、開始 / 再開の選択は
   // hub のカードで行う。
 
-  const [basicInfo, setBasicInfo] = useState<BasicInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [statuses, setStatuses] = useState<Record<string, ProgressStatus>>({});
+  const isMounted = useSyncExternalStore(
+    subscribeMount,
+    getMountedSnapshot,
+    getMountedServerSnapshot,
+  );
 
-  // この useEffect はマウント時に基本情報未入力なら /input/basic へ遷移させる
-  // genuine side-effect（router.replace）が主目的。setState 群は遷移しない側の
-  // 早期 return 後に走るミラーリングで、useSyncExternalStore + useMemo へは
-  // 置換できない（navigation 自体が外部副作用で、値の派生では表現できないため）。
-  // よって react-hooks/set-state-in-effect は意図的に block-disable する。
-  //
-  // PR10c (H2): dependency は **空配列** で mount 1 回限り。
-  //   旧 `[router]` 依存だと Next.js の useRouter 戻り値が render ごとに新オブジェクト
-  //   参照になる場合があり、effect が再実行 → router.replace 再呼び出しで redirect
-  //   replay / flicker のリスクがあった。router.replace と loadBasicInfo はどちらも
-  //   render-time に依存しない外部 API のため、closure で `router` を参照しつつ
-  //   依存配列を空にしても挙動は等価。react-hooks/exhaustive-deps は block-disable
-  //   済みのため lint エラーは出ない。
-  useEffect(() => {
-    const info = loadBasicInfo();
-    if (!info) {
-      router.replace('/input/basic');
-      return;
-    }
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setBasicInfo(info);
-    setStatuses({
+  // localStorage を source of truth として useMemo で派生する。
+  //   - SSR / 初回 client render は isMounted=false で null/空 を返し hydration セーフ
+  //   - mount 後は loadBasicInfo() / 6 status checker を直接読む
+  //   - Home 表示中の storage 変更は無く再評価不要のため version-counter 不要
+  const basicInfo = useMemo<BasicInfo | null>(
+    () => (isMounted ? loadBasicInfo() : null),
+    [isMounted],
+  );
+  const statuses = useMemo<Record<string, ProgressStatus>>(() => {
+    if (!isMounted) return {} as Record<string, ProgressStatus>;
+    return {
       '/input/activity':     checkActivityStatus(),
       '/self-analysis':      checkSelfAnalysisStatus(),
       '/admission-matching': checkMatchingStatus(),
       '/statement':          checkStatementStatus(),
       '/essay':              checkEssayStatus(),
       '/interview':          checkInterviewStatus(),
-    });
-    setIsLoading(false);
-    /* eslint-enable react-hooks/set-state-in-effect */
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    };
+  }, [isMounted]);
 
-  if (isLoading) return null;
-  if (!basicInfo) return null; // TypeScriptの型絞り込み用。実際にはisLoading後に必ず設定済み
+  // 基本情報未入力なら /input/basic へ遷移させる genuine side-effect。
+  // setState を含まないため react-hooks/set-state-in-effect は発火しない。
+  // isMounted=true で basicInfo=null のときだけ replace を発火し、replace 後は
+  // 本コンポーネントが unmount されるため effect 再実行による replay リスクはない。
+  useEffect(() => {
+    if (isMounted && !basicInfo) {
+      router.replace('/input/basic');
+    }
+  }, [isMounted, basicInfo, router]);
+
+  if (!isMounted) return null;
+  if (!basicInfo) return null; // mount 済 + 未入力。上記 effect で /input/basic へ replace 中
 
   const firstPreference = basicInfo.preferences[0];
   const nextFeature = getNextFeature(statuses);
