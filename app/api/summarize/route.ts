@@ -72,7 +72,13 @@ export async function POST(req: Request) {
       model: MODEL,
       max_tokens: 1500,
       temperature: 0.5,
-      system: getSummarizeSystemPrompt(mode),
+      system: [
+        {
+          type: 'text',
+          text: getSummarizeSystemPrompt(mode),
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',
