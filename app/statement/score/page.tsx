@@ -34,6 +34,7 @@ import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
 import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { TotalScoreCard } from '@/components/ScoreDashboard/TotalScoreCard';
 import { RankBadge } from '@/components/ScoreDashboard/RankBadge';
 import { DashboardSummary } from '@/components/ScoreDashboard/DashboardSummary';
@@ -90,17 +91,28 @@ export default function StatementScorePage() {
   const selected =
     selectedId === null ? null : history.find((h) => h.id === selectedId) ?? null;
 
+  // STEP-UX-FIX-04-CONFIRM-DIALOG: 旧 window.confirm を ConfirmDialog 化。
+  // 削除対象 id を state に保持して、確定 / 取消は dialog の onConfirm / onCancel から発火する。
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
   function handleDelete(id: string) {
-    const ok = window.confirm(
-      'この志望理由書の履歴を削除しますか？この操作は元に戻せません。',
-    );
-    if (!ok) return;
+    setPendingDeleteId(id);
+  }
+
+  function confirmDelete() {
+    if (pendingDeleteId === null) return;
+    const id = pendingDeleteId;
     deleteReviewHistoryItem(id);
     // STEP-PAGE-FIX-02-HISTORIES-SCORE: 旧 setHistory(loadReviewHistory()) を historyVersion bump で代替。
     // useMemo が次 render で再評価し、storage から削除後の最新値を返す。timing は旧 setState と同等。
     setHistoryVersion((v) => v + 1);
     // 表示中の詳細 entry を削除した場合は一覧表示に戻す（per spec）。
     if (selectedId === id) setSelectedId(null);
+    setPendingDeleteId(null);
+  }
+
+  function cancelDelete() {
+    setPendingDeleteId(null);
   }
 
   return (
@@ -137,6 +149,17 @@ export default function StatementScorePage() {
           onDelete={handleDelete}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={pendingDeleteId !== null}
+        title="この志望理由書の履歴を削除しますか？"
+        description="この操作は元に戻せません。"
+        confirmLabel="削除する"
+        cancelLabel="キャンセル"
+        variant="destructive"
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 }

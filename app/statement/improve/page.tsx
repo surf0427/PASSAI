@@ -39,6 +39,7 @@ import {
   deleteReviewHistoryItem,
   type ReviewHistoryItem,
 } from '@/lib/statement/review/statementStorage';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 // SSR-stable mount flag（他ページと同形パターン）。
 const subscribeMount = () => () => {};
@@ -63,13 +64,22 @@ export default function StatementImprovePage() {
     return isMounted ? loadReviewHistory() : [];
   }, [isMounted, historyVersion]);
 
+  // STEP-UX-FIX-04-CONFIRM-DIALOG: 旧 window.confirm を ConfirmDialog 化。
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
   function handleDelete(id: string) {
-    const ok = window.confirm(
-      'この志望理由書の履歴を削除しますか？この操作は元に戻せません。',
-    );
-    if (!ok) return;
-    deleteReviewHistoryItem(id);
+    setPendingDeleteId(id);
+  }
+
+  function confirmDelete() {
+    if (pendingDeleteId === null) return;
+    deleteReviewHistoryItem(pendingDeleteId);
     setHistoryVersion((v) => v + 1);
+    setPendingDeleteId(null);
+  }
+
+  function cancelDelete() {
+    setPendingDeleteId(null);
   }
 
   return (
@@ -92,6 +102,17 @@ export default function StatementImprovePage() {
       {isMounted && history.length > 0 && (
         <HistoryListView history={history} onDelete={handleDelete} />
       )}
+
+      <ConfirmDialog
+        isOpen={pendingDeleteId !== null}
+        title="この志望理由書の履歴を削除しますか？"
+        description="この操作は元に戻せません。"
+        confirmLabel="削除する"
+        cancelLabel="キャンセル"
+        variant="destructive"
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 }

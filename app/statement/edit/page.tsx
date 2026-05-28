@@ -51,6 +51,7 @@ import { parseStatementReviewError } from '@/lib/statement/review/parseStatement
 import { logAiCache } from '@/lib/aiCacheLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 // STEP8.5: edit feature 専用 view は app/statement/edit/components/ 配下へ physical split 済み。
 // STEP-DA-3: DetailAnalysisAccordionView は削除（詳細分析は /statement/analysis/[id] に集約）。
 import { InputFormView } from './components/InputFormView';
@@ -226,13 +227,23 @@ function StatementPageInner() {
     return isMounted ? loadUniversityPrepareHistory() : [];
   }, [isMounted, prepareHistoryVersion]);
 
+  // STEP-UX-FIX-04-CONFIRM-DIALOG: 旧 window.confirm を ConfirmDialog 化。
+  // 整理メモ削除 dialog 用 pending id (prepareHistory 専用、他の dialog state と独立)。
+  const [pendingDeletePrepareId, setPendingDeletePrepareId] = useState<string | null>(null);
+
   function handleDeletePrepareEntry(id: string) {
-    const ok = window.confirm(
-      'この整理メモを削除しますか？この操作は元に戻せません。',
-    );
-    if (!ok) return;
-    deleteUniversityPrepareEntry(id);
+    setPendingDeletePrepareId(id);
+  }
+
+  function confirmDeletePrepareEntry() {
+    if (pendingDeletePrepareId === null) return;
+    deleteUniversityPrepareEntry(pendingDeletePrepareId);
     setPrepareHistoryVersion((v) => v + 1);
+    setPendingDeletePrepareId(null);
+  }
+
+  function cancelDeletePrepareEntry() {
+    setPendingDeletePrepareId(null);
   }
 
   // C1 mitigation: StudentProfile を useMemo 化して submit ごとの再 derivation を停止する。
@@ -637,6 +648,18 @@ function StatementPageInner() {
           {saveToast}
         </div>
       )}
+
+      {/* 整理メモ削除確認 dialog。window.confirm 置換（STEP-UX-FIX-04-CONFIRM-DIALOG）。 */}
+      <ConfirmDialog
+        isOpen={pendingDeletePrepareId !== null}
+        title="この整理メモを削除しますか？"
+        description="この操作は元に戻せません。"
+        confirmLabel="削除する"
+        cancelLabel="キャンセル"
+        variant="destructive"
+        onConfirm={confirmDeletePrepareEntry}
+        onCancel={cancelDeletePrepareEntry}
+      />
     </div>
   );
 }

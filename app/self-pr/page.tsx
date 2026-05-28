@@ -16,6 +16,7 @@ import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { buildSelfPRDraftSeed } from '@/lib/buildSelfPRDraftSeed';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 // STEP-PAGE-05 / 05b で page.tsx の list view JSX block から切り出した pure props component。
 //   - EmptyState : selfPRs.length === 0 の case
 //   - PrListItem : selfPRs.map(...) 内側の 1 件分カード
@@ -422,13 +423,27 @@ function SelfPrPageInner() {
     router.push('/self-analysis/run');
   }
 
+  // STEP-UX-FIX-04-CONFIRM-DIALOG: 旧 window.confirm を ConfirmDialog 化。
+  // OK 時の selfPRs filter + saveSelfPRs は confirmDeletePR 内で同形に温存。
+  const [pendingDeletePRId, setPendingDeletePRId] = useState<string | null>(null);
+
   function deletePR(id: string) {
-    if (!window.confirm('この自己PR添削履歴を削除しますか？\nこの操作は元に戻せません。')) return;
+    setPendingDeletePRId(id);
+  }
+
+  function confirmDeletePR() {
+    if (pendingDeletePRId === null) return;
+    const id = pendingDeletePRId;
     setSelfPRs((prev) => {
       const updated = prev.filter((pr) => pr.id !== id);
       saveSelfPRs(updated);
       return updated;
     });
+    setPendingDeletePRId(null);
+  }
+
+  function cancelDeletePR() {
+    setPendingDeletePRId(null);
   }
 
 
@@ -749,6 +764,16 @@ function SelfPrPageInner() {
         </div>
       )}
 
+      <ConfirmDialog
+        isOpen={pendingDeletePRId !== null}
+        title="この自己PR添削履歴を削除しますか？"
+        description="この操作は元に戻せません。"
+        confirmLabel="削除する"
+        cancelLabel="キャンセル"
+        variant="destructive"
+        onConfirm={confirmDeletePR}
+        onCancel={cancelDeletePR}
+      />
     </div>
   );
 }
