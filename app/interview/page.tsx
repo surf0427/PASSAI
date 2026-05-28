@@ -7,7 +7,10 @@ import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { buildInterviewTalkingPoints } from '@/lib/buildInterviewTalkingPoints';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
+import { Card } from '@/components/ui/Card';
+import { LinkButton } from '@/components/ui/LinkButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { InterviewMenuCard } from './components/InterviewMenuCard';
 import { InterviewTalkingPointsCard } from './components/InterviewTalkingPointsCard';
@@ -72,6 +75,14 @@ export default function InterviewPage() {
     [studentProfile],
   );
 
+  // STEP-UX-FIX-05-HUB-SUGGEST: 練習記録の有無で「次におすすめ」を出し分ける。
+  // mount 前は null、mount 後に件数 (0 or N) を返す hydration セーフな derive。
+  const recordCount = useMemo<number | null>(
+    () => (isMounted ? getInterviewRecords().length : null),
+    [isMounted],
+  );
+  const suggestion = useMemo(() => pickInterviewSuggestion(recordCount), [recordCount]);
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
       <PageHeader
@@ -86,6 +97,8 @@ export default function InterviewPage() {
           一致するため hydration mismatch は起きない。 */}
       {isMounted && <InterviewTalkingPointsCard points={talkingPoints} />}
 
+      <SuggestionCard suggestion={suggestion} />
+
       <div className="grid gap-4">
         {MENU_ITEMS.map((item) => (
           <InterviewMenuCard
@@ -98,5 +111,56 @@ export default function InterviewPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+// ── 次におすすめ（STEP-UX-FIX-05-HUB-SUGGEST）─────────────────────
+// 記録の有無で 2 通り。null（mount 前）は first-time 用の fallback と等価。
+
+type Suggestion = {
+  title: string;
+  description: string;
+  href: string;
+  cta: string;
+};
+
+const INTERVIEW_SUGGESTION_QUESTIONS: Suggestion = {
+  title: 'まず予想質問を作る',
+  description: '志望校・活動内容から、面接で聞かれそうな質問を生成します。',
+  href: '/interview/questions',
+  cta: '予想質問を作る →',
+};
+
+const INTERVIEW_SUGGESTION_HISTORY: Suggestion = {
+  title: '過去の練習を振り返る',
+  description: 'これまでの記録から改善点を整理できます。',
+  href: '/interview/history',
+  cta: '記録を見る →',
+};
+
+function pickInterviewSuggestion(recordCount: number | null): Suggestion {
+  if (recordCount === null || recordCount === 0) return INTERVIEW_SUGGESTION_QUESTIONS;
+  return INTERVIEW_SUGGESTION_HISTORY;
+}
+
+function SuggestionCard({ suggestion }: { suggestion: Suggestion }) {
+  return (
+    <Card variant="soft" padding="md" className="mb-5 sm:mb-6">
+      <p className="text-[11px] font-bold text-blue-700 tracking-widest mb-2">
+        次におすすめ
+      </p>
+      <p className="text-sm font-bold text-slate-800 mb-1">{suggestion.title}</p>
+      <p className="text-xs text-slate-500 leading-relaxed mb-3">
+        {suggestion.description}
+      </p>
+      <LinkButton
+        href={suggestion.href}
+        variant="primary"
+        size="md"
+        className="w-full sm:w-auto"
+      >
+        {suggestion.cta}
+      </LinkButton>
+    </Card>
   );
 }

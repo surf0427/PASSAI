@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { LinkButton } from '@/components/ui/LinkButton';
+import { Button } from '@/components/ui/Button';
 import { loadAnalyzeState, saveAnalyzeState } from '@/lib/analyzeStorage';
 import { loadSelfPRs } from '@/lib/selfPRStorage';
 import { loadSelfAnalysisLogs } from '@/lib/selfAnalysisLogStorage';
@@ -73,6 +75,10 @@ export default function SelfAnalysisEntryPage() {
   // resume 中の working state の状態には依存しない。
   const canResume = status !== null && status.selfAnalysisLogCount > 0;
 
+  // STEP-UX-FIX-05-HUB-SUGGEST: 「次におすすめ」の派生。null 分岐は SSR / 初回
+  // client render と一致させる first-time 用 fallback。
+  const suggestion = useMemo(() => pickSelfAnalysisSuggestion(status), [status]);
+
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <PageHeader
@@ -91,6 +97,8 @@ export default function SelfAnalysisEntryPage() {
           <StatusItem label="結果ログ" value={displayResultLog(status)} />
         </div>
       </Card>
+
+      <SuggestionCard suggestion={suggestion} onStartFresh={startFresh} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
         <ModeCard
@@ -136,6 +144,97 @@ export default function SelfAnalysisEntryPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+// ── 次におすすめ（STEP-UX-FIX-05-HUB-SUGGEST）─────────────────────
+// status から「次にやること」を 1 つ選ぶ。null 分岐は first-time 用 fallback も兼ねる。
+// 「0 から自己PRを書く」は onClick 経路 (startFresh) のため、Suggestion は
+// kind: 'start' で表現し、SuggestionCard 側で Button を出し分ける。
+
+type Suggestion =
+  | {
+      kind: 'start';
+      title: string;
+      description: string;
+      cta: string;
+    }
+  | {
+      kind: 'link';
+      title: string;
+      description: string;
+      href: string;
+      cta: string;
+    };
+
+const SELF_ANALYSIS_SUGGESTION_START: Suggestion = {
+  kind: 'start',
+  title: 'まず自己分析を始める',
+  description: '活動整理から深掘り・まとめまで、一連の流れで進めます。',
+  cta: '自己分析を始める →',
+};
+
+const SELF_ANALYSIS_SUGGESTION_PR: Suggestion = {
+  kind: 'link',
+  title: '自己PRを書いてみる',
+  description: '自己分析の結果をもとに、自己PR本文を作って添削できます。',
+  href: '/self-pr',
+  cta: '自己PRに進む →',
+};
+
+const SELF_ANALYSIS_SUGGESTION_RESULT: Suggestion = {
+  kind: 'link',
+  title: '過去の結果を見直す',
+  description: 'まとめログと自己PR履歴をまとめて確認できます。',
+  href: '/self-analysis/result',
+  cta: '結果を見る →',
+};
+
+function pickSelfAnalysisSuggestion(status: Status | null): Suggestion {
+  if (status === null) return SELF_ANALYSIS_SUGGESTION_START;
+  if (status.prCount > 0) return SELF_ANALYSIS_SUGGESTION_RESULT;
+  if (status.summaryReady || status.selfAnalysisLogCount > 0) {
+    return SELF_ANALYSIS_SUGGESTION_PR;
+  }
+  return SELF_ANALYSIS_SUGGESTION_START;
+}
+
+function SuggestionCard({
+  suggestion,
+  onStartFresh,
+}: {
+  suggestion: Suggestion;
+  onStartFresh: () => void;
+}) {
+  return (
+    <Card variant="soft" padding="md" className="mb-5 sm:mb-6">
+      <p className="text-[11px] font-bold text-blue-700 tracking-widest mb-2">
+        次におすすめ
+      </p>
+      <p className="text-sm font-bold text-slate-800 mb-1">{suggestion.title}</p>
+      <p className="text-xs text-slate-500 leading-relaxed mb-3">
+        {suggestion.description}
+      </p>
+      {suggestion.kind === 'start' ? (
+        <Button
+          variant="primary"
+          size="md"
+          onClick={onStartFresh}
+          className="w-full sm:w-auto"
+        >
+          {suggestion.cta}
+        </Button>
+      ) : (
+        <LinkButton
+          href={suggestion.href}
+          variant="primary"
+          size="md"
+          className="w-full sm:w-auto"
+        >
+          {suggestion.cta}
+        </LinkButton>
+      )}
+    </Card>
   );
 }
 

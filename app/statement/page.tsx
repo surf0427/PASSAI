@@ -4,6 +4,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { LinkButton } from '@/components/ui/LinkButton';
 import { getStatementPrepareSummary } from '@/lib/statement/prepare/statementPrepareStorage';
 import { loadDraft } from '@/lib/statement/review/statementStorage';
 import {
@@ -87,6 +88,11 @@ export default function StatementEntryPage() {
     return { preparedReady, draftChars, latestScore, delta };
   }, [isMounted]);
 
+  // STEP-UX-FIX-05-HUB-SUGGEST: 「次におすすめ」の派生。status の null 分岐は
+  // SSR / 初回 client render と一致させて hydration セーフに保つ（初回は first-time 用の
+  // 案内、mount 後に条件分岐で更新）。
+  const suggestion = useMemo(() => pickStatementSuggestion(status), [status]);
+
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <PageHeader
@@ -110,6 +116,8 @@ export default function StatementEntryPage() {
         </div>
       </Card>
 
+      <SuggestionCard suggestion={suggestion} />
+
       <div className="grid grid-cols-2 gap-3 sm:gap-4">
         {MODES.map((m) => (
           <ModeCard
@@ -122,6 +130,67 @@ export default function StatementEntryPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+// ── 次におすすめ（STEP-UX-FIX-05-HUB-SUGGEST）─────────────────────
+// status から「次にやること」を 1 つ選ぶ。null 分岐は first-time 用に等価で、
+// hydration セーフに保つための SSR fallback も兼ねる。
+
+type Suggestion = {
+  title: string;
+  description: string;
+  href: string;
+  cta: string;
+};
+
+const STATEMENT_SUGGESTION_START: Suggestion = {
+  title: 'まず整理から始める',
+  description: '大学の評価軸に合わせて書く材料を整えましょう。',
+  href: '/statement/prepare/university',
+  cta: '整理を始める →',
+};
+
+const STATEMENT_SUGGESTION_EDIT: Suggestion = {
+  title: '下書きを添削に出す',
+  description: 'AI 添削で現在地を確認できます。',
+  href: '/statement/edit',
+  cta: '添削に進む →',
+};
+
+const STATEMENT_SUGGESTION_SCORE: Suggestion = {
+  title: '完成度スコアを見る',
+  description: '前回からの変化と、次に直すべき点を確認できます。',
+  href: '/statement/score',
+  cta: 'スコアを見る →',
+};
+
+function pickStatementSuggestion(status: Status | null): Suggestion {
+  if (status === null) return STATEMENT_SUGGESTION_START;
+  if (status.latestScore !== null) return STATEMENT_SUGGESTION_SCORE;
+  if (status.draftChars > 0 || status.preparedReady) return STATEMENT_SUGGESTION_EDIT;
+  return STATEMENT_SUGGESTION_START;
+}
+
+function SuggestionCard({ suggestion }: { suggestion: Suggestion }) {
+  return (
+    <Card variant="soft" padding="md" className="mb-5 sm:mb-6">
+      <p className="text-[11px] font-bold text-blue-700 tracking-widest mb-2">
+        次におすすめ
+      </p>
+      <p className="text-sm font-bold text-slate-800 mb-1">{suggestion.title}</p>
+      <p className="text-xs text-slate-500 leading-relaxed mb-3">
+        {suggestion.description}
+      </p>
+      <LinkButton
+        href={suggestion.href}
+        variant="primary"
+        size="md"
+        className="w-full sm:w-auto"
+      >
+        {suggestion.cta}
+      </LinkButton>
+    </Card>
   );
 }
 
