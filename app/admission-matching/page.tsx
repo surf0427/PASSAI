@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AiMatchAdvice, EligibilityResult } from '@/types/matching';
 import type { AdmissionMatchingInput } from '@/types/admissionMatchingInput';
 import { buildMatchingResults } from '@/lib/matching/suggestUniversities';
@@ -97,6 +97,13 @@ export default function AdmissionMatchingPage() {
   // STEP-UX-FIX-06-LOADING-PROGRESS: aiLoading=true に切り替わる時に Date.now() を捕捉。
   // finally で null に戻し、LoadingProgress unmount で setInterval を cleanup させる。
   const [aiLoadingStartedAt, setAiLoadingStartedAt] = useState<number | null>(null);
+  // STEP-UX-FIX-06c-CANCEL-WIRING: 進行中の /api/matching fetch を中断するための AbortController。
+  // - 値は handleStartMatching → handleAiEnhance の fetch 直前に new し、ref に保持
+  // - cancel button または unmount で .abort() を呼ぶ
+  // - handleAiEnhance には signal を引数で渡す（fetch options に注入）
+  // - finally で必ず null に戻し orphan controller を残さない
+  // - handleShowCached は fetch しないため controller を作らない（cache hit 不変）
+  const abortControllerRef = useRef<AbortController | null>(null);
   // STEP6.7: 旧 aiError state を削除。エラー UI は handleStartMatching の catch にある
   //   alert(...) を正式 UX として採用済み。inline banner は writer が存在せず dead branch
   //   だったため削除した（state / render / setter まとめて廃止）。
@@ -248,7 +255,7 @@ export default function AdmissionMatchingPage() {
   //   - 成功時: advices を liveAiAdvices state へ格納し戻り値として返す
   //   - 失敗時: throw（cache 保存 / loading toggle / alert は呼び出し元 handleStartMatching の責務）
   // STEP6.2: 送信対象は live derive の liveResults。cached snapshot を再送しないようにした。
-  async function handleAiEnhance(): Promise<AiMatchAdvice[]> {
+  async function handleAiEnhance(signal?: AbortSignal): Promise<AiMatchAdvice[]> {
     if (!wallHitting || liveResults.length === 0) return [];
 
     // ── MatchingInput を組み立てる ───────────────────────────────
@@ -287,6 +294,10 @@ export default function AdmissionMatchingPage() {
     const res = await fetch('/api/matching', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // STEP-UX-FIX-06c-CANCEL-WIRING: caller (handleStartMatching) から signal を受けとり
+      // LoadingProgress の cancel button / unmount で中断できるようにする。signal が
+      // undefined のときは AbortController を通さない fetch と等価。
+      signal,
       // results はスコアリング層 (lib/matching/*) からの deterministic な出力。
       // studentProfile が canonical。selfAnalysis / wallHitting は LEGACY fallback として併送する。
       body: JSON.stringify({
@@ -338,8 +349,15 @@ export default function AdmissionMatchingPage() {
     setAiLoading(true);
     setAiLoadingStartedAt(Date.now());
 
+    // STEP-UX-FIX-06c-CANCEL-WIRING: 既存 ref に残っていれば（前回 fetch が finally 経由
+    // しなかった保険として）abort して上書き。新 controller を ref に保持し signal を
+    // handleAiEnhance に渡す。
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      const advices = await handleAiEnhance();
+      const advices = await handleAiEnhance(controller.signal);
       // キャッシュ保存（API成功時のみ）。live derive を canonical として保存する。
       // 保存形式（AiMatchAdviceCache）は STEP6.2 以前と同一。
       const cache: AiMatchAdviceCache = { results: liveResults, aiAdvices: advices, matchingLevel: level };
@@ -349,13 +367,43 @@ export default function AdmissionMatchingPage() {
       markMatchingCompleted();
       setHasRunMatching(true);
     } catch (error) {
+      // STEP-UX-FIX-06c-CANCEL-WIRING: user cancel は通常エラーと分離。alert を出さず、
+      // cache 保存 / markMatchingCompleted / hasRunMatching toggle にも到達していない
+      // （fetch が throw した時点で後続の save* / setHasRunMatching を skip 済み）。
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       console.error(error);
       alert('マッチングに失敗しました。もう一度お試しください。');
     } finally {
       setAiLoading(false);
       setAiLoadingStartedAt(null);
+      // 終了経路（成功 / abort / network error）共通の cleanup。
+      // 別 submit が立ち上がる前に必ず ref を空にして orphan controller を残さない。
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
+
+  // ── handleCancelMatching() ────────────────────────────────────────
+  // STEP-UX-FIX-06c-CANCEL-WIRING: LoadingProgress の cancel button から呼ばれる。
+  // 進行中の /api/matching fetch を AbortController.abort() で中断する。state は
+  // handleStartMatching の finally で揃って null に戻るため、ここで setAiLoading 等
+  // は触らない（一元管理）。cache hit 経路（handleShowCached）は別 handler なので影響なし。
+  function handleCancelMatching() {
+    abortControllerRef.current?.abort();
+  }
+
+  // STEP-UX-FIX-06c-CANCEL-WIRING: page unmount 時に in-flight fetch を中断する。
+  // ユーザーが結果を待たずに別ページへ遷移したケースでも、AI route 側 timeout を待たずに
+  // client 側で接続を閉じる。unmount 後の setState は React 18 では no-op で安全。
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, []);
 
   // ── handleShowCached() ────────────────────────────────────────────
   //   Responsibility: 「以前の診断結果を見る」CTA のハンドラ。
@@ -443,6 +491,7 @@ export default function AdmissionMatchingPage() {
           label="AIがあなたの活動・自己分析・志望校情報をもとに診断しています"
           subMessages={MATCHING_SUB_MESSAGES}
           estimatedSeconds={30}
+          onCancel={handleCancelMatching}
         />
       </div>
     );

@@ -299,6 +299,13 @@ function StatementPageInner() {
   // することで「いつ開始したか」が render 中に一定の参照になり、setInterval が安定する。
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
 
+  // STEP-UX-FIX-06c-CANCEL-WIRING: 進行中の AI fetch を中断するための AbortController。
+  // - 値は handleSubmit → submitReview の fetch 直前に new し、ref に保持
+  // - cancel button または unmount で .abort() を呼ぶ
+  // - finally で必ず null に戻す（成功 / abort / network error の全経路）
+  // - cache hit 経路では作らない（早期 return のため）
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   // 「下書きを保存」押下時の非 blocking フィードバック。/statement/prepare の
   // quoteToast と同形の self-contained toast（3 秒で自動消失、pointer-events-none）。
   // STEP-UX-FIX-01-ALERT: 旧 `alert('保存しました')` を置換し、mobile / autosave の
@@ -463,10 +470,19 @@ function StatementPageInner() {
     setLoadingStartedAt(Date.now());
     setError('');
 
+    // STEP-UX-FIX-06c-CANCEL-WIRING: AbortController を fetch 直前に new し、ref に保持。
+    // 既存 ref が残っていればここで abort して上書きする（前回 fetch が finally まで
+    // 到達せず ref が残るケースの保険）。signal を fetch に渡して cancel button から
+    // 中断できるようにする。
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch('/api/statement-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           university,
           faculty,
@@ -515,13 +531,41 @@ function StatementPageInner() {
       });
 
       options.afterSuccess?.();
-    } catch {
+    } catch (e) {
+      // STEP-UX-FIX-06c-CANCEL-WIRING: user cancel (AbortController.abort()) は通常
+      // 通信エラーと UI 上分離する。error toast を出さず、cache / history / result の
+      // 上書きもしない（fetch が throw した時点で後続の save* に到達していない）。
+      if (e instanceof Error && e.name === 'AbortError') {
+        return;
+      }
       setError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {
       setLoading(false);
       setLoadingStartedAt(null);
+      // 終了経路（成功 / abort / network error / 構造化エラー）共通の cleanup。
+      // 別 submit が立ち上がる前に必ず ref を空にして orphan controller を残さない。
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   }
+
+  // STEP-UX-FIX-06c-CANCEL-WIRING: LoadingProgress の cancel button から呼ばれる。
+  // 進行中の fetch を AbortController.abort() で中断する。state は submitReview の
+  // finally で揃って null に戻るため、ここで setLoading 等は触らない（一元管理）。
+  function handleCancelReview() {
+    abortControllerRef.current?.abort();
+  }
+
+  // STEP-UX-FIX-06c-CANCEL-WIRING: page unmount 時に in-flight fetch を中断する。
+  // ユーザーが結果を待たずに別ページへ遷移したケースでも、AI route 側 timeout を待たずに
+  // client 側で接続を閉じる。unmount 後の setState は React 18 では no-op で安全。
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, []);
 
   async function handleSubmit() {
     if (loading) return;
@@ -643,6 +687,7 @@ function StatementPageInner() {
             label="AIが添削しています"
             subMessages={STATEMENT_REVIEW_SUB_MESSAGES}
             estimatedSeconds={20}
+            onCancel={handleCancelReview}
           />
         </div>
       )}
