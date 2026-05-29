@@ -25,3 +25,26 @@
 
 - score・添削・深掘り質問・整理メモ生成 → OK
 - 本文ドラフト生成 → NG
+
+## Mode 別役割拡張 (tutor route のみ、暫定)
+
+tutor route の intent=advice 時に以下を追加で許可する。
+
+### 追加許可される役割
+- 整理が成立した後の具体アクション提示
+- 優先順位提示
+- AI の踏み込み意見（「私なら〜」、1 reply 1 回）
+- 比較判断（「A より B の方が今は効きそう」）
+
+### tutor でも絶対に禁止 (上位ルール継承)
+- 本文ドラフト全文生成（上位 ai_policy 維持）
+- 合否確定予測 / 進学先価値判断
+- 数値スコア絶対値出力
+- [G][F][Q] 発動 turn では追加役割を全て抑止
+
+### How to apply (tutor 拡張)
+- intent=advice 時のみ発動
+- 他 intent / 他 route には適用なし
+- 詳細仕様は tutor route の SYSTEM PROMPT [V] block 参照
+
+（decision intent / 参考表現 / subjectGrades 解禁等は将来 STEP で別途検討）

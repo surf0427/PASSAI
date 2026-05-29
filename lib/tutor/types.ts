@@ -22,13 +22,15 @@
 // 受験生の相談カテゴリ。client (chip 選択 + keyword 検出) で判定し、
 // route 経由で context builder に渡される。
 // 'stabilize' はメルトダウン signal 検出時の特例 mode（安定化モード）。
+// 'advice' は具体アドバイス用の内部 intent（STEP-MVP で追加。decision は将来 STEP）。
 export type TutorIntent =
   | 'general'
   | 'statement'
   | 'interview'
   | 'self_analysis'
   | 'selfpr'
-  | 'stabilize';
+  | 'stabilize'
+  | 'advice';
 
 // AI 応答末尾の「→ 〜してみるのもアリです」で接続する PASSAI 内機能。
 // 4 機能に固定（hallucination 防止）。matching / 小論文 は意図的に含めない:

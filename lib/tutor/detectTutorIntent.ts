@@ -12,12 +12,21 @@
 //
 // 判定優先順位（高い順）:
 //   1. stabilize  — 強い不安 / 自己否定 / メルトダウン系
-//   2. statement  — 志望理由書系
-//   3. interview  — 面接系
-//   4. self_analysis — 自己分析・強み弱み系
-//   5. selfpr     — 自己PR系
-//   6. currentFeature fallback（指定があれば対応する intent）
-//   7. general    — 最終 fallback
+//   2. advice     — 具体アドバイス要求系（STEP-MVP で追加）
+//   3. statement  — 志望理由書系
+//   4. interview  — 面接系
+//   5. self_analysis — 自己分析・強み弱み系
+//   6. selfpr     — 自己PR系
+//   7. currentFeature fallback（指定があれば対応する intent）
+//   8. general    — 最終 fallback
+//
+// advice の位置:
+//   stabilize の次・既存 topic intent の前。理由:
+//     - 「もう無理、どうすればいい」型では stabilize を優先したい（重相談優先）
+//     - 「志望理由書を具体的にどう書けばいい」型では advice の踏み込み助言を優先したい
+//       （単なる topic 分類より「答えを欲してる」シグナルが強い）
+//   decision intent は将来 STEP（advice 検出に含まれる「どっち」「すべき」系はまず
+//   advice として処理し、後続 STEP で必要なら独立化する）。
 //
 // 純粋関数: fetch / localStorage / Supabase / Date / Math.random / console 一切なし。
 //
@@ -43,6 +52,33 @@ const STABILIZE_KEYWORDS: readonly string[] = [
   'メンタル',
   'しんどい',
   'きつい',
+  // STEP-MVP-G 追加: SYSTEM PROMPT [V-8] 重相談シグナルと runtime 検出の整合性確保。
+  // STEP-MVP-F で「しんどすぎる、何から始めればいい」が advice 誤発動した
+  // defense-in-depth gap を閉塞する。
+  'しんどすぎる',
+  '限界',
+  // 「不合格」単体ではなく「不合格で」phrase 化。理由:
+  //   bare の「不合格」は「不合格体験記を読みたい」等の中立文脈を substring で誤検出する。
+  //   「不合格で」(例: 不合格で病みそう / 不合格でショック) は distress 文脈を限定捕捉する。
+  '不合格で',
+  '泣きそう',
+  '泣く',
+];
+
+// advice: 具体アドバイス要求のシグナル。
+// 重相談ではなく「答えを欲してる」明示要求 turn を捕捉する。
+// stabilize より下、既存 topic 系より上で判定（STEP-MVP-C 追加）。
+const ADVICE_KEYWORDS: readonly string[] = [
+  'どうすれば',
+  'どうしたら',
+  '何から',
+  '何をすれば',
+  '具体的に',
+  '踏み込んで',
+  'で、結局',
+  '結局どう',
+  '私のケース',
+  '自分の場合',
 ];
 
 const STATEMENT_KEYWORDS: readonly string[] = [
@@ -108,6 +144,9 @@ export function detectTutorIntent(input: {
 
   // stabilize が最優先（メルトダウン signal は currentFeature を上書きする）
   if (matchesAny(message, STABILIZE_KEYWORDS)) return 'stabilize';
+
+  // advice（具体アドバイス要求）— 既存 topic intent より優先（STEP-MVP-C 追加）
+  if (matchesAny(message, ADVICE_KEYWORDS)) return 'advice';
 
   // 機能 keyword（user 指定の優先順位通り）
   if (matchesAny(message, STATEMENT_KEYWORDS)) return 'statement';

@@ -77,5 +77,12 @@
 //             引き続き適用。[N][P][S] 雑味・normalize 上限は first turn でも適用。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             規律として bump 履歴を残す。
-export const TUTOR_PROMPT_VERSION = 5;
+//   v5 → v6 : STEP-MVP-B intent enum 拡張 — TutorIntent に 'advice' 追加
+//             (decision は将来 STEP)。本 STEP では intent 拡張のみで SYSTEM PROMPT は
+//             未変更。SYSTEM PROMPT への [V] Advice block 追加は STEP-MVP-D で実施予定。
+//             intent enum 拡張のみでも context builder / route の挙動分岐が将来発生する
+//             ため、入力素材の意味的バージョンとして先行 bump する。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             規律として bump 履歴を残す。
+export const TUTOR_PROMPT_VERSION = 6;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';

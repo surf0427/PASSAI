@@ -43,8 +43,8 @@ import type { TutorIntent, PreferredProfileField } from '@/lib/tutor/types';
 
 const ROUTE = 'api/tutor';
 const MAX_MESSAGE_LENGTH = 500;
-const MAX_TOKENS = 500;
 const TEMPERATURE = 0.4;
+// max_tokens は intent 別に動的化（STEP-MVP-E）。getMaxTokensForIntent を参照。
 
 // rate limit 設定。tutor は会話的で短いターンを連続しがちなため
 // 1 分 10 回まで許容する（会話 3 ターン × ~3 回程度のリトライ余裕）。
@@ -72,6 +72,7 @@ const TUTOR_INTENT_VALUES = [
   'self_analysis',
   'selfpr',
   'stabilize',
+  'advice',
 ] as const;
 
 function isTutorIntent(value: unknown): value is TutorIntent {
@@ -83,6 +84,15 @@ function isTutorIntent(value: unknown): value is TutorIntent {
 
 function isPreferredProfileField(value: unknown): value is PreferredProfileField {
   return value === 'strengths' || value === 'weaknesses';
+}
+
+// intent 別 max_tokens 上限（STEP-MVP-E 追加）。
+// advice は [V] block の 4〜6 文・300〜500 字構造を物理的に保証するため 800 を上限とする。
+// それ以外（general / statement / interview / self_analysis / selfpr / stabilize）は
+// 従来通り 500 上限を継承。
+function getMaxTokensForIntent(intent: TutorIntent): number {
+  if (intent === 'advice') return 800;
+  return 500;
 }
 
 // ── route handler ────────────────────────────────────────────────
@@ -198,7 +208,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     response = await anthropic.messages.create({
       model: TUTOR_MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: getMaxTokensForIntent(intent),
       temperature: TEMPERATURE,
       system: [
         {
