@@ -10,6 +10,10 @@ import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest
 // buildStatementReviewPrompt の admissionFocusContext は optional のため、
 // 渡さなければ prompt 側で section が出ない（旧 v2 と意味等価）。
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
+import { validateStatementReviewInput } from '@/lib/validation/validateStatementReviewInput';
+import { detectNgWords } from '@/lib/detectNgWords';
+import { analyzeStructure } from '@/lib/structureAnalysis';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
@@ -34,11 +38,17 @@ export async function POST(req: Request) {
   // 形が壊れていれば null として扱い、wallHittingResult 側 fallback に任せる。
   const studentProfile: StudentProfile | null = getStudentProfileFromRequest({ body });
 
-  if (!essay.trim()) {
-    return Response.json({ error: '志望理由書本文を入力してください' }, { status: 400 });
-  }
-  if (essay.trim().length < 100) {
-    return Response.json({ error: '志望理由書本文を100文字以上入力してください' }, { status: 400 });
+  // V-6: client validator の最終防衛線。同じ deterministic rule を server でも適用する。
+  // direct API call / stale client / bypassed JS で invalid 入力が到達した場合に AI call /
+  // prompt build / aiUsageLog すべて未到達のまま 400 で返す。response shape は不変。
+  const validation = validateStatementReviewInput(essay);
+  if (!validation.ok) {
+    logAiValidation({
+      type: 'validation_reject',
+      route: 'statement-review',
+      code: validation.code,
+    });
+    return Response.json({ error: validation.message }, { status: 400 });
   }
 
   try {
@@ -79,6 +89,18 @@ export async function POST(req: Request) {
             studentProfile,
             wallHittingResult,
             // admissionFocusContext は PR9 で再導入。現状は省略で optional skip。
+            // DET-2: NG 指摘を deterministic に事前検出し prompt に「既知」として渡す。
+            // essay / activityData / university / faculty から純関数で派生するため、
+            // hash 入力に追加せずとも同入力 → 同 NG → 同 prompt body が成立し
+            // cache identity に drift をもたらさない。同 phrase を AI が再 discovery する
+            // 往復コストを削減し、改善提案 / 構造分析に token を割けるようにする。
+            ngIssues: detectNgWords(essay, activityData, university, faculty),
+            // DET-4: 構造 6 要素を deterministic に事前検出し prompt に「既知」として渡す。
+            // essay のみから純関数（lib/structureAnalysis.ts）で派生するため hash 入力には
+            // 追加不要。同 essay → 同 structure → 同 prompt body の関係で cache identity に
+            // drift をもたらさない。DET-2 の NG section と独立 / 共存させ、AI が両者を踏まえた
+            // 重複しない指摘 / 具体例 / 行動レベル actions に token を割けるようにする。
+            structureAnalysis: analyzeStructure(essay),
           }),
         },
       ],

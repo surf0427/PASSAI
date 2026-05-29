@@ -61,6 +61,24 @@ const INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER = `【interview-feedback route
 
 ・subjectGrades 未入力時は、評定や欠席に関する改善提案を作らない。`;
 
+// DET-7: user prompt に【既知の levelEvaluation 候補】section が来た時の解釈ルール。
+// AI が同じ 5 軸（logical / concrete / consistency / originality / interviewReadiness）の
+// 検出を 0 ベースで再 discovery することを避け、改善提案 / betterAnswer / followUps の質に
+// token を割かせる。ただし候補は補助情報であり、AI の最終判断を絶対的に拘束しない（候補を
+// 上書きする judgement は許容する）。section が未提示のときは本 qualifier を適用しない（後方互換）。
+const LEVEL_EVALUATION_HEURISTIC_QUALIFIER = `【既知の levelEvaluation 候補について】
+・user prompt に【既知の levelEvaluation 候補】section が含まれている場合、それは deterministic ルールベース検出器（文字数 / 因果接続詞 / 具体性キーワード / 大学名メンション / 抽象表現多用 から派生）が出した tentative な評価候補です。
+
+・AI は最終判断を維持してください。候補と異なる judgement を返すことは許容されます（候補は絶対的な拘束ではない）。特に originality は heuristic では精度が低いため、AI judgement を優先してよい。
+
+・候補の strong を AI が weak に倒す場合、または候補の weak を AI が strong に倒す場合 → 該当質問の evaluation / improvement にその根拠を端的に添えるのが望ましい。
+
+・候補と AI judgement が一致する場合は、再判定の過程を冗長に書かず、改善提案 / betterAnswer / followUps の質を上げることに集中してください。
+
+・採点軸の文言（logical / concrete / consistency / originality / interviewReadiness）や 3 値（weak / normal / strong）の集合は変更しないでください。AI 出力の JSON schema も変更しないでください。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
 // 本 const は scripts/step15-qa.ts から再利用するため export する。
 // 非 export だとテストハーネスから本番経路を完全再現できず QA 価値が落ちる。
 export const INTERVIEW_FEEDBACK_SYSTEM_PROMPT = `あなたは大学の総合型選抜・学校推薦型選抜に詳しい面接指導者です。
@@ -71,6 +89,8 @@ ${SUBJECT_GRADES_SHARED_INSTRUCTION}
 ${SUBJECT_GRADES_ASYMMETRY_RULE}
 
 ${INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER}
+
+${LEVEL_EVALUATION_HEURISTIC_QUALIFIER}
 
 {
   "overallEvaluation": "面接全体の評価（2〜3文）",

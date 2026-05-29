@@ -27,6 +27,8 @@ import { anthropic, extractJson } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
+import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 側と同じパターン。model を切り替えるときはここを変えれば log も追従する。
@@ -44,6 +46,18 @@ export async function POST(req: Request) {
 
   if (!activityData) {
     return Response.json({ error: 'activityData is required' }, { status: 400 });
+  }
+
+  // V-6: client validator の最終防衛線。conversational UX 維持で EMPTY のみ。
+  // 深掘り段階は短文入力が正常のため TOO_SHORT / REPEATED_CHAR / PLACEHOLDER は適用しない。
+  const validation = validateAdditionalQuestionInput(activityData);
+  if (!validation.ok) {
+    logAiValidation({
+      type: 'validation_reject',
+      route: 'additional-questions',
+      code: validation.code,
+    });
+    return Response.json({ error: validation.message }, { status: 400 });
   }
 
   const activityText = formatActivityData(activityData);

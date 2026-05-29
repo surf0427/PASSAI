@@ -59,6 +59,21 @@ const ESSAY_REVIEW_SUBJECT_GRADES_QUALIFIER = `【essay-review route での subj
 //   - 既存の採点軸・スコアルール・出力 schema・トーン規律は文言を変えない
 //   - scripts/step15-qa.ts から本番経路を完全再現するため export する
 //   - PROMPT_VERSION bump: ESSAY_REVIEW_PROMPT_VERSION 1→2（lib/aiInputHash.ts）
+// DET-3: user prompt に【既存構造分析】section が来た時の解釈ルール。
+// AI が同じ 6 要素（trigger / problem / action / learning / future / universityConnection）の
+// 検出を再 discovery することを避け、改善提案 / 具体例 / improvement / weakPoints の
+// 質を上げる方向に token を割かせる。section が未提示のときは本 qualifier を適用しない（後方互換）。
+const ESSAY_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER = `【既存構造分析について】
+・user prompt に【既存構造分析】section が含まれている場合、それは deterministic ルールベース検出器が既に判定済みの 6 要素（trigger / problem / action / learning / future / universityConnection）の評価結果です。各要素 0〜2 の整数で、2=明確に含まれる / 1=部分的 / 0=本文から読み取れない。
+
+・同じ 6 要素を再判定したり、同じ趣旨の weakPoints を機械的に並べたりしないでください。
+
+・検出済みのスコアを踏まえた改善提案 / 具体例 / improvement の質を上げることに token を割いてください。特に score=0 の要素は本文に欠落している前提で、「何を 1 文追加すれば補えるか」を行動レベルで示してください。
+
+・採点（totalScore / breakdown の 5 軸: 論理構造 / 具体性 / 説得力 / テーマ理解 / 独自性）には deterministic 構造分析結果を直接反映しないでください。breakdown ラベルは固定（採点は本文の質のみで行う、構造分析の合計を score に変換しない）。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
 export const ESSAY_REVIEW_SYSTEM_PROMPT = `あなたは高校生・大学受験生向けの小論文添削者です。
 生徒の小論文を採点・添削し、自分で改善できるよう具体的なフィードバックを返します。
 
@@ -67,6 +82,8 @@ ${SUBJECT_GRADES_SHARED_INSTRUCTION}
 ${SUBJECT_GRADES_ASYMMETRY_RULE}
 
 ${ESSAY_REVIEW_SUBJECT_GRADES_QUALIFIER}
+
+${ESSAY_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER}
 
 【絶対にやってはいけないこと】
 - 小論文の本文・完成文・模範解答を書くこと

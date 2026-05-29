@@ -16,6 +16,8 @@ import {
   saveWallHittingInputHash,
 } from '@/lib/wallHittingInputHashStorage';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
+import { logAiValidation } from '@/lib/aiValidationLog';
 
 // STEP5.2: input hash cache の対象 route。logAiCache の `route` field とも一致。
 // server route.ts の ROUTE 定数と揃えてある（server は変更しないため別箇所で定義）。
@@ -31,6 +33,20 @@ export function useWallHitting(
 
   async function run() {
     if (!activityData) return;
+
+    // deterministic validation: 低品質入力を hash / cache / fetch 到達前に弾く。
+    // fail 時は setError + return のみ。daily limit / ai usage / ai cache いずれも未消費。
+    const validation = validateAnalysisInput(activityData);
+    if (!validation.ok) {
+      logAiValidation({
+        type: 'validation_reject',
+        route: 'analysis',
+        code: validation.code,
+      });
+      setError(validation.message);
+      return;
+    }
+    logAiValidation({ type: 'validation_pass', route: 'analysis' });
 
     // STEP5.2: 同一入力なら AI を呼ばずに保存済み結果を復元する。
     // universityContext は server route.ts と同じ buildUniversityContextFromBasicInfo()

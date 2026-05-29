@@ -22,6 +22,12 @@ import {
   saveEssayReviewCache,
 } from '@/lib/essayReviewCache';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { validateEssayReviewInput } from '@/lib/validation/validateEssayReviewInput';
+import {
+  detectStructureWarnings,
+  type StructureWarning,
+} from '@/lib/validation/structureWarnings';
+import { logAiValidation } from '@/lib/aiValidationLog';
 import {
   loadEssayWorkspace,
   loadEssayWorkspaces,
@@ -140,6 +146,8 @@ export default function EssayPracticePage() {
   // で loadingStartedAt が null なら LoadingProgress は出ない）。
   const [reviewLoadingStartedAt, setReviewLoadingStartedAt] = useState<number | null>(null);
   const [reviewError, setReviewError] = useState('');
+  // V-4: deterministic structure warnings（non-blocking hint）。submit 時に再計算して上書き。
+  const [reviewStructureWarnings, setReviewStructureWarnings] = useState<StructureWarning[]>([]);
   // essay STEP B: 現セッションに対応する EssayWorkspace の id。
   // - null = まだ workspace 未作成（初回 review 時に新規作成）
   // - 値あり = 既存 workspace に再添削の review を append
@@ -344,6 +352,32 @@ export default function EssayPracticePage() {
   }
 
   async function handleReviewEssay() {
+    // deterministic validation: AI 不要な低品質入力を hash / cache / fetch 到達前に弾く。
+    // fail 時は setReviewError + return のみ。daily limit / ai usage / ai cache いずれも未消費。
+    setReviewStructureWarnings([]);
+    const validation = validateEssayReviewInput(essayBody);
+    if (!validation.ok) {
+      logAiValidation({
+        type: 'validation_reject',
+        route: 'essay-review',
+        code: validation.code,
+      });
+      setReviewError(validation.message);
+      return;
+    }
+    logAiValidation({ type: 'validation_pass', route: 'essay-review' });
+
+    // V-4: structure warnings は validator 通過後に上書き。non-blocking（AI flow に介入しない）。
+    const warnings = detectStructureWarnings(essayBody);
+    setReviewStructureWarnings(warnings);
+    if (warnings.length > 0) {
+      logAiValidation({
+        type: 'structure_warning',
+        route: 'essay-review',
+        codes: warnings.map((w) => w.code),
+      });
+    }
+
     // STEP5.11: input hash cache を先に判定する。
     // 同入力なら AI を呼ばずに保存済み review を復元する。
     // savedReview / reviewHistory / 出力 score / loading / error は AI 入力ではないので hash に含めない。
@@ -470,6 +504,7 @@ export default function EssayPracticePage() {
     // ここでも明示的に null へ戻す。
     setReviewLoadingStartedAt(null);
     setReviewError('');
+    setReviewStructureWarnings([]);
     setConclusion('');
     setReasonOne('');
     setReasonTwo('');
@@ -839,6 +874,18 @@ export default function EssayPracticePage() {
 
           {reviewError && (
             <p className="text-sm text-red-500 mb-4">{reviewError}</p>
+          )}
+          {reviewStructureWarnings.length > 0 && (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+              <p className="text-xs font-semibold text-amber-800 mb-1">
+                構造のチェック（参考・AI添削は通常通り進みます）
+              </p>
+              <ul className="text-sm text-amber-900 leading-relaxed space-y-1">
+                {reviewStructureWarnings.map((w) => (
+                  <li key={w.code}>・{w.message}</li>
+                ))}
+              </ul>
+            </div>
           )}
           {/* STEP-UX-FIX-06b-LOADING-PROGRESS-EXTEND: AI 添削中の経過秒 + sub-message ループ。
               reviewLoading=true かつ startedAt がある間だけ表示。reviewLoading false に戻る

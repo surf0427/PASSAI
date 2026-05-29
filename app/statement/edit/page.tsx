@@ -48,7 +48,13 @@ import {
   saveStatementReviewCache,
 } from '@/lib/statement/review/statementReviewCache';
 import { parseStatementReviewError } from '@/lib/statement/review/parseStatementReviewError';
+import { validateStatementReviewInput } from '@/lib/validation/validateStatementReviewInput';
+import {
+  detectStructureWarnings,
+  type StructureWarning,
+} from '@/lib/validation/structureWarnings';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { StepHeader } from '@/components/StatementFlow/StepHeader';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -275,6 +281,8 @@ function StatementPageInner() {
   const [prepareFollowUps, setPrepareFollowUps] = useState<StatementPrepareFollowUpAnswers>({});
   // STEP 22: 参考メモ（左カラム）の表示/非表示。session 中のみ、localStorage 保存しない。
   const [showReferenceNotes, setShowReferenceNotes] = useState(true);
+  // V-4: deterministic structure warnings（non-blocking hint）。submit 時に再計算して上書き。
+  const [structureWarnings, setStructureWarnings] = useState<StructureWarning[]>([]);
   // 後方互換: 既存 JSX は `mounted &&` でデータ依存表示をガードしているのでエイリアスとして残す。
   const mounted = isMounted;
 
@@ -392,10 +400,22 @@ function StatementPageInner() {
   ) {
     // 入力 validation は cache 判定より前。fetch するかどうか以前に「入力がそもそも妥当か」
     // を確かめる責務で、cache hit でも結果は同じ（invalid 入力で hit させない）。
+    setStructureWarnings([]);
     const validationError = options.validate?.();
     if (validationError) {
       setError(validationError);
       return;
+    }
+
+    // V-4: structure warnings は validator 通過後に上書き。non-blocking（AI flow に介入しない）。
+    const warnings = detectStructureWarnings(essay);
+    setStructureWarnings(warnings);
+    if (warnings.length > 0) {
+      logAiValidation({
+        type: 'structure_warning',
+        route: 'statement-review',
+        codes: warnings.map((w) => w.code),
+      });
     }
 
     // C1 mitigation: studentProfile は page 上位の useMemo で派生済みの stable reference を
@@ -571,8 +591,19 @@ function StatementPageInner() {
     if (loading) return;
     await submitReview(statementText, {
       validate: () => {
-        if (!statementText.trim()) return '志望理由書本文を入力してください';
-        if (statementText.trim().length < 100) return '志望理由書本文をもう少し詳しく入力してください（100文字以上）';
+        const result = validateStatementReviewInput(statementText);
+        if (!result.ok) {
+          logAiValidation({
+            type: 'validation_reject',
+            route: 'statement-review',
+            code: result.code,
+          });
+          return result.message;
+        }
+        logAiValidation({
+          type: 'validation_pass',
+          route: 'statement-review',
+        });
         return null;
       },
       clearResultOnStart: true,
@@ -593,6 +624,7 @@ function StatementPageInner() {
     setStatementText('');
     setResult(null);
     setError('');
+    setStructureWarnings([]);
     clearDraft();
   }
 
@@ -675,6 +707,19 @@ function StatementPageInner() {
 
       {error && (
         <p className="text-red-600 text-sm mb-6">{error}</p>
+      )}
+
+      {structureWarnings.length > 0 && (
+        <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+          <p className="text-xs font-semibold text-amber-800 mb-1">
+            構造のチェック（参考・AI添削は通常通り進みます）
+          </p>
+          <ul className="text-sm text-amber-900 leading-relaxed space-y-1">
+            {structureWarnings.map((w) => (
+              <li key={w.code}>・{w.message}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* AI 実行中の経過秒 + sub-message ループ。STEP-UX-FIX-06-LOADING-PROGRESS。

@@ -33,6 +33,9 @@ import { persistSelfAnalysisLog } from '@/lib/selfAnalysisLogStorage';
 import { FREE_MEMO_MAX_CHARS, normalizeDeepAnswers, normalizeFreeMemo } from '@/lib/summarizeNormalize';
 import { decideSummarizeMode } from '@/lib/summarizeMode';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
+import { validateSummarizeInput } from '@/lib/validation/validateSummarizeInput';
+import { logAiValidation } from '@/lib/aiValidationLog';
 import BasicInfoSummary from '@/components/shared/BasicInfoSummary';
 import { UsageNote } from '@/components/shared/UsageNote';
 import { LoadingProgress } from '@/components/ui/LoadingProgress';
@@ -283,6 +286,20 @@ export default function SelfAnalysisPage() {
   async function handleAddMoreQuestions() {
     if (addQuestionsLoading || !activityData) return;
 
+    // deterministic validation: 活動内容が空のときに AI を呼ばないようにする。
+    // additional の thresholds は緩く（EMPTY のみ）— 深掘り段階で短文入力が正常なため。
+    const additionalValidation = validateAdditionalQuestionInput(activityData);
+    if (!additionalValidation.ok) {
+      logAiValidation({
+        type: 'validation_reject',
+        route: 'additional-questions',
+        code: additionalValidation.code,
+      });
+      setAddQuestionsError(additionalValidation.message);
+      return;
+    }
+    logAiValidation({ type: 'validation_pass', route: 'additional-questions' });
+
     // STEP5.4: input hash cache を先に判定する。
     // 同入力なら AI を呼ばずに保存済み questions を append する。
     // universityContext は server route と同じ buildUniversityContextFromBasicInfo() で派生させる。
@@ -358,6 +375,20 @@ export default function SelfAnalysisPage() {
       setSummarizeError('活動データが見つかりません。活動整理ページで保存してから再度お試しください。');
       return;
     }
+
+    // deterministic validation: summary は短文 source でも成立するため TOO_SHORT は適用しない。
+    // EMPTY / REPEATED_CHAR / PLACEHOLDER のみ。
+    const summarizeValidation = validateSummarizeInput(activityData);
+    if (!summarizeValidation.ok) {
+      logAiValidation({
+        type: 'validation_reject',
+        route: 'summarize',
+        code: summarizeValidation.code,
+      });
+      setSummarizeError(summarizeValidation.message);
+      return;
+    }
+    logAiValidation({ type: 'validation_pass', route: 'summarize' });
 
     // displayedQuestions（実際に表示・回答した質問）を使ってまとめを生成する
     const analysisWithDisplayedQuestions = { ...analysis, questions: displayedQuestions };

@@ -61,55 +61,10 @@ export type AnalysisPromptContext = {
 // preamble に含まれていた STUDENT_FIT_INSTRUCTION は各 API の SYSTEM_PROMPT 側に移った。
 // basicInfo / universityContext の section helper は各 build*Prompt が直接呼ぶ。
 
-export function buildAnalyzePrompt(activityText: string): string {
-  return `あなたは総合型選抜・学校推薦型選抜の指導に強いアシスタントです。
-
-目的：
-以下の活動データをもとに、自己PRや志望理由書に必要な情報を「不足している項目」に対してのみ質問してください。
-
-重要ルール：
-- すでに情報がある項目については質問しない
-- 空欄・情報が弱い部分だけを補う質問をする
-- 質問は3〜5問に制限する
-- 抽象的な質問は禁止（例：「頑張ったことは？」など）
-- 具体性を引き出す質問にする
-
-対象の構造（この形に最終的に埋めたい）：
-【共通項目】
-- 期間
-- 役割 / 立場
-- 内容（何をしたか）
-- 課題
-- 行動 / 工夫
-- 成果
-- 学び
-- 将来とのつながり
-
-【活動データ】
-${activityText}
-
-【出力ルール（厳守）】
-・出力は純粋なJSONのみ
-・最初の文字は { でなければならない
-・最後の文字は } でなければならない
-・\`\`\`json や \`\`\` は絶対に使わない
-・前置き・説明文・日本語の文章を一切書かない
-・JSON以外の文字を1文字も含めない
-・ただし、正しいJSON構造を保つことを最優先とする。JSON構造が壊れるくらいなら正確なJSONを優先すること
-
-【出力形式】
-{
-  "strengths": ["活動から見える強み（2〜4個）"],
-  "interests": ["関心分野（1〜3個）"],
-  "gaps": ["不足している項目名（例：行動/工夫、将来とのつながり）"],
-  "questions": ["（項目名）具体的な質問文"]
-}
-
-questionsの形式例：
-- "（課題）〇〇活動で一番うまくいかなかったのはどの場面でしたか？"
-- "（行動/工夫）その状況を乗り越えるために、具体的にどんな行動をとりましたか？"
-- "（将来とのつながり）この経験は、志望する学部・学科でどう活かせると思いますか？"`;
-}
+// 旧 buildAnalyzePrompt は DET-6 で撤去した（/api/analyze route 削除に伴う dead code 整理）。
+// `/api/analyze` route は STEP4.10 時点で client 呼び出し元ゼロのまま orphan 化しており、
+// `/api/analysis` 系列で置き換え済みであった。AnalysisResult 型と共に削除。
+// 呼び出し元なしを grep（'/api/analyze' / buildAnalyzePrompt / AnalysisResult）で確認済。
 
 // ANALYSIS_SYSTEM_PROMPT / buildWallHittingPrompt / BuildWallHittingOptions /
 // 関連 qualifier は lib/prompts/analysisPrompt.ts に切り出した。

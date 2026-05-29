@@ -19,9 +19,26 @@
 //     POST handler 側で `Response.json(parsed)` が従来通りそのまま動作する。
 
 import type { StatementPrepareApiResult } from '@/app/api/statement-prepare/route';
+import type { NgWordIssue } from '@/lib/detectNgWords';
 
 export function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+// DET-5: deterministic NG 検出結果を AI に "既知" として提示する section。
+// 再判定 / 重複指摘を抑えて、分析 / 改善提案 / 整理メモの手がかり提示に token を割かせる目的。
+// DET-2（statement-review）と同形・同 byte の helper。issue 数が 0 / undefined のときは空文字を
+// 返し section を出さない（NG section 注入前の旧 prompt と意味等価）。phrase + reason のみ載せる
+// （suggestion / activityHint / starterHint は AI 側の責務として残す）。
+function buildNgIssuesSection(issues: NgWordIssue[] | undefined): string {
+  if (!issues || issues.length === 0) return '';
+  const lines = issues.map((i) => `- 「${i.phrase}」：${i.reason}`);
+  return [
+    '【既知のNG指摘候補】',
+    '以下は deterministic ルールベース検出器が既に判定済みの NG パターンです。これらを再判定するのではなく、改善提案や深い分析に注力してください。',
+    '',
+    ...lines,
+  ].join('\n');
 }
 
 export function isStatementPrepareApiResult(
@@ -47,7 +64,24 @@ export function buildStatementPreparePrompt(input: {
   interestReason: string;
   memorableExperience: string;
   futureGoal: string;
+  // DET-5: NG 指摘候補（deterministic 検出済）。route.ts 側で detectNgWords() を AI call 前に
+  // 走らせて渡す。AI は同じ phrase を再判定せず、分析 / 改善提案 / 整理メモの手がかり提示に
+  // 注力する。空配列 / 未指定なら【既知のNG指摘候補】section をプロンプトに含めない（NG 注入前の
+  // 旧 prompt と意味等価）。NG 検出は 3 入力 field から deterministic に派生する（statement-prepare
+  // route には hash / cache 機構が無いため cache identity drift の議論は対象外）。
+  ngIssues?: NgWordIssue[];
+  // DET-8: 志望大学 DB 情報（deterministic 取得済）。route.ts 側で buildStatementUniversityContext()
+  // を AI call 前に走らせて渡す。AI は admission policy / 評価観点 / 入試方式 などを **参考情報**
+  // として軽く参照する（採点基準ではない）。空文字 / 未指定なら【志望大学DB情報】section を
+  // プロンプトに含めない（DB 注入前の旧 prompt と意味等価）。lib/universities.ts の単一境界を
+  // 経由し、固有の教員名・カリキュラム名は AI に作らせない既存禁止事項を優先する。
+  universityContext?: string;
 }): string {
+  const ngIssuesSection = buildNgIssuesSection(input.ngIssues);
+  // DET-8: 大学 DB context は buildStatementUniversityContext() の戻り値をそのまま使う。
+  // 既存の【志望大学DB情報】ヘッダ + bullet sections の format を温存し、statement-review と
+  // 共通の helper を流用する（lib/universities.ts の責務変更なし）。
+  const universitySection = (input.universityContext ?? '').trim();
   return `あなたは総合型選抜・学校推薦型選抜の指導に精通したアドバイザーです。
 
 【あなたの役割】
@@ -101,6 +135,20 @@ export function buildStatementPreparePrompt(input: {
 - NG（疑問文だけを返している）：
   "どんな経験が印象に残っていますか？"
 
+【既知のNG指摘候補について】
+- ユーザー入力の直後に【既知のNG指摘候補】section が含まれている場合、それは deterministic ルールベース検出器が既に判定済みの NG パターンです。
+- 同じ phrase に対して再判定や同じ趣旨の指摘を繰り返さないでください。整理メモにこれらの phrase を機械的に置き換えるのではなく、検出済みの NG を踏まえて受験生が次に考えるべき手がかりを添えることに集中してください。
+- 5 つの整理メモ（impressiveExperience / feltIssue / interestInField / universityLearning / futureApplication）の出力 schema / 各 80〜140 字以内の文字数規律 / 走り書きメモのスタイルは変更しないでください。
+- section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。
+
+【志望大学DB情報について】
+- ユーザー入力の直後に【志望大学DB情報】section が含まれている場合、それは志望大学・学部の admission policy / 評価観点 / 入試方式 / 選考方法 などの **参考情報** です（大学 DB から deterministic に取得）。
+- これは **採点基準ではありません**。整理メモ生成の補助として軽く参照してください。
+- 大学コンテキストの文をそのまま整理メモにコピーしないでください。受験生本人の経験 / 言葉 / 関心を最優先し、コンテキストは "この大学はこういう観点を見るので、こういう方向で整理できる" 程度の文脈材料として使ってください。
+- universityLearning と futureApplication の整理メモは、大学の評価観点や AI 対策メモと接続させると質が上がります。ただし **固有の教員名・カリキュラム名・授業名は AI が作らない** ことを優先してください（既存の禁止事項「架空の固有名詞を作っている」を最優先）。
+- 5 つの整理メモの出力 schema / 各 80〜140 字以内の文字数規律 / 走り書きメモのスタイルは変更しないでください。
+- 大学コンテキストが含まれていない場合は、本ルールを適用せず従来通り受験生入力のみで判断してください。
+
 ---
 【ユーザーの入力（3項目）】
 - なぜその分野・学部に興味を持ったか：
@@ -111,7 +159,8 @@ ${input.memorableExperience.trim() || '（未入力）'}
 
 - 将来どんなことをしたいか：
 ${input.futureGoal.trim() || '（未入力）'}
----
+
+${ngIssuesSection ? `${ngIssuesSection}\n\n` : ''}${universitySection ? `${universitySection}\n\n` : ''}---
 
 【出力する整理メモ5項目】
 1. impressiveExperience  — 印象に残った経験。

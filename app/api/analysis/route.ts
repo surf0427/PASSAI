@@ -42,6 +42,8 @@ import {
   extractProfileMaterial,
 } from '@/lib/analysis/extractWallHittingParts';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
+import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
 
 // 使用 model を constant 化（messages.create() と usage log で同じ値を共有するため）。
 // model を切り替えるときはここを変えれば log も追従する。
@@ -67,10 +69,19 @@ export async function POST(req: Request) {
     return Response.json({ error: 'activityData is required' }, { status: 400 });
   }
 
-  const activityText = formatActivityData(activityData);
-  if (!activityText.trim()) {
-    return Response.json({ error: 'activity data is empty' }, { status: 400 });
+  // V-6: client validator の最終防衛線。conversational UX は維持（threshold 30 chars / EMPTY /
+  // REPEATED_CHAR / PLACEHOLDER のみ）。AI call / prompt build / aiUsageLog 未到達で 400。
+  const validation = validateAnalysisInput(activityData);
+  if (!validation.ok) {
+    logAiValidation({
+      type: 'validation_reject',
+      route: 'analysis',
+      code: validation.code,
+    });
+    return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  const activityText = formatActivityData(activityData);
 
   try {
     // STEP3.5: static rule（役割宣言・志望先文脈の解釈方針・出力内容の指針・JSON schema 等）を

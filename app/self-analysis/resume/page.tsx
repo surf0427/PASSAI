@@ -25,6 +25,8 @@ import {
   saveAdditionalQuestionsCache,
 } from '@/lib/additionalQuestionsCache';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
+import { logAiValidation } from '@/lib/aiValidationLog';
 import { additionalQuestionsLimit, type DailyUsage } from '@/lib/dailyLimit';
 
 // /self-analysis/run と同じ「AI に渡す活動データ」のソース順序。
@@ -102,6 +104,20 @@ export default function ResumePage() {
       );
       return;
     }
+
+    // deterministic validation: 活動内容が空のときに AI を呼ばないようにする。
+    // additional の thresholds は緩く（EMPTY のみ）。
+    const additionalValidation = validateAdditionalQuestionInput(activityData);
+    if (!additionalValidation.ok) {
+      logAiValidation({
+        type: 'validation_reject',
+        route: 'additional-questions',
+        code: additionalValidation.code,
+      });
+      setError(additionalValidation.message);
+      return;
+    }
+    logAiValidation({ type: 'validation_pass', route: 'additional-questions' });
 
     const basicInfo = loadBasicInfo();
     const universityContext = buildUniversityContextFromBasicInfo(basicInfo);

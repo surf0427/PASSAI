@@ -12,6 +12,10 @@ import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest
 import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/interviewContext';
 import { feedbackToText } from '@/lib/interview/feedbackToText';
 import { fillEchoBackFromInput } from '@/lib/interview/normalizeInterviewFeedback';
+import {
+  computeLevelEvaluationHeuristic,
+  type LevelEvaluationHeuristic,
+} from '@/lib/interview/levelEvaluationHeuristic';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 // STEP-LIB-03: SYSTEM_PROMPT を lib/prompts/interviewFeedbackPrompt.ts に lift した。
@@ -30,6 +34,28 @@ export type { InterviewFeedback };
 // JSON → improvementSummary 文字列変換 (feedbackToText / generateComparison /
 // LEVEL_LABEL / LEVEL_AXES / levelToNumber / formatLevelEvaluation) は
 // lib/interview/feedbackToText.ts に切り出した。出力フォーマットは完全に同一。
+
+// DET-7: deterministic 5 軸 heuristic を AI に "既知の候補" として提示する section。
+// 再判定 / 重複検出を抑えて、改善提案 / betterAnswer / followUps に token を割かせる目的。
+// AI は最終判断を維持できる（候補は補助情報）。questionsAndAnswers が空配列（legacy フォールバック
+// 経路）のときは空文字を返し、section を出さない（旧 prompt と意味等価）。
+function buildLevelEvaluationHeuristicSection(
+  heuristics: LevelEvaluationHeuristic[],
+): string {
+  if (heuristics.length === 0) return '';
+  const lines = heuristics.map((h, idx) => {
+    const c = h.candidate;
+    return `Q${idx + 1}: logical=${c.logical}, concrete=${c.concrete}, consistency=${c.consistency}, originality=${c.originality}, interviewReadiness=${c.interviewReadiness}`;
+  });
+  return [
+    '【既知の levelEvaluation 候補】',
+    '',
+    ...lines,
+    '',
+    '以下は deterministic ルールベース検出器（文字数 / 因果接続詞 / 具体性キーワード / 大学名メンション / 抽象表現多用）から派生させた tentative な候補です。',
+    'これらを再判定するのではなく、改善提案 / betterAnswer / followUps の質に token を割いてください。AI の最終判断は維持してよく、候補を上書きする judgement も許容されます。',
+  ].join('\n');
+}
 
 // 受験方式に応じた面接フィードバックの方針を生成する。面接機能専用の文言。
 // examTypes が複数選択されている場合はそれぞれのルールを併記する。
@@ -208,6 +234,24 @@ export async function POST(request: Request) {
     //   - INTERVIEW_FEEDBACK_SYSTEM_PROMPT (固定): lib/prompts/interviewFeedbackPrompt.ts に lift 済み（STEP-LIB-03）
     //   - userPrompt (可変): 「今回の入力データ」のみ
     // 構造は将来の prompt caching（cache_control）導入の足場でもある。
+    //
+    // DET-7: deterministic 5 軸 heuristic を AI call 前に算出し prompt 末尾に「既知の候補」として
+    // 渡す。questionsAndAnswers が pair として揃っているときのみ算出（legacy フォールバック経路は
+    // skip）。同 pairs → 同 candidate → 同 prompt body の関係で副作用なし。AI は最終判断を維持し、
+    // 候補と異なる judgement を返してよい（SYSTEM_PROMPT の LEVEL_EVALUATION_HEURISTIC_QUALIFIER
+    // で明示）。
+    const levelEvaluationHeuristics: LevelEvaluationHeuristic[] =
+      questionsAndAnswers.length > 0
+        ? computeLevelEvaluationHeuristic(
+            questionsAndAnswers,
+            universityName,
+            facultyName,
+          )
+        : [];
+    const heuristicSection = buildLevelEvaluationHeuristicSection(
+      levelEvaluationHeuristics,
+    );
+
     const userPrompt = `${basicInfoSection}
 
 【受験情報（今回の練習で対象とした内容）】
@@ -216,7 +260,7 @@ export async function POST(request: Request) {
 志望理由：${motivation || '（未入力）'}
 ${examTypeGuidance ? `\n${examTypeGuidance}\n` : ''}
 ${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}${admissionFocusContext ? `${admissionFocusContext}\n\n` : ''}${studentProfileSection ? `${studentProfileSection}\n\n` : ''}【質問と回答】
-${qaText}`;
+${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
 
     // STEP2.1: max_tokens を質問数ベースで動的化する。
     // 新形式 questionsAndAnswers の件数を優先、空（legacy フォールバック経路）の場合は 5 を仮定。

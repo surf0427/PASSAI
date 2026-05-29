@@ -1,11 +1,8 @@
 import type { ApplicantType } from './applicantType';
 
-export type AnalysisResult = {
-  strengths: string[];
-  interests: string[];
-  gaps: string[];
-  questions: string[];
-};
+// 旧 AnalysisResult は DET-6 で撤去した（/api/analyze route 削除に伴う dead code 整理）。
+// `/api/analyze` route は client 呼び出し元ゼロのまま orphan 化していたため、buildAnalyzePrompt と共に削除。
+// 自己分析フローの canonical 型は WallHittingResult（下記）に集約済み。
 
 export type WallHittingResult = {
   summary: string;

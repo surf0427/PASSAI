@@ -55,7 +55,30 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             （applicantType=undefined の旧 profile は hash 等価のまま）。bump によって
 //             旧 v5 cache が新 prompt 出力契約に流入することを防ぐ（intentional 1 回 miss）。
 //             user prompt（buildStatementReviewPrompt の戻り値）の組み立て関数は byte-identical。
-export const STATEMENT_REVIEW_PROMPT_VERSION = 6;
+//   v6 → v7 : DET-2 で detectNgWords() の判定結果を user prompt に【既知のNG指摘候補】
+//             section として注入。AI が同じ phrase を再 discovery することを避け、改善提案や
+//             深い構造分析に注力できるようにする。NG 検出は essay / activityData / university /
+//             faculty から deterministic に派生するため、hash 入力構造（HashStatementReviewInput
+//             の signature）は不変（同入力 → 同 NG → 同 prompt body の関係が cache identity を
+//             保つ）。response shape / JSON contract / scoring rule（5 軸 8〜20）も不変。
+//             SYSTEM_PROMPT 側に STATEMENT_REVIEW_NG_ISSUES_QUALIFIER を追加し、section の
+//             解釈ルール（再判定を抑える / 重複指摘を避ける / 採点には反映しない）を AI に伝える。
+//             bump により旧 v6 cache は一律 miss になる（intentional 1 回損失）が、cache hit 経路の
+//             仕様は何も変えていない。
+//   v7 → v8 : DET-4 で analyzeStructure() の判定結果を user prompt に【既存構造分析】
+//             section として注入（DET-3 で essay-review に入れた構造注入を statement-review に
+//             横展開）。AI が同じ 6 要素（trigger / problem / action / learning / future /
+//             universityConnection）を再 discovery することを避け、改善提案 / partialExamples /
+//             actions に token を割けるようにする。構造分析は essay のみから deterministic に
+//             派生するため、hash 入力構造（HashStatementReviewInput の signature）は不変
+//             （同 essay → 同 structure → 同 prompt body の関係が cache identity を保つ）。
+//             response shape / JSON contract / scoring rule（5 軸 8〜20）も不変。SYSTEM_PROMPT
+//             側に STATEMENT_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER を追加して section の
+//             解釈ルール（再判定を抑える / 採点には反映しない）を AI に伝える。DET-2 の NG
+//             section と独立 / 共存（順序: structure → ng → 【本文】、大局 → 細部 → 本体）。
+//             bump により旧 v7 cache は一律 miss になる（intentional 1 回損失）が、cache hit 経路の
+//             仕様は何も変えていない。
+export const STATEMENT_REVIEW_PROMPT_VERSION = 8;
 export const STATEMENT_REVIEW_MODEL = 'claude-sonnet-4-6';
 
 // hash と prompt body の input source は STEP-F 以降 intentional に非対称:

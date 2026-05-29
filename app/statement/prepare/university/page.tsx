@@ -180,10 +180,24 @@ export default function StatementPrepareUniversityPage() {
 
     try {
       const apiInput = adaptAnswersToApiInput(answers);
+      // DET-8: 志望大学情報を body に追加（任意フィールド、route 側は後方互換）。
+      // pref があれば preferences から、なければ manual fallback から取得する。
+      // route 側で空文字なら大学コンテキスト section を含めないため、空でも安全に送れる。
+      const universityInfo = pref
+        ? {
+            university: pref.university,
+            faculty: pref.faculty,
+            department: pref.department ?? '',
+          }
+        : {
+            university: manualUniversity.trim(),
+            faculty: manualFaculty.trim(),
+            department: manualDepartment.trim(),
+          };
       const res = await fetch('/api/statement-prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(apiInput),
+        body: JSON.stringify({ ...apiInput, ...universityInfo }),
       });
 
       if (res.status === 429) {

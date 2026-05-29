@@ -17,6 +17,8 @@ import {
   normalizeSummary,
 } from '@/lib/summarizeNormalize';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
+import { validateSummarizeInput } from '@/lib/validation/validateSummarizeInput';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis / /api/analysis/additional と同じパターン。
@@ -41,6 +43,18 @@ export async function POST(req: Request) {
       { error: 'activityData, analysis, and answers are required' },
       { status: 400 },
     );
+  }
+
+  // V-6: client validator の最終防衛線。summary は短文 source でも成立するため
+  // TOO_SHORT は適用しない（EMPTY / REPEATED_CHAR / PLACEHOLDER のみ）。
+  const validation = validateSummarizeInput(activityData);
+  if (!validation.ok) {
+    logAiValidation({
+      type: 'validation_reject',
+      route: 'summarize',
+      code: validation.code,
+    });
+    return Response.json({ error: validation.message }, { status: 400 });
   }
 
   // 各質問の任意「追加深掘りメモ」。

@@ -5,6 +5,9 @@ import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 import { safeParseResult } from '@/lib/essay/parseEssayReview';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { logAiValidation } from '@/lib/aiValidationLog';
+import { validateEssayReviewInput } from '@/lib/validation/validateEssayReviewInput';
+import { analyzeStructure, type StructureAnalysis } from '@/lib/structureAnalysis';
 // STEP-LIB-04: SYSTEM_PROMPT を lib/prompts/essayReviewPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // 文言を変える場合は ESSAY_REVIEW_PROMPT_VERSION（lib/hash/essayReview.ts）を必ず bump すること。
@@ -44,6 +47,24 @@ function buildExamTypeEssayGuidance(examTypes: string[] | undefined): string {
 // VALID_VERDICTS / VALID_BREAKDOWN_LABELS / FALLBACK_* / ReviewResult / BreakdownItem) は
 // lib/essay/parseEssayReview.ts に切り出した。戻り値 shape および fallback 挙動は完全に同一。
 
+// DET-3: deterministic 構造分析結果を AI に "既知" として提示する section。
+// 再判定 / 重複指摘を抑えて、改善提案 / 具体例 / improvement の質に token を割かせる目的。
+// analyzeStructure は常に 6 要素を返す pure 関数（lib/structureAnalysis.ts）。
+// 万一空配列が来た場合は空文字を返し、section を出さない（旧 v2 と意味等価）。
+// 各要素は `type: score` の 1 行形式で出力する（簡潔さ優先、reason / hint は AI 側の責務として残す）。
+function buildStructureAnalysisSection(analyses: StructureAnalysis[]): string {
+  if (analyses.length === 0) return '';
+  const lines = analyses.map((a) => `${a.type}: ${a.score}`);
+  return [
+    '【既存構造分析】',
+    '',
+    ...lines,
+    '',
+    '以下は deterministic 構造分析結果です。',
+    'これらを再判定するのではなく、改善提案や具体例作成に注力してください。',
+  ].join('\n');
+}
+
 // SYSTEM_PROMPT（ESSAY_REVIEW_SYSTEM_PROMPT）は lib/prompts/essayReviewPrompt.ts に lift 済み（STEP-LIB-04）。
 // 役割（不変）: 役割宣言 / 採点軸 5 項目 / verdict 4 種 / スコアルール / 出力 JSON ルール / トーン規律 / 長さ上限 / 出力スキーマ例。
 // 本 route は ESSAY_REVIEW_SYSTEM_PROMPT を import して anthropic.messages.create の system に渡すだけ。
@@ -58,8 +79,15 @@ export async function POST(req: Request) {
   // basicInfo は任意。未送信や形が不正でも null として扱う。
   const basicInfo: BasicInfo | null = body.basicInfo ?? null;
 
-  if (!essayBody.trim()) {
-    return Response.json({ error: '本文を入力してください' }, { status: 400 });
+  // V-6: client validator の最終防衛線。AI call / prompt build / aiUsageLog 未到達で 400。
+  const validation = validateEssayReviewInput(essayBody);
+  if (!validation.ok) {
+    logAiValidation({
+      type: 'validation_reject',
+      route: 'essay-review',
+      code: validation.code,
+    });
+    return Response.json({ error: validation.message }, { status: 400 });
   }
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
@@ -70,6 +98,11 @@ export async function POST(req: Request) {
     faculty: firstPreference?.faculty ?? '',
     department: firstPreference?.department ?? '',
   });
+  // DET-3: 構造 6 要素を deterministic に事前検出し prompt に「既知」として渡す。
+  // essayBody から純関数（lib/structureAnalysis.ts）で派生するため hash 入力には追加不要。
+  // 同 essayBody → 同 structure → 同 prompt body の関係で cache identity に drift をもたらさない。
+  // AI が同じ 6 要素を再 discovery する往復コストを削減し、改善提案 / 具体例作成に token を割けるようにする。
+  const structureSection = buildStructureAnalysisSection(analyzeStructure(essayBody));
 
   const userMessage = `以下の小論文を採点・添削してください。
 
@@ -87,7 +120,7 @@ ${reasonOne || '（未入力）'}
 【理由②】
 ${reasonTwo || '（未入力）'}
 
-【本文】
+${structureSection ? `${structureSection}\n\n` : ''}【本文】
 ${essayBody}`;
 
   try {

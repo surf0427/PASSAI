@@ -7,13 +7,26 @@
 //   - 危険語の client-side 1 次 block（外部窓口誘導）
 //   - daily limit（tutorLimit）の連携：UI 表示 + 成功時のみ消費
 //   - intent / stabilization 判定（rule-based、AI を呼ばない）
-//   - latest message だけを server に送る（履歴はサーバに送らない、UI 表示用 state のみ）
+//   - 直近 6 件の messages を history として server に送る（STEP-TUTOR-CONTEXT-01）
+//     → server 側で sanitize + Anthropic messages 配列に multi-turn 形式で投入される
+//
+// STEP-TUTOR-CONTEXT-03 追加: lastTutorIntent state を保持し、次回 detectTutorIntent
+//   呼び出しに previousIntent として渡すことで「面接が不安 → 答えが出ない → どっちも」型の
+//   省略返答 turn でも topic（interview）を継承する。継承ロジック本体は
+//   lib/tutor/detectTutorIntent.ts:detectTutorIntent + lib/tutor/tutorPrompt.ts [U-多ターン継承]
+//   側で確定済み（STEP-TUTOR-CONTEXT-02）。本ファイルは wiring のみ担う。
+//   - 更新タイミングは「API 成功時のみ」。emergency block / daily limit / network error /
+//     AI_REQUEST_FAILED / AI_REPLY_TRUNCATED では更新しない（topic を進めない原則）。
+//   - 保存する値は detectTutorStabilization で上書きされる前の baseIntent。
+//     理由: stabilize/general 上書きで継承チェーンが切れるのを防ぐため。
 //
 // 含めない:
 //   - context 詳細送信（basicInfo / StudentProfile / statementDraft 等）は v1 では null 固定。
 //     STEP9 以降で localStorage 経由の取得を段階導入する。
 //   - 機能接続ボタン化（parseTutorReply / TutorSuggestionLink は STEP9）
 //   - 会話履歴の永続化（refresh で初期化される、これは v1 仕様）
+//   - history pass-through（STEP-TUTOR-CONTEXT-01 想定だが未配線。本 STEP の責務外）
+//   - ConversationState / Thread UI / Supabase（明示的に範囲外）
 //
 // 関連:
 //   - app/api/tutor/route.ts (STEP5)
@@ -76,6 +89,16 @@ export default function TutorPage() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // STEP-TUTOR-CONTEXT-03 追加: 直前 turn で確定した「キーワード判定上の」intent。
+  // detectTutorIntent に previousIntent として渡し、省略返答 turn で topic を継承する。
+  //   - 初期値 undefined（first turn は従来通り継承スキップ）
+  //   - API 成功時のみ baseIntent で上書きする（stabilization 上書き前の値を保存）
+  //   - emergency / daily limit / fetch エラー / AI 失敗時は更新しない
+  //   - localStorage 永続化しない（refresh で undefined に戻る、本 STEP は wiring のみ）
+  const [lastTutorIntent, setLastTutorIntent] = useState<TutorIntent | undefined>(
+    undefined,
+  );
 
   // daily usage は (1) マウント時に loadUsage() で初期化し、(2) API 成功時に
   // incrementUsage() で上書きされる。post-API の上書き値だけを useState で持ち、
@@ -202,7 +225,9 @@ export default function TutorPage() {
     }
 
     // intent 判定（rule-based、AI 呼ばない）。stabilization 検出時は強制 stabilize に上書き。
-    const baseIntent = detectTutorIntent({ message });
+    // STEP-TUTOR-CONTEXT-03: previousIntent=lastTutorIntent を渡して省略返答 turn の
+    // topic 継承を有効化する（STEP-TUTOR-CONTEXT-02 で detectTutorIntent 側に追加済み）。
+    const baseIntent = detectTutorIntent({ message, previousIntent: lastTutorIntent });
     const intent: TutorIntent = detectTutorStabilization(message)
       ? 'stabilize'
       : baseIntent;
@@ -218,9 +243,21 @@ export default function TutorPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // server には latest message のみ送る（履歴は送らない、1 ターン完結原則）
+          // 今回 turn の user 発話。server 側で context + system prompt と一緒に
+          // Anthropic 最後の user メッセージとして組み立てられる。
           message,
           intent,
+          // STEP-TUTOR-CONTEXT-01: 直近 6 件の messages を history として送る。
+          //   - 形式: { role: 'user' | 'assistant', text: string }[]
+          //   - 今回送信中の user message は state に未追加の段階で slice するため
+          //     自然に含まれない（setMessages の append は fetch 後、L235 は閉包変数）。
+          //   - server 側 sanitizeTutorHistory が role/text/長さ/交互制約をかける。
+          //     不正値を送っても 400 にはならず、安全側で [] に倒される。
+          //   - localStorage 永続化はしない。refresh で history=[] に戻る v1 仕様のまま。
+          history: messages.slice(-6).map((m) => ({
+            role: m.role,
+            text: m.text,
+          })),
           // basicInfo: v1.1 STEP12 で連携開始。null fallback あり。
           // route 側 buildTutorBasicInfoSection が学年・文理・第一志望・受験方式の先頭のみ
           // 抽出し、subjectGrades / overallGpa / name は含めない。
@@ -263,6 +300,15 @@ export default function TutorPage() {
       // 成功時のみ daily limit 消費（失敗時・emergency 時は消費しない）
       const next = tutorLimit.incrementUsage(usage);
       setPostApiUsage(next);
+
+      // STEP-TUTOR-CONTEXT-03: 成功時のみ previousIntent を進める。
+      // 保存値は detectTutorStabilization で 'stabilize' に上書きされる前の baseIntent
+      // （stabilize は state であり topic ではないため、上書き値を保存すると次 turn の
+      // 「どっちも」型省略返答で interview 等の topic 継承が切れる）。
+      // baseIntent が 'general'/'stabilize'/'advice' のときも保存はするが、
+      // INHERITABLE_PREVIOUS_INTENTS に含まれないため次 turn での継承は発生しない
+      // （実質的に「継承用の topic latch をクリアする」動作になる）。
+      setLastTutorIntent(baseIntent);
     } catch {
       setError('通信エラーが発生しました。インターネット接続を確認してください。');
     } finally {

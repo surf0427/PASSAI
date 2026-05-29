@@ -2,6 +2,8 @@ import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
 import type { StudentProfile } from '@/types/studentProfile';
+import type { NgWordIssue } from '@/lib/detectNgWords';
+import type { StructureAnalysis } from '@/lib/structureAnalysis';
 import { toStudentProfile } from '@/lib/studentProfile';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildStatementUniversityContext } from '@/lib/statement/review/buildStatementUniversityContext';
@@ -38,6 +40,18 @@ export type StatementReviewPromptOptions = {
   // route.ts 側で getAdmissionFocusContextForUser() から取得して渡す。
   // 未指定 / 空文字なら従来通り該当 section をプロンプトに含めない（旧 v2 と意味等価）。
   admissionFocusContext?: string;
+  // DET-2: NG 指摘候補（deterministic 検出済）。route.ts 側で detectNgWords() を
+  // AI call 前に走らせて渡す。AI は同じ phrase を再判定せず、改善提案や深い構造分析に
+  // 注力する。空配列 / 未指定なら【既知のNG指摘候補】section をプロンプトに含めない
+  // （旧 v6 と意味等価）。NG 検出は essay / activityData / university / faculty から
+  // deterministic に派生するため hash 入力には含めない（hash signature 不変）。
+  ngIssues?: NgWordIssue[];
+  // DET-4: 構造分析結果（deterministic 検出済）。route.ts 側で analyzeStructure() を
+  // AI call 前に走らせて渡す。AI は同じ 6 要素を再判定せず、改善提案 / partialExamples /
+  // actions に注力する。空配列 / 未指定なら【既存構造分析】section をプロンプトに含めない
+  // （旧 v7 と意味等価）。構造分析は essay から deterministic に派生するため hash 入力には
+  // 含めない（hash signature 不変）。DET-2 の NG section と独立 / 共存する。
+  structureAnalysis?: StructureAnalysis[];
 };
 
 // 受験方式に応じた添削方針を生成する。志望理由書専用の文言。
@@ -77,6 +91,42 @@ function buildActivityContext(data: ActivityData | null): string {
   if (data.certificationActivities?.length) lines.push(`資格: ${data.certificationActivities.map((a) => a.certificationName).filter(Boolean).join('・') || `${data.certificationActivities.length}件`}`);
   if (lines.length === 0) return '';
   return ['【活動概要】', ...lines].join('\n');
+}
+
+// DET-2: deterministic NG 検出結果を AI に "既知" として提示する section。
+// 再判定 / 重複指摘を抑えて、改善提案 / 構造分析に token を割かせる目的。
+// issue 数が 0 / undefined のときは空文字を返し、section を出さない（旧 v6 と意味等価）。
+// phrase + reason のみ載せる（suggestion / activityHint / starterHint 等は AI 側の責務として残す）。
+function buildNgIssuesSection(issues: NgWordIssue[] | undefined): string {
+  if (!issues || issues.length === 0) return '';
+  const lines = issues.map((i) => `- 「${i.phrase}」：${i.reason}`);
+  return [
+    '【既知のNG指摘候補】',
+    '以下は deterministic ルールベース検出器が既に判定済みの NG パターンです。これらを再判定するのではなく、改善提案や深い構造分析に注力してください。',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+// DET-4: deterministic 構造分析結果（6 要素の score 0〜2）を AI に "既知" として提示する section。
+// 再判定 / 重複指摘を抑えて、改善提案 / partialExamples / actions に token を割かせる目的。
+// analyzeStructure は常に 6 要素を返す pure 関数（lib/structureAnalysis.ts）。万一空配列が来た
+// 場合は空文字を返し section を出さない（旧 v7 と意味等価）。各要素は `type: score` の 1 行形式で
+// 出力する（簡潔さ優先、reason / hint は AI 側の責務として残す）。
+// DET-2 の NG section と独立 / 共存する。AI は両 section を踏まえた重複しない指摘に集中する。
+function buildStructureAnalysisSection(
+  analyses: StructureAnalysis[] | undefined,
+): string {
+  if (!analyses || analyses.length === 0) return '';
+  const lines = analyses.map((a) => `${a.type}: ${a.score}`);
+  return [
+    '【既存構造分析】',
+    '',
+    ...lines,
+    '',
+    '以下は deterministic 構造分析結果です。',
+    'これらを再判定するのではなく、改善提案や具体例作成に注力してください。',
+  ].join('\n');
 }
 
 // 【LEGACY】WallHittingResult を直接プロンプトに流すレガシー経路。
@@ -137,6 +187,39 @@ const STATEMENT_REVIEW_SUBJECT_GRADES_QUALIFIER = `【本 route での subjectGr
 
 ・subjectGrades 未入力時はこの指示を一切適用せず、本文の質のみで採点・添削する。`;
 
+// DET-2: user prompt に【既知のNG指摘候補】section が来た時の解釈ルール。
+// AI が同じ phrase を再 discovery して weaknesses を機械的に並べることを抑え、
+// 改善提案 / 深い構造分析 / partial examples の質を上げる方向に token を割かせる。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const STATEMENT_REVIEW_NG_ISSUES_QUALIFIER = `【既知のNG指摘候補について】
+・user prompt に【既知のNG指摘候補】section が含まれている場合、それは deterministic ルールベース検出器が既に判定済みの NG パターンです。
+
+・同じ phrase に対して再判定や同じ趣旨の weaknesses を繰り返さないでください。weaknesses に機械的に並べる必要はありません。
+
+・検出済みの NG を踏まえた改善提案 / 深い構造分析 / 具体的な partial examples の質を上げることに token を割いてください。
+
+・deterministic 検出に含まれていない論理・具体性・大学一致・将来目標・独自性の弱点は従来通り自前で判断してください。
+
+・採点（totalScore / scores の 5 軸）には NG 検出を直接反映しない。採点は本文の質のみで行う（NG が多くても 5 軸の採点ルールを優先）。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
+// DET-4: user prompt に【既存構造分析】section が来た時の解釈ルール。
+// AI が同じ 6 要素（trigger / problem / action / learning / future / universityConnection）の
+// 検出を再 discovery することを避け、改善提案 / partialExamples / actions の質を上げる方向に
+// token を割かせる。DET-2 の NG_ISSUES_QUALIFIER と同形・同思想。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const STATEMENT_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER = `【既存構造分析について】
+・user prompt に【既存構造分析】section が含まれている場合、それは deterministic ルールベース検出器が既に判定済みの 6 要素（trigger / problem / action / learning / future / universityConnection）の評価結果です。各要素 0〜2 の整数で、2=明確に含まれる / 1=部分的 / 0=本文から読み取れない。
+
+・同じ 6 要素を再判定したり、同じ趣旨の weaknesses を機械的に並べたりしないでください。
+
+・検出済みのスコアを踏まえた改善提案 / partialExamples / actions の質を上げることに token を割いてください。特に score=0 の要素は本文に欠落している前提で、「何を 1 文追加すれば補えるか」を行動レベルで示してください。
+
+・採点（totalScore / scores の 5 軸: logic / specificity / universityFit / futureGoal / originality）には deterministic 構造分析結果を直接反映しない。採点は本文の質のみで行う（構造分析の合計を score に変換しない）。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
 export const STATEMENT_REVIEW_SYSTEM_PROMPT = `あなたは総合型選抜・学校推薦型選抜の指導に精通したアドバイザーです。
 
 ${SUBJECT_GRADES_SHARED_INSTRUCTION}
@@ -144,6 +227,10 @@ ${SUBJECT_GRADES_SHARED_INSTRUCTION}
 ${SUBJECT_GRADES_ASYMMETRY_RULE}
 
 ${STATEMENT_REVIEW_SUBJECT_GRADES_QUALIFIER}
+
+${STATEMENT_REVIEW_NG_ISSUES_QUALIFIER}
+
+${STATEMENT_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER}
 
 【基本ルール】
 - 志望理由書の全文を書き直したり、完成文を代わりに生成したりしてはいけません
@@ -239,10 +326,18 @@ export function buildStatementReviewPrompt(opts: StatementReviewPromptOptions): 
       ?? (opts.wallHittingResult ? toStudentProfile(opts.wallHittingResult) : null);
   const wallHittingSection = buildStatementStudentProfileContext(studentProfile);
   const examTypeGuidance = buildExamTypeStatementGuidance(basicInfo?.examTypes);
+  // DET-2: deterministic NG 検出結果（route.ts で detectNgWords を実行済）を section 化。
+  // 空ならそのまま空文字。SYSTEM_PROMPT 側の NG_ISSUES_QUALIFIER と組で動く。
+  const ngIssuesSection = buildNgIssuesSection(opts.ngIssues);
+  // DET-4: deterministic 構造分析結果（route.ts で analyzeStructure を実行済）を section 化。
+  // 空ならそのまま空文字。SYSTEM_PROMPT 側の STRUCTURE_ANALYSIS_QUALIFIER と組で動く。
+  // DET-2 の NG section と独立 / 共存。AI は両 section を踏まえて重複しない指摘に集中する。
+  const structureSection = buildStructureAnalysisSection(opts.structureAnalysis);
   const departmentLine = department ? `\n志望学科：${department}` : '';
 
   // 採点軸・トーン規律・JSON schema 等の static 部は STATEMENT_REVIEW_SYSTEM_PROMPT に
   // 切り出し済み（route.ts 側で system パラメータに渡す）。ここでは「今回の入力データ」だけを返す。
+  // section 配置順: ...examTypeGuidance → structureSection（大局）→ ngIssuesSection（細部）→ 【本文】
   return `以下の志望理由書を採点・添削してください。
 
 ${basicInfoSection}
@@ -251,6 +346,6 @@ ${basicInfoSection}
 志望大学：${university || '（未入力）'}
 志望学部：${faculty || '（未入力）'}${departmentLine}
 
-${universityDbSection ? `${universityDbSection}\n\n` : ''}${admissionFocusSection ? `${admissionFocusSection}\n\n` : ''}${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}【志望理由書本文】
+${universityDbSection ? `${universityDbSection}\n\n` : ''}${admissionFocusSection ? `${admissionFocusSection}\n\n` : ''}${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}${structureSection ? `${structureSection}\n\n` : ''}${ngIssuesSection ? `${ngIssuesSection}\n\n` : ''}【志望理由書本文】
 ${essay}`;
 }
