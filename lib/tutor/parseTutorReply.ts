@@ -15,6 +15,16 @@
 // 関連:
 //   - [lib/tutor/types.ts](./types.ts)（TutorFeature）
 //   - [app/tutor/components/TutorBubble.tsx](../../app/tutor/components/TutorBubble.tsx)（消費側）
+//
+// v15 (STEP-TUTOR-FINAL-05) — FEATURE_KEYWORDS を 2-tier 構造へ:
+//   ・STRONG tier: 明示的 PASSAI 機能名 (「面接練習」「志望理由書機能」「ガクチカ」等)。
+//     複数 feature keyword が混在する arrow 行で単純先勝ちによる誤分類を防ぐため bare より優先。
+//     優先順位は SYSTEM PROMPT [I] の発火優先順位
+//     (interview > statement > selfpr > self_analysis) と一致。
+//   ・BARE tier: bare 名詞 (「志望理由」「面接」等)。STRONG で no-match の場合のみ fallback。
+//     後方互換のため statement → interview 順を保持。
+//   外部 I/F (parseTutorReply, ParsedTutorReply, TutorReplySuggestion) と
+//   戻り値 shape は完全不変。TutorFeature enum (4 機能) も不変。
 
 import type { TutorFeature } from './types';
 
@@ -40,17 +50,39 @@ const FEATURE_LINKS = {
   selfpr: '/self-pr',
 } as const satisfies Record<TutorFeature, string>;
 
-// 優先順位: 自己分析 → 志望理由書 → 面接 → 自己PR（SYSTEM PROMPT [I] の宣言順と一致）。
-// 同一行に複数 keyword が含まれる場合、上から最初に一致したものが採用される。
+// STEP-TUTOR-FINAL-05: 2-tier 優先構造。
+//
+// 旧仕様 (single-list 先勝ち) では「→ 面接練習で『志望理由』の深掘り...」のような
+// arrow 行で、明示された feature (面接練習) より context 中の bare 名詞 (志望理由) が
+// 配列順上位だったため statement へ誤分類される問題があった。
+//
+// 修正方針:
+//   1. STRONG tier (明示的 PASSAI 機能名)
+//      ・「面接練習 / 面接対策 / 面接機能」「志望理由書機能 / 志望理由書」
+//        「自己PR / ガクチカ / PR文」「自己分析 / 壁打ち / 強み整理」
+//      ・上から順に評価。複数 strong が match した場合の優先順位は
+//        SYSTEM PROMPT [I] の発火優先順位 (interview > statement > selfpr > self_analysis) と一致
+//   2. BARE tier (fallback、STRONG で何も match しなかった場合のみ評価)
+//      ・「志望理由 / 志望動機」「面接」など bare 名詞
+//      ・既存挙動の後方互換のため statement → interview の順を維持
+//
 // keyword は小文字で保持し、case-insensitive 比較する（'自己PR' / '自己pr' 両対応）。
-const FEATURE_KEYWORDS: ReadonlyArray<{
+const FEATURE_KEYWORDS_STRONG: ReadonlyArray<{
   feature: TutorFeature;
   keywords: readonly string[];
 }> = [
-  { feature: 'self_analysis', keywords: ['自己分析', '壁打ち'] },
-  { feature: 'statement', keywords: ['志望理由書', '志望理由'] },
+  { feature: 'interview', keywords: ['面接練習', '面接対策', '面接機能'] },
+  { feature: 'statement', keywords: ['志望理由書機能', '志望理由書'] },
+  { feature: 'selfpr', keywords: ['自己pr', 'pr文', 'ガクチカ'] },
+  { feature: 'self_analysis', keywords: ['自己分析', '壁打ち', '強み整理'] },
+];
+
+const FEATURE_KEYWORDS_BARE: ReadonlyArray<{
+  feature: TutorFeature;
+  keywords: readonly string[];
+}> = [
+  { feature: 'statement', keywords: ['志望理由', '志望動機'] },
   { feature: 'interview', keywords: ['面接'] },
-  { feature: 'selfpr', keywords: ['自己pr', 'pr文'] },
 ];
 
 // 最終行が「→」で始まるかの判定。直後の空白は許容（半角・全角）。
@@ -76,13 +108,24 @@ export function parseTutorReply(reply: string): ParsedTutorReply {
     return { bodyText: normalized, suggestion: null };
   }
 
-  // feature keyword 検出（case-insensitive、優先順位の先勝ち）
+  // feature keyword 検出 (case-insensitive、2-tier 優先構造):
+  //   1) STRONG tier (明示的 PASSAI 機能名) を上から評価し最初に match した feature を採用
+  //   2) STRONG で何も match しなければ BARE tier (bare 名詞) を fallback として評価
+  // 詳細は FEATURE_KEYWORDS_STRONG / FEATURE_KEYWORDS_BARE の宣言コメント参照。
   const lastLineLower = lastLine.toLowerCase();
   let matchedFeature: TutorFeature | null = null;
-  for (const { feature, keywords } of FEATURE_KEYWORDS) {
+  for (const { feature, keywords } of FEATURE_KEYWORDS_STRONG) {
     if (keywords.some((kw) => lastLineLower.includes(kw))) {
       matchedFeature = feature;
       break;
+    }
+  }
+  if (matchedFeature === null) {
+    for (const { feature, keywords } of FEATURE_KEYWORDS_BARE) {
+      if (keywords.some((kw) => lastLineLower.includes(kw))) {
+        matchedFeature = feature;
+        break;
+      }
     }
   }
 

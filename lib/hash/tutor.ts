@@ -228,5 +228,57 @@
 //             ルールとして構造化する。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
-export const TUTOR_PROMPT_VERSION = 14;
+//   v14 → v15: 会話品質改修パック (TUTOR-FINAL-02/03/04) + parser 整合 (TUTOR-FINAL-05)。
+//             【SYSTEM PROMPT 改訂】
+//             ・TUTOR-FINAL-02 [C]/[M]/[N]:
+//                 - [C] 観察句頭の多様化ガイド + 代替言い出し 4 種を追加
+//                   ([U]: 「{topic}って、〜なんよね」型へのテンプレ収束を抑制)
+//                 - [M] 終端ルールに「質問形の多様化 (事実引き出し / 軽い確認 / A/B 二択)」
+//                   + 「A/B 二択 2 reply 連続禁止」「3 reply 連続同形質問禁止」を追加
+//                 - [N] 半敬体崩しの候補語を 4 → 7 種に拡張、「同一言い回しを 2 reply
+//                   連続で使わない」「冒頭 1 文目に同テンプレ毎回禁止」を追加
+//             ・TUTOR-FINAL-03 [I]:
+//                 - 「発火条件」サブセクション新設 (4 機能ごとにトリガキーワード列挙)
+//                 - 形式例 2 → 5 に拡張
+//                 - skip license を「発火条件キーワードに該当しないときのみ skip」へ
+//                   条件化 (「すべての返答に接続を入れる必要はありません」削除)
+//             ・TUTOR-FINAL-04 [I]:
+//                 - 発火を「既定」→「必ず出す (MUST)」へ強化、出力しなければ違反扱い
+//                 - 発火優先順位を明示 (interview > statement > selfpr > self_analysis)
+//                   + 具体例 4 つ
+//                 - 「→」prefix を独立 MUST rule 化 (parseTutorReply.ts:ARROW_PREFIX_PATTERN
+//                   仕様を理由として記述)
+//                 - 発火 = MUST と押し付けトーン禁止を分離して明示
+//                 - キーワード追加: 「この大学を選んだ理由」「深掘り質問」「ガクチカ」
+//                   「アピールポイント」「自分がわからない」「自己PRが書けない」
+//             【parser 整合 (TUTOR-FINAL-05)】
+//             ・lib/tutor/parseTutorReply.ts FEATURE_KEYWORDS を 2-tier 構造へ:
+//                 - STRONG tier: 明示的 PASSAI 機能名 (「面接練習」「面接対策」
+//                   「面接機能」「志望理由書機能」「志望理由書」「自己PR」「PR文」
+//                   「ガクチカ」「自己分析」「壁打ち」「強み整理」)。
+//                   優先順位 interview > statement > selfpr > self_analysis
+//                   (SYSTEM PROMPT [I] と一致)
+//                 - BARE tier (fallback): bare 名詞 「志望理由」「志望動機」「面接」。
+//                   STRONG で no-match の場合のみ評価。
+//                   後方互換のため statement → interview 順を保持
+//             【不変】
+//             ・条文 [A][B][D][E][F][G][H][J][K][L][O][P][Q][R][S][T] /
+//               [U-初動][U-多ターン継承] / [V] Advice モード独自構造と [V-9] 禁止事項 /
+//               [W][X][Y] 既存ルール / 【参考例】1〜5 / 【REALCHAT参考例】1〜4 /
+//               【V-参考例】1〜2 / 【W-参考例】1〜3 + NG/OK 例 / 【X-参考例】1〜3 +
+//               NG/OK 例 / 【Y-参考例】1〜3 + NG/OK 例 / intent enum / max_tokens /
+//               route 挙動 / context builder / detectTutorIntent /
+//               detectTutorStabilization / detectTutorSuggestedFeature /
+//               ai_policy 上位禁止事項 / TutorFeature enum (4 機能) /
+//               ParsedTutorReply / TutorReplySuggestion 戻り値 shape /
+//               FEATURE_LINKS whitelist / ARROW_PREFIX_PATTERN。
+//             【測定 (TUTOR-FINAL-04 QA, n=16)】
+//             ・機能誘導発火率: 9/16 (FINAL-03) → 12/16 (FINAL-04)
+//             ・期待 feature 一致率: 8/14 → 11/13 eligible
+//             ・「→」prefix 付与率: 8/9 → 12/12 (100%)
+//             【測定 (TUTOR-FINAL-05 parser, n=17)】
+//             ・17/17 pass。ユーザー指定 6 spec 全 pass、後方互換ゼロ回帰、negative 2 件 pass。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             SYSTEM PROMPT 本文と parser を改訂したため bump 規律として版を更新する。
+export const TUTOR_PROMPT_VERSION = 15;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
