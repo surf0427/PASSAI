@@ -66,6 +66,16 @@ import {
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/matching';
 
+// STEP DET-M1: deterministic reason 経路への切替フラグ。
+//   true（既定）: 既存の AI 経路を完全維持（generateUniversityDetail → Claude 呼び出し）。
+//   false      : Claude 呼び出しをスキップし、MatchingResult.reason
+//                （lib/matching/suggestUniversities が generateMatchReason /
+//                 generatePotentialMatchReason で deterministic に埋めた値）を
+//                そのまま AiMatchAdvice.reason として返す。
+// rollback は本定数を true に戻すだけ（1 commit revert で同等）。
+// 型は明示 boolean にして TS の literal narrowing による未到達分岐警告を回避する。
+const USE_AI_MATCHING_REASON: boolean = false;
+
 // safeParseJson<T> は lib/matching/safeParseJson.ts に切り出した。挙動・ログ文言は完全に同一。
 
 // 1大学分の詳細アドバイスを生成する。
@@ -184,6 +194,22 @@ export async function POST(req: Request) {
     const studentProfile = getStudentProfileFromRequest({ body, fallbackSource: selfAnalysis });
 
     const candidates = await generateUniversityCandidates(selfAnalysis, results);
+
+    // STEP DET-M1: deterministic 経路
+    //   USE_AI_MATCHING_REASON=false のとき Claude 呼び出しを丸ごとスキップし、
+    //   suggestUniversities が deterministic に算出済みの candidate.reason
+    //   （generateMatchReason / 潜在マッチ時 generatePotentialMatchReason 由来）を
+    //   そのまま AiMatchAdvice.reason として返す。
+    //   logAiUsage は AI 呼び出し時のみ発火する設計のため、本経路では route='api/matching'
+    //   の usage log line が 0 件になる（観測 KPI）。
+    if (!USE_AI_MATCHING_REASON) {
+      const advices: AiMatchAdvice[] = candidates.map((candidate) => ({
+        universityId: candidate.university.id,
+        reason: candidate.reason,
+      }));
+      return Response.json({ advices });
+    }
+
     // STEP-API-MATCHING-01:
     //   Promise.allSettled で 5 並列。1 大学失敗で他 4 件の token を浪費しない設計。
     //   - fulfilled : そのまま AiMatchAdvice を採用
