@@ -305,7 +305,18 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ── user prompt 合成 ──
-  const userPrompt = buildTutorUserPrompt({ contextString, userMessage: message });
+  // STEP-TUTOR-FINAL-06: intent=advice の場合のみ末尾に turn qualifier を 1 行追加。
+  //   SYSTEM PROMPT [V-1] は「intent=advice の turn のみ発動」と書かれているが、
+  //   SYSTEM PROMPT は static const のため AI は単独で「今回 turn の intent」を判別できず、
+  //   実測では [V] が発動せず通常 [J] (80〜200 字) に倒れる現象があった。
+  //   route 側で deterministic に判定済の intent を 1 行で AI に伝えることで [V] 活性化を保証する。
+  //   buildTutorUserPrompt の signature は不変、user prompt 末尾に行を 1 行 append するだけ。
+  //   本 qualifier 文言は SYSTEM PROMPT [V-1b] と整合させており、AI 出力に含まれないよう
+  //   prompt 側で抑止している。
+  let userPrompt = buildTutorUserPrompt({ contextString, userMessage: message });
+  if (intent === 'advice') {
+    userPrompt += '\n\n（本 turn: intent=advice。SYSTEM PROMPT の [V] block を必ず発動してください — 4〜6 文 / 300〜500 字 / 5 ステップ構造 (受け止め → 整理・命名 → 受験知識推奨 → 根拠 → 次アクション)。本 qualifier 行は AI 出力には含めないでください。）';
+  }
 
   // ── Anthropic 呼び出し ──
   // system 部のみ cache_control: 'ephemeral'（5 分以内連続呼び出しで input ~90% off）。
