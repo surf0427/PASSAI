@@ -108,9 +108,11 @@ export async function POST(request: Request): Promise<Response> {
   const activitySummary: string | null =
     typeof bodyObj.activitySummary === 'string' ? bodyObj.activitySummary : null;
 
-  // 日次バリエーション seed（PROMPT_VERSION v4）。client 側で 'YYYY-MM-DD' (JST) を生成して
-  // hash 入力 + 本 body にセットで送ってくる契約。route 側で再計算しない（client / server で
-  // hash 整合性が崩れるのを防ぐ）。形式が一致しない値は捨てて、legacy prompt（v3 互換）に落とす。
+  // 日次バリエーション seed（v4 で導入された seed 固定ロジック。現行 PROMPT_VERSION は
+  // lib/hash/interviewQuestions.ts の INTERVIEW_QUESTIONS_PROMPT_VERSION を参照）。
+  // client 側で 'YYYY-MM-DD' (JST) を生成して hash 入力 + 本 body にセットで送ってくる契約。
+  // route 側で再計算しない（client / server で hash 整合性が崩れるのを防ぐ）。
+  // 形式が一致しない値は捨てて、legacy prompt（v3 互換: seed なし）に落とす。
   const dailySeed: string | null =
     typeof bodyObj.dailySeed === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(bodyObj.dailySeed)
       ? bodyObj.dailySeed

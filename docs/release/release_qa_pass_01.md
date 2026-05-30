@@ -248,6 +248,7 @@ UX audit phase 1 で挙げられた S-01 / S-02 / S-03 は STEP-UX-FIX-01 〜 06
 - audit doc (`../ux/ux_audit_phase1.md` §14) の status と矛盾しない（矛盾を見つけたら audit doc を先に直し、本 doc は同期する）
 - 「未確認のまま pass 扱い」は禁止（§3 の判定凡例を厳守）
 - PROMPT_VERSION / cache identity / storage 形式 は不変
+- **prompt 本文を変更する PR では、対応する PROMPT_VERSION を必ず bump する**（対応表: [`../principles/ai_cache_observability.md`](../principles/ai_cache_observability.md) §6。bump 忘れは本番 cache silent corruption の最大原因）
 
 ---
 
@@ -281,6 +282,7 @@ grep -rn "alert(" app components hooks (excluding comments/tests)
 
 ## 13. 関連 doc
 
+- [`freeze.md`](./freeze.md) — リリース凍結境界の 1 枚 index（PR 着手前の gate）
 - [`../ux/ux_audit_phase1.md`](../ux/ux_audit_phase1.md) — UX audit 正本 (§14 が実施結果サマリ)
 - [`../principles/cleanup_phase_summary.md`](../principles/cleanup_phase_summary.md) — フェーズ全体 summary (§8b に UX fix フェーズ)
 - [`../principles/feedback_dev_principles.md`](../principles/feedback_dev_principles.md) — 開発方針

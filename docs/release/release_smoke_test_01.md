@@ -97,8 +97,10 @@ severity 凡例 (§5 と対応):
 | 30 | 全体 | no hydration mismatch | reload で `Text content did not match` 系 error が出ない | hydration error 0 件 | S | ⬜ | |
 | 31 | mobile | layout quick check | 375x812 viewport で #01 / #09 / #15 / #25 を視認 | テキスト切れ・横スクロール・button 重なり・絶対位置崩れなし | A | ⬜ | A-11 sticky bar 未対応は除外 |
 | 32 | mobile | cancel button tap | mobile viewport で #12 / #16 の cancel button が指で押せるサイズ | tap target 44px+、誤タップしない | A | ⬜ | STEP-UX-FIX-06d |
+| 33 | 面接 | 質問生成失敗時 fallback notice | `/interview/questions` で submit する直前に DevTools Network tab で `/api/interview-questions` を offline 化（or `Block request URL` でブロック）→ submit。再現が難しければ skip | LoadingProgress 終了後に **deterministic legacy 質問が表示** され、Preview 上部に amber notice「AI質問の生成に失敗したため、標準質問に切り替えました。練習はこのまま続けられます。」が表示される / red error banner は出ない / 「さらに質問を生成」など練習継続 UI は引き続き使える | A | ⬜ | STEP-CODE-CLEANUP-A4。`<FallbackNotice />` 経路。fallback mechanism 自体は初版から存在、A4 で文言改善 |
+| 34 | 面接 | フィードバック生成失敗時 fallback notice | `/interview/record` で必須項目入力 → submit する直前に DevTools Network tab で `/api/interview-feedback` を offline 化（or `Block request URL` でブロック）→ submit。再現が難しければ skip | spinner 終了後に **練習記録が保存され** (`savedMessage` 緑 AlertBox + 履歴リンク表示) かつ amber AlertBox「AIフィードバックの生成に失敗したため、簡易フィードバックを表示しています。」が `apiError` 領域と `savedMessage` の間に表示される / `addInterviewRecord` 自体は成功、履歴ページから記録が見える | A | ⬜ | STEP-CODE-CLEANUP-A4。catch 経路の `fallbackNotice` state |
 
-合計 **32 項目**。実施所要時間: 約 60-90 分 (1 人 1 ブラウザ)。
+合計 **34 項目**。実施所要時間: 約 65-95 分 (1 人 1 ブラウザ)。
 
 ---
 
@@ -170,6 +172,7 @@ browser: Chrome 132 (macOS) / Safari iOS 18 (iPhone 13)
 - runtime code を変更しない（手順書は記録のみ）
 - 既出 doc (`release_qa_pass_01.md`, `../ux/ux_audit_phase1.md`, `../principles/cleanup_phase_summary.md`) の判定と矛盾しない
 - PROMPT_VERSION / cache identity / storage 形式 は不変
+- **prompt 本文を変更する PR では、対応する PROMPT_VERSION を必ず bump する**（対応表: [`../principles/ai_cache_observability.md`](../principles/ai_cache_observability.md) §6。bump 忘れは本番 cache silent corruption の最大原因）
 - production env に **test だけのために特殊 flag** を立てない (常用環境で再現できないテストは smoke として価値がない)
 
 矛盾を見つけたら **対応する audit doc を先に直し、本 doc は同期する**。
@@ -178,6 +181,7 @@ browser: Chrome 132 (macOS) / Safari iOS 18 (iPhone 13)
 
 ## 8. 関連 doc
 
+- [`freeze.md`](./freeze.md) — リリース凍結境界の 1 枚 index（PR 着手前の gate）
 - [`release_qa_pass_01.md`](./release_qa_pass_01.md) — 静的 QA pass (本 smoke test の前提となる static review)
 - [`../ux/ux_audit_phase1.md`](../ux/ux_audit_phase1.md) — UX audit 正本 (§14 が実施結果サマリ)
 - [`../principles/cleanup_phase_summary.md`](../principles/cleanup_phase_summary.md) — フェーズ全体 summary (§8b に UX fix フェーズ)

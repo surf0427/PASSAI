@@ -1,3 +1,16 @@
+// 自己PR 添削向け plain text 応答 route（self-pr ページの「分析」ボタンから呼ばれる）。
+//
+// cache / PROMPT_VERSION 方針:
+//   - 本 route は **client cache を持たない**（同入力でも毎回 AI を呼ぶ）。
+//   - したがって **PROMPT_VERSION 管理対象外**。lib/hash/ にも対応する hash file は無い。
+//   - buildReasonPrompt の本文を変更しても cache invalidation は不要（cache 自体が無いため）。
+//   - 文言改修は PR description で明示する運用（docs/principles/ai_cache_observability.md §6.2 の
+//     「Has cache? = No の route」と整合）。
+//   - 現状 buildReasonPrompt は legacy `lib/prompts.ts` に置かれており、他 feature の
+//     `lib/prompts/<feature>Prompt.ts` 配置と非統一。配置統一は将来 STEP の候補で、本 route の
+//     挙動は不変。
+//
+// docs/principles/ai_cache_observability.md §6.1 / §6.3 を参照。
 import { buildReasonPrompt } from '@/lib/prompts';
 import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';

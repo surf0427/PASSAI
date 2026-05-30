@@ -54,6 +54,10 @@ export function InterviewRecordForm() {
   const [wallHittingResult] = useState<WallHittingResult | null>(() => loadWallHittingResult());
   const [savedMessage, setSavedMessage] = useState('');
   const [apiError, setApiError] = useState('');
+  // STEP-CODE-CLEANUP-A4: catch 経路の silent local fallback を可視化するための
+  // non-blocking notice。fallback 自体 (generateInterviewFeedback) は維持し、
+  // user に「簡易フィードバックに切り替わった」ことだけ伝える。空文字で非表示。
+  const [fallbackNotice, setFallbackNotice] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // questionsAndAnswers が変わるたびに自動保存（初回レンダリングはスキップ）
@@ -85,6 +89,7 @@ export function InterviewRecordForm() {
     setIsSubmitting(true);
     setApiError('');
     setSavedMessage('');
+    setFallbackNotice('');
 
     // Deprecated: questionsAsked / myAnswers は旧形式の文字列。
     // StoredInterviewRecord の互換フィールドへ格納するために生成する。
@@ -165,7 +170,11 @@ export function InterviewRecordForm() {
         feedbackJson = JSON.stringify(data.feedback);
       }
     } catch {
+      // STEP-CODE-CLEANUP-A4: network / fetch throw 経路の silent local fallback を可視化。
+      // fallback (generateInterviewFeedback) と保存フローは維持し、user に「AI 失敗 →
+      // 簡易フィードバックに切替」を non-blocking notice として伝える。
       improvementSummary = generateInterviewFeedback(myAnswers);
+      setFallbackNotice('AIフィードバックの生成に失敗したため、簡易フィードバックを表示しています。');
     }
 
     const newRecord: NewInterviewRecord = {
@@ -342,6 +351,16 @@ export function InterviewRecordForm() {
       {apiError && (
         <AlertBox variant="error" className="mb-8">
           <p className="text-sm text-red-700">{apiError}</p>
+        </AlertBox>
+      )}
+
+      {/* STEP-CODE-CLEANUP-A4: silent local fallback の可視化。
+          catch 経路で improvementSummary が generateInterviewFeedback(myAnswers) に
+          切り替わったときに表示。保存 (savedMessage) は通常通り表示されるため、
+          「保存はできた / フィードバックは簡易版」の両方が user に伝わる。 */}
+      {fallbackNotice && (
+        <AlertBox variant="warning" className="mb-8">
+          <p className="text-sm">{fallbackNotice}</p>
         </AlertBox>
       )}
 

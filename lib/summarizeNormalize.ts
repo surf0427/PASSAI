@@ -11,7 +11,10 @@
 //   - 「正規化された配列」は length == targetLength を必ず満たす
 //   - StudentProfile / SummaryResult / WallHittingResult には流さない（working memory 扱い）
 //
-// 関連: lib/aiInputHash.ts:hashSummarizeInput / lib/prompts.ts:buildSummarizePrompt
+// 関連: lib/hash/summarize.ts:hashSummarizeInput / lib/prompts/summarizePrompt.ts:buildSummarizePrompt
+// （hashSummarizeInput は STEP-LIB-02 で lib/aiInputHash.ts から分離、buildSummarizePrompt は
+//  STEP-LIB-04 で lib/prompts.ts から lib/prompts/summarizePrompt.ts へ移設。re-export shim 経由の
+//  `from '@/lib/prompts'` import は引き続き有効）
 
 import type { SummaryResult } from '@/types/analysis';
 

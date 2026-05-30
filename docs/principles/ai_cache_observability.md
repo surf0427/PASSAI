@@ -141,7 +141,64 @@ cache hit が daily limit を消費しないのは limit semantics が「AI 生�
 
 ---
 
-## 6. 改訂履歴
+## 6. Route → Prompt file → Hash file → Version 対応表
+
+リリース前コード整理（STEP-CODE-CLEANUP-A1, 2026-05-30）で棚卸し。**prompt 本文を変更する PR では、対応する `Version constant` を必ず bump すること**（§6.2 ルール参照）。本表は doc。コードは触らない。
+
+### 6.1 対応表
+
+`Has cache?` = client 側 localStorage cache 機構（hash → result）の有無。`No` の route は PROMPT_VERSION bump 概念を持たない（cache identity に絡まないため）。
+
+| Route | Prompt file | Hash file | Version constant | Current version | Model | Has cache? | Notes |
+|---|---|---|---|---|---|---|---|
+| `/api/analysis` | [`lib/prompts/analysisPrompt.ts`](../../lib/prompts/analysisPrompt.ts) | [`lib/hash/analysis.ts`](../../lib/hash/analysis.ts) | `ANALYSIS_PROMPT_VERSION` | `3` | `claude-sonnet-4-6` | Yes | `lib/aiInputHash.ts` 経由 re-export。`hashAnalysisInput` |
+| `/api/analysis/additional` | [`lib/prompts/additionalQuestionsPrompt.ts`](../../lib/prompts/additionalQuestionsPrompt.ts) | [`lib/hash/additionalQuestions.ts`](../../lib/hash/additionalQuestions.ts) | `ADDITIONAL_QUESTIONS_PROMPT_VERSION` | `2` | `claude-sonnet-4-6` | Yes | `hashAdditionalQuestionsInput` |
+| `/api/summarize` | [`lib/prompts/summarizePrompt.ts`](../../lib/prompts/summarizePrompt.ts) | [`lib/hash/summarize.ts`](../../lib/hash/summarize.ts) | `SUMMARIZE_PROMPT_VERSION` | `5` | `claude-sonnet-4-6` | Yes | `hashSummarizeInput` |
+| `/api/statement-review` | [`lib/statement/review/statementPrompt.ts`](../../lib/statement/review/statementPrompt.ts) | [`lib/hash/statementReview.ts`](../../lib/hash/statementReview.ts) | `STATEMENT_REVIEW_PROMPT_VERSION` | `8` | `claude-sonnet-4-6` | Yes | prompt は `lib/statement/review/` 配下（`lib/prompts/` ではない）。`hashStatementReviewInput`。`wallHittingResult` は v5 で hash 入力から除外（[`ai_score_contract.md`](./ai_score_contract.md) 参照） |
+| `/api/essay-review` | [`lib/prompts/essayReviewPrompt.ts`](../../lib/prompts/essayReviewPrompt.ts) | [`lib/hash/essayReview.ts`](../../lib/hash/essayReview.ts) | `ESSAY_REVIEW_PROMPT_VERSION` | `3` | `claude-sonnet-4-6` | Yes | `hashEssayReviewInput`。`buildExamTypeGuidance` ヘルパが route 内に存在（[`app/api/essay-review/route.ts`](../../app/api/essay-review/route.ts)）。同じパターンが `/api/essay-improve-summary` にもあるが共通化されていない（リリース後の整理候補） |
+| `/api/essay-improve-summary` | [`lib/prompts/essayImproveSummaryPrompt.ts`](../../lib/prompts/essayImproveSummaryPrompt.ts) | [`lib/hash/essayImproveSummary.ts`](../../lib/hash/essayImproveSummary.ts) | `ESSAY_IMPROVE_SUMMARY_PROMPT_VERSION` | `2` | `claude-sonnet-4-6` | Yes | `hashEssayImproveSummaryInput` |
+| `/api/interview-questions` | [`lib/interview/buildInterviewQuestionPrompt.ts`](../../lib/interview/buildInterviewQuestionPrompt.ts) | [`lib/hash/interviewQuestions.ts`](../../lib/hash/interviewQuestions.ts) | `INTERVIEW_QUESTIONS_PROMPT_VERSION` | `5` | `claude-sonnet-4-6` | Yes | prompt は `lib/interview/` 配下（`lib/prompts/` ではない）。**route 内 line 111 のコメント "PROMPT_VERSION v4" は stale**（現値は 5；v4 で導入された seed 機構の由来説明として残っているが、初見では誤読しやすい）。`hashInterviewQuestionsInput` |
+| `/api/tutor` | [`lib/tutor/tutorPrompt.ts`](../../lib/tutor/tutorPrompt.ts) | [`lib/hash/tutor.ts`](../../lib/hash/tutor.ts) | `TUTOR_PROMPT_VERSION` | `14` | `claude-sonnet-4-6` (`TUTOR_MODEL`) | No (server rate limit のみ) | prompt は `lib/tutor/` 配下。version は cache identity ではなく **bump 履歴 / observability** 用途として運用（[`lib/hash/tutor.ts`](../../lib/hash/tutor.ts) 冒頭コメント参照）。client cache は持たない |
+| `/api/essay-chat` | [`lib/prompts/essayChatPrompt.ts`](../../lib/prompts/essayChatPrompt.ts) | — | — | — | `claude-sonnet-4-6` | No | route line 9 に「cache を持たないため PROMPT_VERSION bump 対象外」と明示。**文言改修は PR description で明示**（version での自動 invalidate は無し） |
+| `/api/interview-feedback` | [`lib/prompts/interviewFeedbackPrompt.ts`](../../lib/prompts/interviewFeedbackPrompt.ts) | — | — | — | `claude-sonnet-4-6` | No | route line 23 に「localStorage cache に PROMPT_VERSION 概念を持たない（cache 自体なし）」と明示。文言変更は PR description 明示 |
+| `/api/matching` | [`lib/matching/matchingPrompt.ts`](../../lib/matching/matchingPrompt.ts) | — | — | — | `claude-sonnet-4-6` | Yes (`aiMatchAdviceCache` 単一 key) | matchingPrompt.ts line 24 に「PROMPT_VERSION 概念は持たないため、本 STEP の prompt 改修では cache を強制 invalidate しない」と明示。**特殊**: cache は単一 entry の localStorage key で、prompt 改修時はユーザーが「再診断する」ボタンを押すまで旧 reason が残る（仕様として許容） |
+| `/api/statement-prepare` | [`lib/statement/prepare/statementPreparePrompt.ts`](../../lib/statement/prepare/statementPreparePrompt.ts) | — | — | — | `claude-sonnet-4-6` | No | route line 123 に「statement-prepare には PROMPT_VERSION / hash / cache 機構がない」と明示。文言変更は PR description 明示 |
+| `/api/reason` | [`lib/prompts.ts`](../../lib/prompts.ts) (`buildReasonPrompt`) | — | — | — | `claude-sonnet-4-6` | No | self-pr ページから呼ばれる plain text 経路。cache 機構なし。route / prompt ファイルに version 関連コメントが **無い**（リリース後の整理候補：route 冒頭に「cache なし / PROMPT_VERSION 対象外」コメントを追加するか、または `buildReasonPrompt` を `lib/prompts/` 配下に移動して構成を統一） |
+
+### 6.2 PROMPT_VERSION bump ルール
+
+**Has cache? = Yes の route**:
+
+- prompt 本文（SYSTEM_PROMPT / user prompt builder の文字列）を変更したら、対応する `Version constant` を **必ず +1** する。
+- bump し忘れると、本番 cache が旧 prompt の結果を新 prompt の名のもとに返し続ける **silent corruption** が発生する（検出は KPI ログでしか不可能）。
+- 同 PR 内で hash 入力の shape を変えた場合も同様に bump。
+- bump 履歴は対応 hash file 冒頭のコメントブロックに 1 行追記する（既存 STEP 履歴の形式に揃える）。
+
+**Has cache? = No の route** (`/api/essay-chat`, `/api/interview-feedback`, `/api/statement-prepare`, `/api/reason`, `/api/tutor` は cache が無い):
+
+- version bump は不要。ただし **PR description に「prompt 文言を変えた」旨を明記** する（observability log との突合用）。
+- `/api/matching` は単一 entry cache のため、強制 invalidate は仕様として行わない（ユーザー操作待ち）。
+
+**特殊: `/api/tutor`**:
+
+- `TUTOR_PROMPT_VERSION` は cache identity 用途ではなく、bump 履歴と observability のためだけに維持されている。
+- 文言変更時は引き続き +1 することで bump 履歴の連続性を保つ（[`lib/hash/tutor.ts`](../../lib/hash/tutor.ts) 冒頭コメントの運用と一致）。
+
+### 6.3 棚卸しで観測したリスク（このPRでは触らない）
+
+A1 観測のみ。コード変更は別 STEP で扱う。
+
+| 項目 | 内容 | 影響度 |
+|---|---|---|
+| stale コメント | [`app/api/interview-questions/route.ts:111`](../../app/api/interview-questions/route.ts) の `PROMPT_VERSION v4` 表記が現値 5 と食い違う | 低（読者の誤読） |
+| version コメント不在 | [`app/api/reason/route.ts`](../../app/api/reason/route.ts) と [`lib/prompts.ts`](../../lib/prompts.ts) の `buildReasonPrompt` に cache/version 方針コメントが無い | 中（新規開発者が誤って「あるはず」と探す） |
+| prompt file 配置の不統一 | `/api/statement-review` `/api/interview-questions` `/api/tutor` `/api/matching` `/api/statement-prepare` の prompt は `lib/prompts/` 配下ではなく feature 別ディレクトリ（intentional だが initial reader に分かりにくい） | 低 |
+| route 内ヘルパの重複 | `buildExamTypeGuidance` 系が `/api/essay-review` と `/api/essay-improve-summary` の route ファイル内に類似実装で重複 | 中（リリース後の整理候補） |
+| version 集約 shim | [`lib/aiInputHash.ts`](../../lib/aiInputHash.ts) は 8 つの version を re-export する shim で、新規 route は直接 `lib/hash/<feature>.ts` から import 推奨（既存 import 経路は不変） | 低 |
+
+---
+
+## 7. 改訂履歴
 
 - 2026-05-11: 初版作成（STEP5.2）。`/api/analysis` への client-side input hash cache 導入と同時に整備。
 - 2026-05-11: STEP5.4 — `/api/analysis/additional` への横展開を追記。daily limit との関係を明文化。
@@ -149,3 +206,4 @@ cache hit が daily limit を消費しないのは limit semantics が「AI 生�
 - 2026-05-11: STEP5.10 — `/api/statement-review` への横展開を追記。hit 時の daily limit / history 扱いを明文化（hit は limit 不消費、history は append）。
 - 2026-05-11: STEP5.11 — `/api/essay-review` への横展開を追記（小論文添削 cache）。daily limit なし。
 - 2026-05-16: STEP-F — `/api/statement-review` の `STATEMENT_REVIEW_PROMPT_VERSION` を 4 → 5 に bump。`hashStatementReviewInput` から `wallHittingResult` を除外し、cache identity を canonical `studentProfile` 一本に揃えた（同素材を 2 object で二重 hash していたのを 1 object に縮める変更）。route.ts / prompt 本文は不変で、`fetch` body は両方を引き続き送信する（hash と body の intentional asymmetry）。bump により旧 v4 cache は一律 miss になる（intentional 1 回損失）。`studentProfile.generatedAt` drift の完全解消は別 STEP として残す（minimum migration）。
+- 2026-05-30: STEP-CODE-CLEANUP-A1 — §6 を新設。13 route × prompt file × hash file × Version constant の対応表と PROMPT_VERSION bump ルールを集約。observation のみで code 不変。`/api/interview-questions` route 内コメントの stale 表記等のリスク 5 件も同 §6.3 に記録。

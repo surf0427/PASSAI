@@ -104,9 +104,16 @@ function toPersonalizedCard(q: PersonalizedInterviewQuestion): CardModel {
 }
 
 function FallbackNotice() {
+  // STEP-CODE-CLEANUP-A4: silent fail 可視化の wording 調整。
+  // applyFallback() の deterministic 切替自体は維持し、文言だけ
+  // 「練習はこのまま続けられます」と明示して安心感を補強する。
   return (
-    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 mb-4 leading-relaxed">
-      AI 生成に失敗したため、通常の質問を表示しています。
+    <p
+      role="status"
+      aria-live="polite"
+      className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 mb-4 leading-relaxed"
+    >
+      AI質問の生成に失敗したため、標準質問に切り替えました。練習はこのまま続けられます。
     </p>
   );
 }
