@@ -27,7 +27,18 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             旧 v2 cache が新コードに hit すると applicantType を欠いた WallHittingResult が
 //             下流に流れるため lane 分離が必要で bump 必須（intentional 1 回 cache miss）。
 //             user prompt（buildWallHittingPrompt の戻り値）は byte-identical。
-export const ANALYSIS_PROMPT_VERSION = 3;
+//   v3 → v4 : Deterministic Audit P1-1 で「(B) 初期 5 問生成責務」を deterministic catalog
+//             （lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions）に移管。
+//             ANALYSIS_SYSTEM_PROMPT から「5. 深掘り質問」セクションと JSON schema の
+//             questions field を削除し、route 側で post-parse 時に deterministic な
+//             初期 5 問を WallHittingResult.questions に注入する。AI 出力は questions
+//             field を含まなくなったため、v3 cache（AI 生成 questions を含む）が
+//             新コードに hit すると stale な AI questions と新 catalog の二重生成経路が
+//             共存する。lane 分離のため bump 必須（intentional 1 回 cache miss）。
+//             hash 入力構造（HashAnalysisInput の signature）は不変。
+//             WallHittingResult の出力 shape は完全に不変（questions field は今まで通り
+//             string[5] が入る）。
+export const ANALYSIS_PROMPT_VERSION = 4;
 
 // /api/analysis が使用するモデル。server route.ts 側の MODEL 定数と一致させること。
 // モデル変更は cache invalidation の主因なので hash 入力に必ず含める。

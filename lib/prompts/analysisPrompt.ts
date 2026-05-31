@@ -32,12 +32,12 @@ import {
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildUniversityContextPromptSection } from '@/lib/buildUniversityContext';
 
-// buildWallHittingPrompt は現在 2 つの責務を 1 つのプロンプトで処理している:
-//   (A) profile 生成責務: 1. 活動の要約 / 2. 強み / 3. 弱み・補強 / 4. 将来とのつながり
-//   (B) 質問生成責務   : 5. 深掘り質問
-// app/api/analysis/route.ts のヘッダコメント参照。
-// 将来の分割計画では (A) は profile 専用プロンプトに、
-// (B) は buildAdditionalQuestionsPrompt 側に統合してこちらは廃止予定。
+// buildWallHittingPrompt は (A) profile 生成責務のみを担う:
+//   1. 活動の要約 / 2. 強み / 3. 弱み・補強 / 4. 将来とのつながり / 5. 受験生タイプ推定
+// (B) 質問生成責務（初期 5 問）は ANALYSIS_PROMPT_VERSION 3 → 4 の bump 時に
+// deterministic catalog（lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions）へ移管した。
+// route 側で post-parse 時に questions を deterministic に注入するため、本 prompt からは
+// 「5. 深掘り質問」セクションと JSON schema の questions field を削除している。
 export type BuildWallHittingOptions = {
   activityText: string;
 } & AnalysisPromptContext;
@@ -138,13 +138,7 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
    - この活動が「なぜ志望学部・将来像につながるか」の仮説
    - 受験生が言語化できていない「点と点を繋ぐ視点」を提示する
 
-5. 深掘り質問（必ず5問）
-   - questions は必ず5問だけ生成する（6問以上にしない / 4問以下にしない）
-   - AO面接・志望理由書のために必要な情報を引き出す質問
-   - 各質問に【カテゴリ】を付ける（例：【動機】【課題】【行動】【成果】【将来】）
-   - 「なぜ」「どのように」「その経験から何を得たか」を問う具体的な質問
-
-6. 受験生タイプの推定（applicantType）
+5. 受験生タイプの推定（applicantType）
    - 自己分析素材から「最も強い傾向」を以下の 5 種から 1 つだけ選ぶ
    - これは UI で本人に強く見せるためのものではなく、後続機能（志望理由書・面接・小論文 等）の
      添削方向を調整するための内部 context ラベル
@@ -182,13 +176,6 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
   "futureConnections": [
     "活動と将来をつなぐ仮説",
     "活動と将来をつなぐ仮説"
-  ],
-  "questions": [
-    "【カテゴリ】具体的な質問文",
-    "【カテゴリ】具体的な質問文",
-    "【カテゴリ】具体的な質問文",
-    "【カテゴリ】具体的な質問文",
-    "【カテゴリ】具体的な質問文"
   ],
   "applicantType": "activity_driven | issue_driven | academic_driven | growth_driven | value_driven のいずれか1つ"
 }`;

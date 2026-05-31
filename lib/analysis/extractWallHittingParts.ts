@@ -1,27 +1,30 @@
-// /api/analysis の AI 出力（WallHittingResult）を概念的に 2 つの責務へ分離するヘルパ。
+// /api/analysis の AI 出力（WallHittingResult）を概念的に責務分離するヘルパ。
 //
 // 役割:
 //   - extractProfileMaterial: WallHittingResult から questions を除いた「profile 素材」を取り出す
-//   - extractInitialQuestions: WallHittingResult から初期質問配列を取り出す
+//   - extractInitialQuestions: WallHittingResult から初期質問配列を取り出す（defensive helper）
 //   - ProfileMaterial 型: questions を除いた WallHittingResult の片割れ
 //
-// なぜ分離するか（/api/analysis route 元コメントより）:
-//   /api/analysis ルートは現在 2 つの責務を 1 回の AI 呼び出しで同時に処理している。
+// 責務分離:
+//   /api/analysis ルートは元々 2 つの責務を 1 回の AI 呼び出しで処理していた。
 //     (A) profile 生成責務 → summary / strengths / weaknesses / futureConnections
 //                          （= toStudentProfile() の入力となる canonical な分析素材）
 //     (B) 質問生成責務（初期 5 問固定） → questions
 //                          （= 壁打ちフロー内部の working memory）
+//   (B) は ANALYSIS_PROMPT_VERSION 3 → 4 の bump 時に AI 経路から外し、
+//   lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions で deterministic に生成する
+//   ようになった。route.ts は extractInitialQuestions ではなく buildInitialQuestions を使う。
 //   将来 /api/self-analysis/profile (=A) と /api/self-analysis/questions (=B) に分割する
-//   ときの境界線を、AI 出力 parse 後にコード上で明示する目的で本ヘルパ群を使う。
+//   ときの境界線は本ヘルパ群の責務分離が引き続き示す。
 //
-// 切り出し経緯:
-//   元は app/api/analysis/route.ts に同居していたが、route.ts 内 private のため Claude Code は
-//   route 全体を読まないと「責務境界の定義」が掴めなかった。lib/analysis/ 配下に逃がすことで
-//   将来の API 分割時の出力契約候補として参照しやすくする。AI 呼び出し経路 /
-//   ANALYSIS_SYSTEM_PROMPT / buildWallHittingPrompt / parse 経路とは無関係の純粋関数。
+// extractInitialQuestions の現状:
+//   PROMPT_VERSION 4 以降、AI 出力には questions field が含まれない（schema から削除）。
+//   本 helper はコールサイトを失った状態だが、defensive helper として残す:
+//     - 旧 cache（v3 以前）のテストデータを読む経路があれば assertion なしに空配列に倒せる
+//     - WallHittingResult の shape を読み出す「片割れ」契約のドキュメントとして機能する
 //
 // 注意:
-//   - 戻り値 ProfileMaterial / string[] の shape を変えてはいけない。POST handler 側で
+//   - 戻り値 ProfileMaterial の shape を変えてはいけない。POST handler 側で
 //     `{ ...profileMaterial, questions: initialQuestions }` の組み立て直しが
 //     WallHittingResult 出力スキーマと等価であることに依存している。
 //   - questions が array でない場合の空配列フォールバックは defensive guard として

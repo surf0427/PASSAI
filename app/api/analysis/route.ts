@@ -37,10 +37,8 @@ import { ANALYSIS_SYSTEM_PROMPT, buildWallHittingPrompt } from '@/lib/prompts/an
 import { anthropic, extractJson } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
-import {
-  extractInitialQuestions,
-  extractProfileMaterial,
-} from '@/lib/analysis/extractWallHittingParts';
+import { extractProfileMaterial } from '@/lib/analysis/extractWallHittingParts';
+import { buildInitialQuestions } from '@/lib/analysis/initialQuestionsCatalog';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
@@ -50,9 +48,12 @@ import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/analysis';
 
-// (A) profile 生成責務 (extractProfileMaterial / ProfileMaterial 型) と
-// (B) 質問生成責務 (extractInitialQuestions) の責務分離ヘルパは
-// lib/analysis/extractWallHittingParts.ts に切り出した。戻り値 shape は完全に同一。
+// (A) profile 生成責務 (extractProfileMaterial / ProfileMaterial 型) は
+// lib/analysis/extractWallHittingParts.ts。
+// (B) 質問生成責務（初期 5 問）は ANALYSIS_PROMPT_VERSION 3 → 4 の bump 時に
+// AI 経路から外し、lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions による
+// deterministic catalog へ移管した。WallHittingResult.questions の shape は不変
+// （5 件・`【カテゴリ】本文` 形式）。
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -94,9 +95,13 @@ export async function POST(req: Request) {
     //   STEP-API-MEASURE-01 で system prompt が ~4,145 chars / ~2,000 tokens（中央推定）と
     //   Sonnet 4-6 の 1,024 tokens 閾値を確実に上回ることを確認したうえで配備した。
     //   同一受験生による再分析 / 再生成で input cache hit による単価割引が期待される。
+    // max_tokens: questions (5 問) section を AI 出力から外したため、旧 2000 から 1600 に減量。
+    // profile 素材（summary 120 字 + strengths*3 + weaknesses*2 + futureConnections*2 +
+    // applicantType enum）の合計目安 ~600-900 tokens に対し 1600 は十分なヘッドルームを残す。
+    // truncation hardening は既存ロジックで継続して効く。
     const message = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 2000,
+      max_tokens: 1600,
       system: [
         {
           type: 'text',
@@ -163,9 +168,11 @@ export async function POST(req: Request) {
 
     // 概念的に 2 つの責務へ分離してから組み立て直す。
     // 後方互換のため WallHittingResult を返す（出力スキーマは温存）。
-    // 将来 API 分割時は profileMaterial と initialQuestions を別エンドポイントで返す。
+    // - profile 素材 (A) は AI 出力から取り出す
+    // - 初期 5 問 (B) は activityData 起点の deterministic catalog から生成する
+    //   （PROMPT_VERSION 4 で AI 生成責務を catalog に移管）
     const profileMaterial = extractProfileMaterial(parsed);
-    const initialQuestions = extractInitialQuestions(parsed);
+    const initialQuestions = buildInitialQuestions(activityData);
     // STEP B: applicantType は optional 出力。AI が 5 種 enum 以外（null / 未定義 /
     // 想定外の文字列）を返したケースは drop し、result の key 自体を出さない。
     // extractProfileMaterial は applicantType を picked field に含めないため、

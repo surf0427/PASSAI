@@ -12,8 +12,9 @@
 //
 // TODO（次フェーズ）:
 //   1. 初期質問の生成を /api/analysis から本ルートへ移し、profile API と完全分離する
-//   2. existingQuestions を hash 化して、同じ前提なら AI を呼ばず deterministic に「次の質問」を返す
-//      最適化を検討（軽量質問の token 削減）
+//   2. （実装済 / Deterministic Audit P1-2）existingQuestions を hash 化して、同じ前提なら
+//      AI を呼ばず deterministic fallback pool から「次の 2 問」を返す
+//      → lib/analysis/additionalQuestionsPool.ts:pickAdditionalQuestions
 
 import type { ActivityData } from '@/types/activity';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -29,6 +30,7 @@ import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContex
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
+import { pickAdditionalQuestions } from '@/lib/analysis/additionalQuestionsPool';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 側と同じパターン。model を切り替えるときはここを変えれば log も追従する。
@@ -58,6 +60,28 @@ export async function POST(req: Request) {
       code: validation.code,
     });
     return Response.json({ error: validation.message }, { status: 400 });
+  }
+
+  // Deterministic Audit P1-2: AI 呼び出し前に deterministic fallback pool を試行する。
+  // 同入力（activityData / existingQuestions / basicInfo / universityContext）から hash を作り、
+  // pool から重複しない 2 問が拾えた場合は AI を skip して即返す。
+  //   - response shape は変更なし（{ questions: string[] }）
+  //   - 既存 client cache (additionalQuestionsCache) には影響なし。client 側は同じ shape を保存
+  //   - skip 発火時は aiUsageLog を呼ばない（AI を消費していないため）。代わりに skip log を出す
+  //   - pool が枯渇（候補 < 2）した場合は null が返り、従来の AI 経路に倒れる
+  const skipResult = pickAdditionalQuestions({
+    activityData,
+    existingQuestions,
+    basicInfo,
+    universityContext,
+  });
+  if (skipResult !== null) {
+    console.info('additional questions deterministic skip', {
+      route: ROUTE,
+      hash: skipResult.hash,
+      existingCount: existingQuestions.length,
+    });
+    return Response.json({ questions: skipResult.questions });
   }
 
   const activityText = formatActivityData(activityData);
