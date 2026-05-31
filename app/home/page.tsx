@@ -318,6 +318,30 @@ export default function HomePage() {
         })}
       </div>
 
+      {/* マイページ（学習の積み重ね / スコア推移の振り返り）
+          配置方針: メイン 6 機能 grid と チューター section の間に、同形の soft Card
+          で並列配置。マイページは「進捗を見る」、チューターは「詰まった時に相談」と
+          責務が分かれた支援機能どうしなので、視覚的にも同じ帯にまとめる。
+          メイン grid の順序・内容は変更しない（学習フローを壊さないため）。 */}
+      <section className="mt-10">
+        <p className="text-xs text-gray-500 mb-3 px-1">学習の振り返り</p>
+        <Card variant="soft" padding="md">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="flex-1">
+              <h2 className="text-base font-bold text-gray-800 mb-1.5">マイページ</h2>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                学習の積み重ねとスコア推移を見る
+              </p>
+            </div>
+            <div className="shrink-0 sm:self-end">
+              <LinkButton href="/mypage" variant="outline" size="md">
+                マイページを見る
+              </LinkButton>
+            </div>
+          </div>
+        </Card>
+      </section>
+
       {/* 受験チューターAI（詰まった時の整理役、メイン 6 機能とは別の支援的役割）
           配置方針: メイン機能 grid の下に soft Card で分離。Header の nav には
           載せない（app/components/Header.tsx の方針: 上部ナビは Home / 基本情報のみ）。
