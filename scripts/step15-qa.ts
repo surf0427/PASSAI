@@ -313,6 +313,7 @@ function emptyActivityData(): ActivityData {
     contestActivities: [],
     readingActivities: [],
     hobbyActivities: [],
+    otherActivities: [],
   };
 }
 

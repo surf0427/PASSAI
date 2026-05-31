@@ -38,6 +38,10 @@ function buildActivitySummary(data: ActivityData): string {
   for (const a of data.contestActivities ?? []) {
     lines.push(`コンテスト「${a.contestName}」: ${a.result}`);
   }
+  // key: activityFormData > otherActivities
+  for (const a of data.otherActivities ?? []) {
+    lines.push(`その他「${a.activityName}」: ${a.description}`);
+  }
 
   return lines.join('\n');
 }

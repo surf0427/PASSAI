@@ -34,6 +34,7 @@ const KIND_ORDER: ActivityKind[] = [
   'club',
   'volunteer',
   'partTimeJob',
+  'other',
   'hobby',
   'reading',
   'certification',
@@ -106,6 +107,13 @@ const KIND_TEMPLATES: Record<ActivityKind, string[]> = {
     '【成果】資格取得を通して得られた力や、学び方の発見は何ですか。',
     '【将来】この資格を志望学部や将来の進路にどう活かしたいですか。',
   ],
+  other: [
+    '【動機】その活動を始めた最初のきっかけと、続けている理由を教えてください。',
+    '【課題】活動の中で一番苦労した場面と、その時に感じていたことは何でしたか。',
+    '【行動】その課題に対して、自分で工夫したことや取った行動を教えてください。',
+    '【成果】活動を通じて得られた力や、自分の中で変わったことは何ですか。',
+    '【将来】この経験を志望学部での学びや将来にどう接続させたいですか。',
+  ],
 };
 
 // 活動配列がすべて空（validateAnalysisInput を通った free-text のみのケース等）に備える
@@ -130,6 +138,7 @@ function pickPrimaryActivityKind(data: ActivityData): ActivityKind | null {
     contest: data.contestActivities.length,
     reading: data.readingActivities.length,
     hobby: data.hobbyActivities.length,
+    other: data.otherActivities.length,
   };
   let best: ActivityKind | null = null;
   let bestCount = 0;

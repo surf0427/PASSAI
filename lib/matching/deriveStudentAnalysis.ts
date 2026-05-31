@@ -59,8 +59,9 @@ export function deriveStudentAnalysis(
   const contestCount     = activityData.contestActivities.length;
   const certCount        = activityData.certificationActivities.length;
   const abroadCount      = activityData.studyAbroadActivities.length;
+  const otherCount       = activityData.otherActivities.length;
 
-  const totalActivities = clubCount + volunteerCount + researchCount + contestCount + abroadCount + activityData.partTimeJobActivities.length;
+  const totalActivities = clubCount + volunteerCount + researchCount + contestCount + abroadCount + activityData.partTimeJobActivities.length + otherCount;
 
   // ── AO スコア（ヒューリスティック） ─────────────────────────
   const aoScores = {

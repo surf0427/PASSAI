@@ -23,6 +23,7 @@ export function ActivityDataPreview({ activityData }: { activityData: ActivityDa
     { label: 'コンテスト', count: activityData.contestActivities.length },
     { label: '読書', count: activityData.readingActivities.length },
     { label: '趣味', count: activityData.hobbyActivities.length },
+    { label: 'その他', count: activityData.otherActivities.length },
   ].filter((c) => c.count > 0);
 
   return (

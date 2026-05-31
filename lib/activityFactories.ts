@@ -8,6 +8,7 @@ import type {
   ContestActivity,
   ReadingActivity,
   HobbyActivity,
+  OtherActivity,
 } from '@/types/activity';
 
 export function newClubActivity(): ClubActivity {
@@ -81,5 +82,14 @@ export function newHobbyActivity(): HobbyActivity {
   return {
     type: 'hobby',
     hobbyContent: '', frequency: '', reason: '', innovation: '', acquiredSkills: '',
+  };
+}
+export function newOtherActivity(): OtherActivity {
+  return {
+    type: 'other',
+    activityName: '',
+    period: { from: '', to: '' },
+    description: '', achievement: '', role: '',
+    challenge: '', action: '', reflection: '', futureConnection: '',
   };
 }

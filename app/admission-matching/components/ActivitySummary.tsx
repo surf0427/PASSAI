@@ -35,6 +35,8 @@ export function ActivitySummary({ activityData }: ActivitySummaryProps) {
     rows.push({ label: '読書', items: activityData.readingActivities.map((a) => a.favoriteBook) });
   if (activityData.hobbyActivities.length > 0)
     rows.push({ label: '趣味', items: activityData.hobbyActivities.map((a) => a.hobbyContent) });
+  if (activityData.otherActivities.length > 0)
+    rows.push({ label: 'その他', items: activityData.otherActivities.map((a) => a.activityName) });
 
   if (rows.length === 0) {
     return <p className="text-sm text-yellow-600">⚠ 活動が登録されていません</p>;

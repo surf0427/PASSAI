@@ -89,6 +89,7 @@ function buildActivityContext(data: ActivityData | null): string {
   if (data.studyAbroadActivities?.length) lines.push(`留学: ${data.studyAbroadActivities.length}件`);
   if (data.contestActivities?.length) lines.push(`コンテスト: ${data.contestActivities.length}件`);
   if (data.certificationActivities?.length) lines.push(`資格: ${data.certificationActivities.map((a) => a.certificationName).filter(Boolean).join('・') || `${data.certificationActivities.length}件`}`);
+  if (data.otherActivities?.length) lines.push(`その他: ${data.otherActivities.map((a) => a.activityName).filter(Boolean).join('・') || `${data.otherActivities.length}件`}`);
   if (lines.length === 0) return '';
   return ['【活動概要】', ...lines].join('\n');
 }

@@ -41,6 +41,10 @@ export function validateActivityForm(activityData: ActivityData): string[] {
     const n = i + 1;
     if (!a.hobbyContent.trim()) errs.push(`趣味${n}: 内容を入力してください`);
   });
+  activityData.otherActivities.forEach((a, i) => {
+    const n = i + 1;
+    if (!a.activityName.trim()) errs.push(`その他${n}: 活動名を入力してください`);
+  });
 
   return errs;
 }

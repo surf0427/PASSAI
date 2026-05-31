@@ -17,6 +17,7 @@ import type {
   ContestActivity,
   ReadingActivity,
   HobbyActivity,
+  OtherActivity,
 } from '@/types/activity';
 import {
   newClubActivity,
@@ -28,6 +29,7 @@ import {
   newContestActivity,
   newReadingActivity,
   newHobbyActivity,
+  newOtherActivity,
 } from '@/lib/activityFactories';
 
 const initialActivityData: ActivityData = {
@@ -40,6 +42,7 @@ const initialActivityData: ActivityData = {
   contestActivities: [],
   readingActivities: [],
   hobbyActivities: [],
+  otherActivities: [],
 };
 
 // マウント前 false / マウント後 true を返す flag。
@@ -265,6 +268,31 @@ export function useActivityForm() {
     }));
   }
 
+  // ── その他 ──────────────────────────────────────────────────────────────────
+
+  function addOtherActivity() {
+    setActivityData((prev) => ({ ...prev, otherActivities: [...prev.otherActivities, newOtherActivity()] }));
+  }
+  function removeOtherActivity(index: number) {
+    setActivityData((prev) => ({ ...prev, otherActivities: prev.otherActivities.filter((_, i) => i !== index) }));
+  }
+  function updateOtherActivity(index: number, field: keyof Omit<OtherActivity, 'type' | 'period'>, value: string) {
+    setActivityData((prev) => ({
+      ...prev,
+      otherActivities: prev.otherActivities.map((item, i) =>
+        i === index ? ({ ...item, [field]: value } as OtherActivity) : item
+      ),
+    }));
+  }
+  function updateOtherPeriod(index: number, field: 'from' | 'to', value: string) {
+    setActivityData((prev) => ({
+      ...prev,
+      otherActivities: prev.otherActivities.map((item, i) =>
+        i === index ? { ...item, period: { ...item.period, [field]: value } } : item
+      ),
+    }));
+  }
+
   // ── 送信 ─────────────────────────────────────────────────────────────────────
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -338,5 +366,6 @@ export function useActivityForm() {
     addContestActivity, removeContestActivity, updateContestActivity,
     addReadingActivity, removeReadingActivity, updateReadingActivity,
     addHobbyActivity, removeHobbyActivity, updateHobbyActivity,
+    addOtherActivity, removeOtherActivity, updateOtherActivity, updateOtherPeriod,
   };
 }

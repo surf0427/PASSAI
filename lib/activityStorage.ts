@@ -54,14 +54,32 @@ export function saveActivityData(data: ActivityData): void {
   safeSetStorage(STORAGE_KEY, data);
 }
 
+// 旧バージョンで保存された ActivityData に新規追加されたカテゴリ配列が
+// 欠落していても下流が `data.xxxActivities.length` 等で落ちないよう、
+// 全カテゴリ配列が必ず存在する形に正規化する。
+function normalizeActivityData(value: ActivityData): ActivityData {
+  return {
+    clubActivities: value.clubActivities ?? [],
+    volunteerActivities: value.volunteerActivities ?? [],
+    studyAbroadActivities: value.studyAbroadActivities ?? [],
+    researchActivities: value.researchActivities ?? [],
+    partTimeJobActivities: value.partTimeJobActivities ?? [],
+    certificationActivities: value.certificationActivities ?? [],
+    contestActivities: value.contestActivities ?? [],
+    readingActivities: value.readingActivities ?? [],
+    hobbyActivities: value.hobbyActivities ?? [],
+    otherActivities: value.otherActivities ?? [],
+  };
+}
+
 export function loadActivityData(): ActivityData | null {
-  const value = safeGetStorage<ActivityData | null>(STORAGE_KEY, null);
+  const raw = safeGetStorage<ActivityData | null>(STORAGE_KEY, null);
+  if (raw === null) return null;
+  const value = normalizeActivityData(raw);
   // ページロード直後の最初の autosave が「保存済 content と同一」なら no-op に
-  // なるよう cache を同期する。value が null のときは cache を初期化せず、
-  // 次の save が必ず走るようにする（空 → 任意 content への遷移を常に書き出す）。
-  if (value !== null) {
-    lastSavedJson = JSON.stringify(value);
-  }
+  // なるよう cache を同期する。normalize で fill された空配列を含む shape を
+  // 基準にすることで、次の save も byte-identical の場合だけ dedup が効く。
+  lastSavedJson = JSON.stringify(value);
   return value;
 }
 

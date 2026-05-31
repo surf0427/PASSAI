@@ -595,7 +595,7 @@ export default function SelfAnalysisPage() {
                 先に活動整理を入力すると、AIが自己分析に使える材料を読み込めます。
               </p>
               <Link
-                href="/activity"
+                href="/input/activity"
                 className="mt-4 inline-flex rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
               >
                 活動整理を入力する

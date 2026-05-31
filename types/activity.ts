@@ -101,6 +101,14 @@ export type HobbyActivity = {
   acquiredSkills: string;    // 得たスキル（任意）
 };
 
+// その他（既存カテゴリに当てはまらない活動：個人開発・SNS運営・家業手伝い等）
+// BaseActivity 準拠で、固有フィールドは activityName（活動名）のみ。
+// AI へは「活動カテゴリ: その他 / 活動名: ○○ / 活動内容: ○○」として渡す。
+export type OtherActivity = BaseActivity & {
+  type: 'other';
+  activityName: string;      // 活動名（必須） 例：個人開発、SNS運営
+};
+
 // すべての活動を表すユニオン型
 export type Activity =
   | ClubActivity
@@ -111,7 +119,8 @@ export type Activity =
   | CertificationActivity
   | ContestActivity
   | ReadingActivity
-  | HobbyActivity;
+  | HobbyActivity
+  | OtherActivity;
 
 // 全活動データをまとめる型
 export type ActivityData = {
@@ -124,4 +133,5 @@ export type ActivityData = {
   contestActivities: ContestActivity[];
   readingActivities: ReadingActivity[];
   hobbyActivities: HobbyActivity[];
+  otherActivities: OtherActivity[];
 };

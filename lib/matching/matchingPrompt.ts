@@ -117,6 +117,10 @@ function buildActivityContext(data: ActivityData | null): string {
     lines.push(
       `資格: ${data.certificationActivities.map((a) => a.certificationName).filter(Boolean).join('・') || `${data.certificationActivities.length}件`}`,
     );
+  if (data.otherActivities?.length)
+    lines.push(
+      `その他: ${data.otherActivities.map((a) => a.activityName).filter(Boolean).join('・') || `${data.otherActivities.length}件`}`,
+    );
   if (lines.length === 0) return '';
   return ['【活動整理の概要】', ...lines].join('\n');
 }

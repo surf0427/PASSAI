@@ -53,7 +53,8 @@ function checkActivityStatus(): ProgressStatus {
     data.certificationActivities.length > 0 ||
     data.contestActivities.length > 0 ||
     data.readingActivities.length > 0 ||
-    data.hobbyActivities.length > 0;
+    data.hobbyActivities.length > 0 ||
+    data.otherActivities.length > 0;
   if (!hasAnyActivity) return 'not_started';
   const wallHitting = loadWallHittingResult(); // key: 'wallHittingResult'
   return wallHitting ? 'completed' : 'in_progress';

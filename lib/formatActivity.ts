@@ -90,5 +90,14 @@ export function formatActivityData(activityData: ActivityData): string {
     if (a.innovation) lines.push(`失敗・苦労したこと: ${a.innovation}`);
   });
 
+  activityData.otherActivities.forEach((a, i) => {
+    lines.push(`【その他${i + 1}】`);
+    if (a.activityName) lines.push(`活動名: ${a.activityName}`);
+    if (a.period.from || a.period.to) lines.push(`期間: ${a.period.from}〜${a.period.to}`);
+    if (a.description) lines.push(`活動内容: ${a.description}`);
+    if (a.achievement) lines.push(`うまくいったこと: ${a.achievement}`);
+    if (a.challenge) lines.push(`失敗・苦労したこと: ${a.challenge}`);
+  });
+
   return lines.join('\n');
 }

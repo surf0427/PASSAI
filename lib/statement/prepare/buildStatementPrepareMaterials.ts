@@ -140,6 +140,16 @@ export function buildStatementPrepareMaterials(
         body: joinNonEmpty([a.reason, a.innovation, a.acquiredSkills]),
       }),
     );
+    activity.otherActivities.forEach((a, i) =>
+      pushIfBody(out, {
+        id: `other-${i}`,
+        source: '活動整理',
+        category: `その他 / ${a.activityName || '名称未設定'}`,
+        body: joinNonEmpty([a.role, a.description, a.achievement]),
+        reflection: a.reflection,
+        futureConnection: a.futureConnection,
+      }),
+    );
   }
 
   if (analyze?.analysis) {

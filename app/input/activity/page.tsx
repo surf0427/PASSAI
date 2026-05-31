@@ -14,6 +14,7 @@ import CertificationActivitySection from '@/components/activity/CertificationAct
 import ContestActivitySection from '@/components/activity/ContestActivitySection';
 import ReadingActivitySection from '@/components/activity/ReadingActivitySection';
 import HobbyActivitySection from '@/components/activity/HobbyActivitySection';
+import OtherActivitySection from '@/components/activity/OtherActivitySection';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 export default function ActivityPage() {
@@ -36,6 +37,7 @@ export default function ActivityPage() {
     addContestActivity, removeContestActivity, updateContestActivity,
     addReadingActivity, removeReadingActivity, updateReadingActivity,
     addHobbyActivity, removeHobbyActivity, updateHobbyActivity,
+    addOtherActivity, removeOtherActivity, updateOtherActivity, updateOtherPeriod,
   } = useActivityForm();
 
   if (isSubmitted) {
@@ -125,6 +127,15 @@ export default function ActivityPage() {
           onAdd={addHobbyActivity}
           onRemove={removeHobbyActivity}
           onUpdate={updateHobbyActivity}
+        />
+
+        <OtherActivitySection
+          activities={activityData.otherActivities}
+          errors={errors.filter(e => e.startsWith('その他'))}
+          onAdd={addOtherActivity}
+          onRemove={removeOtherActivity}
+          onUpdate={updateOtherActivity}
+          onUpdatePeriod={updateOtherPeriod}
         />
 
         <ActivityFormActions onReset={handleReset} isLoading={isLoading} isSuccess={isSuccess} />

@@ -82,7 +82,9 @@ const MIRROR_TABLE = "activity_mirrors";
 // Pin the current activityData canonical shape version. Bump on any change
 // to the ActivityData type, the BaseActivity shape, or any feature-specific
 // Activity type.
-const SCHEMA_VERSION = "1";
+// v1 → v2: 10 番目の top-level array `otherActivities` を ActivityData に追加
+// （STEP-ACTIVITY-OTHER-01: 既存カテゴリに収まらない活動を入力するための「その他」追加）。
+const SCHEMA_VERSION = "2";
 
 /**
  * Narrow envelope accepted by `mirrorActivityDataToSupabase`.
