@@ -305,6 +305,11 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ── user prompt 合成 ──
+  // なぜ userPrompt 末尾に intent=advice を載せるのか:
+  //   SYSTEM PROMPT は static const で AI に「今回 turn の intent」を伝える経路がないため、
+  //   server 側で判定済の intent=advice を user prompt 1 行で AI へ届け、[V] 活性化を保証する。
+  // 詳細仕様は SYSTEM PROMPT [V-1b] (TUTOR_PROMPT_VERSION v15→v16, TUTOR-FINAL-06) を参照。
+  //
   // STEP-TUTOR-FINAL-06: intent=advice の場合のみ末尾に turn qualifier を 1 行追加。
   //   SYSTEM PROMPT [V-1] は「intent=advice の turn のみ発動」と書かれているが、
   //   SYSTEM PROMPT は static const のため AI は単独で「今回 turn の intent」を判別できず、

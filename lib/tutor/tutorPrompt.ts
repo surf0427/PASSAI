@@ -53,6 +53,16 @@
 //       ・発火 MUST と押し付けトーン禁止を分離
 //   詳細は lib/hash/tutor.ts の v14 → v15 history comment を参照。
 //
+// v16 (TUTOR-FINAL-06) — Advice Mode 発動保証:
+//   [V-1b] intent=advice の検出サブセクションを新設:
+//       ・SYSTEM PROMPT が static const のため AI が単独で intent を判別できない構造を明文化
+//       ・user prompt 末尾の turn qualifier 行を intent=advice シグナルとして採用し
+//         [V-2] 以降の出力構造 (4〜6 文・300〜500 字・5 ステップ) を必ず適用
+//       ・qualifier 行自体は AI 出力に含めない (UX 混乱回避)
+//   ※ 既存 [V-1〜V-9] 本体は不変。app/api/tutor/route.ts 側で intent=advice 時に
+//      userPrompt 末尾へ qualifier 1 行を append する経路と整合。
+//   詳細は lib/hash/tutor.ts の v15 → v16 history comment を参照。
+//
 // v1.11 会話の前進（[Y]）追加の最終原則:
 //   Tutor は「原因分析 AI」ではなく「受験生を次の段階へ進めるチューター」を、prompt 構造
 //   として強制する。[W][X] で「解釈 → 正常化 → 原因仮説 → 優先順位 → 理由 → 質問」までを

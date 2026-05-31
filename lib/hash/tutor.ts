@@ -280,5 +280,44 @@
 //             ・17/17 pass。ユーザー指定 6 spec 全 pass、後方互換ゼロ回帰、negative 2 件 pass。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             SYSTEM PROMPT 本文と parser を改訂したため bump 規律として版を更新する。
-export const TUTOR_PROMPT_VERSION = 15;
+//   v15 → v16: Advice Mode 発動保証 (TUTOR-FINAL-06)。
+//             【SYSTEM PROMPT 改訂】
+//             ・[V-1b] intent=advice の検出サブセクション新設 (MUST):
+//                 - SYSTEM PROMPT は static const のため AI は単独で「今回 turn の intent」を
+//                   判別できない構造ギャップを明文化
+//                 - user prompt 末尾に turn qualifier 行が含まれる場合、それを intent=advice
+//                   シグナルとして採用し [V-2] 以降の出力構造 (4〜6 文・300〜500 字・
+//                   5 ステップ) を必ず適用するルールを追加
+//                 - [J] の「80〜200 字」「質問 1 個」「『私』主語禁止」は advice turn では
+//                   適用しないことを再度明示
+//                 - qualifier 行自体を AI 出力に含めない指示を追加 (UX 上の混乱回避)
+//             【route 改訂 (app/api/tutor/route.ts)】
+//             ・intent=advice の検出時に userPrompt 末尾へ turn qualifier 1 行を append:
+//                 「（本 turn: intent=advice。SYSTEM PROMPT の [V] block を必ず発動して
+//                   ください — 4〜6 文 / 300〜500 字 / 5 ステップ構造 (受け止め → 整理・命名
+//                   → 受験知識推奨 → 根拠 → 次アクション)。本 qualifier 行は AI 出力には
+//                   含めないでください。）」
+//             ・buildTutorUserPrompt の signature 不変、構造変更なし、append のみ
+//             ・既存 max_tokens=800 (STEP-MVP-E) と整合
+//             【測定 (TUTOR-FINAL-06 QA, n=15、全件 intent=advice)】
+//             ・Advice 発動率: 0/15 → 14/15 = 93% (chars >= 300 & sentences >= 4)
+//             ・平均字数: 約 140 字 (監査値) → 375.2 字
+//             ・字数範囲: 130-170 (監査値) → 295-495 (1 件のみ 295、他 14 件 300-500)
+//             ・Lv4 意見 ([V-4] 「私なら」等): 7/15 (allowed/not-required)
+//             ・次アクション具体性: 9/15 (「1 文だけ」「1 行だけ」等)
+//             ・qualifier 行の出力漏れ: 0/15 (prompt 抑止が完全遵守)
+//             【不変】
+//             ・条文 [A][B][C][D][E][F][G][H][I][J][K][L][M][N][O][P][Q][R][S][T][U] /
+//               [V-1][V-2][V-3][V-4][V-5][V-6][V-7][V-8][V-9] 既存ルール (本 STEP は
+//               [V-1b] の追加のみ・既存 V-* 改変なし) / [W][X][Y] / 【参考例】1〜5 /
+//               【REALCHAT参考例】1〜4 / 【V-参考例】1〜2 / 【W-参考例】1〜3 + NG/OK 例 /
+//               【X-参考例】1〜3 + NG/OK 例 / 【Y-参考例】1〜3 + NG/OK 例 /
+//               intent enum / max_tokens / context builder / detectTutorIntent /
+//               detectTutorStabilization / detectTutorSuggestedFeature /
+//               parseTutorReply / TutorFeature enum (4 機能) /
+//               ParsedTutorReply / TutorReplySuggestion 戻り値 shape /
+//               FEATURE_LINKS whitelist / ARROW_PREFIX_PATTERN / ai_policy 上位禁止事項。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             SYSTEM PROMPT 本文と route 経路を改訂したため bump 規律として版を更新する。
+export const TUTOR_PROMPT_VERSION = 16;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
