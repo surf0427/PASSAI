@@ -319,5 +319,52 @@
 //               FEATURE_LINKS whitelist / ARROW_PREFIX_PATTERN / ai_policy 上位禁止事項。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             SYSTEM PROMPT 本文と route 経路を改訂したため bump 規律として版を更新する。
-export const TUTOR_PROMPT_VERSION = 16;
+//   v16 → v17: interview redirect 確実性回復 (TUTOR-FINAL-07)。
+//             【SYSTEM PROMPT [I] 改訂】
+//             ・[I] に「[U] first-turn restraint および 【REALCHAT参考例】との関係」
+//               サブセクションを新設 (約 26 行追加):
+//                 - [U] と [I] が別レイヤーである旨を明示。[U] は本文側の構造
+//                   (観察+命名急がず軽く受け止める + 確認) を制御し、[I] の末尾
+//                   redirect 行を抑制しないことを明文化
+//                 - 【REALCHAT参考例】R-1〜R-4 は本文構造（「価値要素先・質問後」
+//                   200 字以内）の few-shot にすぎず、末尾 redirect 行の有無は
+//                   examples の対象外であることを明示。R-1〜R-4 が body-only で
+//                   あることを「redirect skip 許可」と誤解しないよう指示
+//                 - [I] redirect を抑制してよい先行 block を [G] 危険語 /
+//                   [F] 安定化 / [Q] Emotional gravity の 3 つに明示限定。
+//                   [U] first-turn restraint は本抑制リストに含まれないことを明記
+//                 - counter-example 1 件追加: R-1 と同入力「面接が苦手なんです」
+//                   に対し、body は R-1 と同等構造 + 末尾 redirect 1 行を付ける形を明示
+//             【目的】
+//             TUTOR-FINAL-04 で唯一残った I1「面接が苦手なんです」での arrow 不発火を
+//             解消する。root cause は REALCHAT R-1 が body-only few-shot として
+//             AI に学習されており、[I] の MUST rule よりも few-shot の影響が
+//             強かったため。[I] 内に明示的な disambiguation + counter-example を
+//             加えることで AI の重み付けを矯正する。
+//             【測定 (TUTOR-FINAL-07 QA, n=10)】
+//             ・I1「面接が苦手なんです」: ✗ → ✓ (arrow 発火、parser interview 分類)
+//             ・interview 短文 first-turn (4 ケース): 4/4 = 100% 発火
+//             ・stabilize 抑制 (STAB1「もう無理」/ STAB2「受験やめたい」): 2/2 保持
+//             ・REALCHAT R-2/R-3 type 入力 (志望理由書が書けない / 強みが分からない):
+//               regression なし、いずれも arrow 発火
+//             ・generic no-fire (G1「やる気」/ G2「親が反対」): 2/2 正しく抑制
+//             ・全体 10/10 = 100% pass、押し売り感ゼロ、reply 長 79-151 字 で baseline 維持
+//             【不変】
+//             ・条文 [A][B][C][D][E][F][G][H][J][K][L][M][N][O][P][Q][R][S][T] /
+//               [U-初動][U-多ターン継承] / [V-1][V-1b][V-2〜V-9] Advice モード /
+//               [W][X][Y] 既存ルール / 【参考例】1〜5 / 【REALCHAT参考例】1〜4
+//               (本文は無変更・[I] 内で referential disambiguation のみ) /
+//               【V-参考例】1〜2 / 【W-参考例】1〜3 + NG/OK 例 /
+//               【X-参考例】1〜3 + NG/OK 例 / 【Y-参考例】1〜3 + NG/OK 例 /
+//               intent enum / max_tokens / route 挙動 (qualifier append 含む) /
+//               context builder / detectTutorIntent / detectTutorStabilization /
+//               detectTutorSuggestedFeature / parseTutorReply / TutorFeature enum
+//               (4 機能) / ParsedTutorReply / TutorReplySuggestion 戻り値 shape /
+//               FEATURE_LINKS whitelist / ARROW_PREFIX_PATTERN / ai_policy 上位禁止事項。
+//             ・本 STEP の変更は SYSTEM PROMPT [I] block 内 1 箇所への追加のみ
+//               (約 26 行)。他の prompt block / parser / route / context builder /
+//               types は無変更。
+//             v1 では input hash cache を使わないため cache miss は発生しないが、
+//             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
+export const TUTOR_PROMPT_VERSION = 17;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';
