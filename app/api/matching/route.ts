@@ -59,6 +59,11 @@ import {
   buildMatchingUserPrompt,
   type BuildMatchingUserPromptOptions,
 } from '@/lib/matching/matchingPrompt';
+import {
+  MATCHING_RERANK_SYSTEM_PROMPT,
+  buildMatchingRerankPrompt,
+} from '@/lib/matching/rerankPrompt';
+import type { StudentProfile } from '@/types/studentProfile';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // 本 route は候補 5 大学それぞれに対して generateUniversityDetail() で 1 回ずつ
@@ -66,15 +71,17 @@ import {
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/matching';
 
-// STEP DET-M1: deterministic reason 経路への切替フラグ。
-//   true（既定）: 既存の AI 経路を完全維持（generateUniversityDetail → Claude 呼び出し）。
-//   false      : Claude 呼び出しをスキップし、MatchingResult.reason
-//                （lib/matching/suggestUniversities が generateMatchReason /
-//                 generatePotentialMatchReason で deterministic に埋めた値）を
-//                そのまま AiMatchAdvice.reason として返す。
-// rollback は本定数を true に戻すだけ（1 commit revert で同等）。
+// STEP DET-M1 / STEP-AUDIT-TOP1-5-FIX-01: マッチング reason の AI 経路。
+//   true       : AI 経路を有効化（generateUniversityDetail → Claude 呼び出し）。
+//                マッチング reason / strengthPoints / weaknesses / actionItems /
+//                matchSummary の 5 fields すべてを AI が個別最適化された narrative として
+//                生成する。client UI は `aiAdvice?.X ?? result.X` の fallback 経路を
+//                既に持つため、AI 出力が空 / 失敗の場合は generateReason.ts の
+//                deterministic テンプレに自動で倒れる。
+//   false      : Claude 呼び出しをスキップし、deterministic reason のみ返す（旧 DET-M1 経路）。
+// STEP-AUDIT-TOP1-5-FIX-01 で true に切替（マッチング reason が PASSAI の差別化価値の中核）。
 // 型は明示 boolean にして TS の literal narrowing による未到達分岐警告を回避する。
-const USE_AI_MATCHING_REASON: boolean = false;
+const USE_AI_MATCHING_REASON: boolean = true;
 
 // safeParseJson<T> は lib/matching/safeParseJson.ts に切り出した。挙動・ログ文言は完全に同一。
 
@@ -97,9 +104,10 @@ async function generateUniversityDetail(
   try {
     message = await anthropic.messages.create({
       model: MODEL,
-      // STEP1.1: AI 出力は reason（120字以内）のみに縮小したため 1500 → 500 へ。
-      // 余裕を持って 500 に設定（reason 本文 + 周辺 JSON 構造で約 200 tokens 想定）。
-      max_tokens: 500,
+      // STEP-AUDIT-TOP1-5-FIX-01: 出力 schema を 5 fields に拡張したため 500 → 1400 へ。
+      // reason 120 字 + strengthPoints*3 + weaknesses*2 + actionItems*3 + matchSummary 40 字 +
+      // JSON 構造の合計目安 ~700-1000 tokens に対し 1400 はヘッドルームを残す。
+      max_tokens: 1400,
       // STEP15d: system は固定文字列（MATCHING_SYSTEM_PROMPT）。5 大学呼び出し間で
       // 共有されるため cache_control: 'ephemeral' で prompt caching を効かせる。
       // user 側は候補大学ごとに変わる dynamic data。
@@ -127,14 +135,19 @@ async function generateUniversityDetail(
 
   const raw = message.content[0].type === 'text' ? message.content[0].text : '';
 
-  // STEP1.1: AI 出力は { universityId, reason } のみを信用する。
-  // strengthPoints / weaknesses / actionItems / nextStep は型上 optional として残しているが、
-  // 仮に AI が古いプロンプト記憶で返してきても無視し、UI 側の deterministic フォールバック
-  // （MatchingResult.* / generateReason.ts 由来）に揃える。
-  // universityId は AI 出力ではなく opts 側を真実とする（プロンプトでテンプレ埋めしているが安全側に倒す）。
-  let parsed: { reason?: unknown };
+  // STEP-AUDIT-TOP1-5-FIX-01: AI 出力 5 fields をすべて取り出す。
+  // universityId は opts 側を真実とする（プロンプトでテンプレ埋めしているが安全側に倒す）。
+  // 各 field が schema 違反 / 欠落の場合は空配列 / 空文字を返し、UI 側で
+  // `aiAdvice?.X ?? result.X` の deterministic fallback に倒れる。
+  let parsed: {
+    reason?: unknown;
+    strengthPoints?: unknown;
+    weaknesses?: unknown;
+    actionItems?: unknown;
+    matchSummary?: unknown;
+  };
   try {
-    parsed = safeParseJson<{ reason?: unknown }>(raw);
+    parsed = safeParseJson<typeof parsed>(raw);
   } catch (error) {
     // PR9d-2 / M3 marker:
     //   safeParseJson も内部で console.error を 2 行出す（"JSON parse failed:" /
@@ -146,20 +159,167 @@ async function generateUniversityDetail(
     throw error;
   }
   const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
+  const strengthPoints = Array.isArray(parsed.strengthPoints)
+    ? parsed.strengthPoints.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    : [];
+  const weaknesses = Array.isArray(parsed.weaknesses)
+    ? parsed.weaknesses.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    : [];
+  const actionItems = Array.isArray(parsed.actionItems)
+    ? parsed.actionItems.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    : [];
+  const matchSummary = typeof parsed.matchSummary === 'string' ? parsed.matchSummary : '';
 
   logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
-  return { universityId, reason };
+  // STEP-SILENT-FALLBACK-01: AI 出力が空 reason のときは fallback 注意を立てる。
+  // 既存 UI は `aiAdvice?.reason ?? result.reason` で deterministic テンプレに自動 fallback
+  // するが、ユーザーは AI が動いたのか不動だったのか判別できない問題があった。
+  // reason が空（AI が schema 違反 / 空文字を返した）の場合は明示的に fallback としてマーク。
+  if (reason.trim() === '') {
+    console.warn('[fallback]', {
+      route: ROUTE,
+      universityId,
+      reason: 'empty_ai_reason',
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      universityId,
+      reason,
+      strengthPoints,
+      weaknesses,
+      actionItems,
+      matchSummary,
+      reasonSource: 'fallback',
+      fallbackReason: 'empty_ai_reason',
+    };
+  }
+  return {
+    universityId,
+    reason,
+    strengthPoints,
+    weaknesses,
+    actionItems,
+    matchSummary,
+    reasonSource: 'ai',
+  };
 }
 
-// 大学候補リストを返す
-// 現在はクライアント側で生成済みの上位5件をそのまま使用。
-// TODO: 大学DBが整備されたら、universityContexts（admission policy 等）を見て
-//   AI に候補を再ランクさせる選択肢も検討する。
+// STEP-AUDIT-TOP1-5-FIX-01: AI rerank step。
+//   deterministic スコア層が選んだ上位 10 件を AI に渡し、生徒の個別文脈に基づいて
+//   Top 5 を選び直す。完全 AI 推薦ではなく hybrid（deterministic candidate selection →
+//   AI rerank → Top 5）。失敗時は deterministic スコア順 Top 5 にフォールバック。
+//
+//   入力候補数: 10 件（results.slice(0, 10)）
+//     - 10 を超える候補は rerank で無理に詰め込まず、deterministic 層を信用する
+//     - 10 件未満なら全件を rerank に渡す
+//
+//   AI 出力: { topUniversityIds: string[5] }
+//     - 入力候補に含まれない id は drop
+//     - 5 件未満が返ったら残りを deterministic 順で補完
+//     - parse failure / 空配列の場合は deterministic 順で返す
+const RERANK_POOL_SIZE = 10;
+const RERANK_MAX_TOKENS = 250; // universityId 5 件 + JSON 構造で十分
+
+async function rerankCandidatesWithAi(
+  pool: MatchingResult[],
+  studentProfile: StudentProfile | null,
+  basicInfo: BasicInfo | null,
+): Promise<MatchingResult[]> {
+  if (pool.length === 0) return [];
+  // pool 5 件以下なら rerank 不要（deterministic 順そのまま返す）
+  if (pool.length <= 5) return pool.slice(0, 5);
+
+  const userPrompt = buildMatchingRerankPrompt({
+    candidates: pool,
+    studentProfile,
+    basicInfo,
+  });
+
+  let message;
+  try {
+    message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: RERANK_MAX_TOKENS,
+      system: [
+        {
+          type: 'text',
+          text: MATCHING_RERANK_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [{ role: 'user', content: userPrompt }],
+    }, { signal: createTimeoutSignal() });
+  } catch (error) {
+    // network / API error: rerank をスキップして deterministic 順で返す
+    logAiUsage({ route: 'api/matching/rerank', model: MODEL, status: 'failed' });
+    console.warn('matching rerank: AI call failed, falling back to score order', {
+      name: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return pool.slice(0, 5);
+  }
+
+  if (message.stop_reason === 'max_tokens') {
+    logAiUsage({ route: 'api/matching/rerank', model: MODEL, status: 'truncated', usage: message.usage });
+    console.warn('matching rerank: truncated, falling back to score order');
+    return pool.slice(0, 5);
+  }
+
+  const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+  let parsed: { topUniversityIds?: unknown };
+  try {
+    parsed = safeParseJson<{ topUniversityIds?: unknown }>(raw);
+  } catch {
+    logAiUsage({ route: 'api/matching/rerank', model: MODEL, status: 'parse_failed', usage: message.usage });
+    console.warn('matching rerank: parse failed, falling back to score order');
+    return pool.slice(0, 5);
+  }
+
+  logAiUsage({ route: 'api/matching/rerank', model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+
+  const aiOrder = Array.isArray(parsed.topUniversityIds)
+    ? parsed.topUniversityIds.filter((id): id is string => typeof id === 'string')
+    : [];
+  if (aiOrder.length === 0) {
+    console.warn('matching rerank: empty topUniversityIds, falling back to score order');
+    return pool.slice(0, 5);
+  }
+
+  // 入力 pool に含まれる id だけ採用。重複は最初の出現だけ。
+  const poolById = new Map(pool.map((c) => [c.university.id, c]));
+  const seen = new Set<string>();
+  const reranked: MatchingResult[] = [];
+  for (const id of aiOrder) {
+    if (seen.has(id)) continue;
+    const candidate = poolById.get(id);
+    if (candidate) {
+      reranked.push(candidate);
+      seen.add(id);
+    }
+    if (reranked.length >= 5) break;
+  }
+  // AI が 5 件未満 / id 不正で揃わなかった分は deterministic 順で補完
+  if (reranked.length < 5) {
+    for (const candidate of pool) {
+      if (seen.has(candidate.university.id)) continue;
+      reranked.push(candidate);
+      seen.add(candidate.university.id);
+      if (reranked.length >= 5) break;
+    }
+  }
+  return reranked.slice(0, 5);
+}
+
+// 大学候補リストを返す。
+// deterministic スコア層が出した上位 RERANK_POOL_SIZE 件を AI に rerank させ、
+// 生徒の個別文脈に応じた Top 5 を返す。AI 失敗時は deterministic 順 Top 5 を返す。
 async function generateUniversityCandidates(
   _selfAnalysis: WallHittingResult,
   results: MatchingResult[],
+  studentProfile: StudentProfile | null,
+  basicInfo: BasicInfo | null,
 ): Promise<MatchingResult[]> {
-  return results.slice(0, 5);
+  const pool = results.slice(0, RERANK_POOL_SIZE);
+  return rerankCandidatesWithAi(pool, studentProfile, basicInfo);
 }
 
 export async function POST(req: Request) {
@@ -193,7 +353,12 @@ export async function POST(req: Request) {
     //   studentProfile を送る形に移行する。今は server-side 受け口だけ先行整備。
     const studentProfile = getStudentProfileFromRequest({ body, fallbackSource: selfAnalysis });
 
-    const candidates = await generateUniversityCandidates(selfAnalysis, results);
+    const candidates = await generateUniversityCandidates(
+      selfAnalysis,
+      results,
+      studentProfile,
+      basicInfo,
+    );
 
     // STEP DET-M1: deterministic 経路
     //   USE_AI_MATCHING_REASON=false のとき Claude 呼び出しを丸ごとスキップし、
@@ -245,11 +410,31 @@ export async function POST(req: Request) {
       // 失敗 candidate の fallback: universityId だけ確定させ、reason は空文字。
       // client 側の ResultView は空 reason でも crash せず（type 上 string なので空 OK）、
       // 既存 UI の deterministic fallback（MatchingResult.* / generateReason.ts 由来）に委ねる。
+      const errName = res.reason instanceof Error ? res.reason.name : 'UnknownError';
       console.error('matching candidate failed', {
         universityId: candidates[idx].university.id,
-        name: res.reason instanceof Error ? res.reason.name : 'UnknownError',
+        name: errName,
       });
-      return { universityId: candidates[idx].university.id, reason: '' };
+      // STEP-SILENT-FALLBACK-01: fallback 経路を明示。
+      // 失敗時の fallback: AI fields はすべて空。UI 側で `aiAdvice?.X ?? result.X` の
+      // deterministic fallback に倒れる。reasonSource='fallback' で UI が注意文を出せる。
+      console.warn('[fallback]', {
+        route: ROUTE,
+        universityId: candidates[idx].university.id,
+        reason: 'ai_call_failed',
+        errorName: errName,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        universityId: candidates[idx].university.id,
+        reason: '',
+        strengthPoints: [],
+        weaknesses: [],
+        actionItems: [],
+        matchSummary: '',
+        reasonSource: 'fallback' as const,
+        fallbackReason: 'ai_call_failed',
+      };
     });
 
     // 全 candidate 失敗 → 既存 UX 維持で 500 を返す（client 側 alert + 再診断）。

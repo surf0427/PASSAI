@@ -411,6 +411,17 @@ export default function EssayRewritePage() {
             <p className="text-xs font-semibold text-blue-700 mb-3">
               AI 改善方針
             </p>
+            {/* STEP-SILENT-FALLBACK-01: AI 失敗時 / 一部 fallback 時の注意文 */}
+            {(inProgress.summary.source === 'fallback' ||
+              inProgress.summary.source === 'partial') && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                <p className="text-xs text-amber-800 leading-relaxed">
+                  {inProgress.summary.source === 'fallback'
+                    ? '一時的にAI生成に失敗したため、基本テンプレートを表示しています。再生成をお試しください。'
+                    : '一部の内容は基本テンプレートで表示されています。必要に応じて再生成してください。'}
+                </p>
+              </div>
+            )}
             <p className="text-sm text-gray-800 leading-relaxed mb-3">
               {inProgress.summary.summary}
             </p>

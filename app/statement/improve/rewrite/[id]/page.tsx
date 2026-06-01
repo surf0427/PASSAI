@@ -175,17 +175,47 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
   // v4: weaknessText に含まれる引用語 or axis keyword を anchor に、essay 本文から
   // 「この文を直す」候補文を 1 つ拾う（pickRelevantExcerpt も pure deterministic）。
   // 該当無しの axis は excerpt: null となり、card 側で「現在の本文」セクションを skip する。
+  //
+  // STEP-STATEMENT-FALLBACK-01:
+  //   pickAnalysisForAxes が null を返す axis は IMPROVEMENT_REASONINGS / IMPROVEMENT_COMMENTS
+  //   の generic テンプレに silent fallback する設計だった。これは AI 出力と見分けがつかず、
+  //   ユーザーは「AI 分析由来の指摘」と誤認する可能性がある（監査 Top10 #2 の核と同型）。
+  //   axis ごとに weakness / action の source を 'ai' | 'fallback' で記録し、card に渡す。
+  //   両方 fallback の axis は card 上部に注意文を表示する。
   const analysisByAxis = useMemo(() => {
     const axisIds = suggestions.map((s) => s.id);
     const weakness = pickAnalysisForAxes(entry.result.weaknesses ?? [], axisIds);
     const action = pickAnalysisForAxes(entry.result.actions ?? [], axisIds);
     const excerpt: Record<string, string | null> = {};
+    const sourceByAxis: Record<string, 'ai' | 'partial' | 'fallback'> = {};
     for (const s of suggestions) {
       const wt = weakness[s.id] ?? s.reasoning;
       excerpt[s.id] = pickRelevantExcerpt(entry.essay, s.id, wt);
+      const wSource = weakness[s.id] !== null;
+      const aSource = action[s.id] !== null;
+      if (wSource && aSource) sourceByAxis[s.id] = 'ai';
+      else if (!wSource && !aSource) sourceByAxis[s.id] = 'fallback';
+      else sourceByAxis[s.id] = 'partial';
     }
-    return { weakness, action, excerpt };
+    return { weakness, action, excerpt, sourceByAxis };
   }, [entry.result, entry.essay, suggestions]);
+
+  // STEP-STATEMENT-FALLBACK-01: fallback 発火を 1 回だけ warn ログに出す（本文 / 個人情報は出力しない）。
+  // useEffect で 1 回だけ発火する設計（render 毎の log 連打を避ける）。setState を含まないため
+  // react-hooks/set-state-in-effect には抵触しない。
+  useEffect(() => {
+    const fallbackAxes = suggestions
+      .filter((s) => analysisByAxis.sourceByAxis[s.id] !== 'ai')
+      .map((s) => ({ axis: s.id, source: analysisByAxis.sourceByAxis[s.id] }));
+    if (fallbackAxes.length > 0) {
+      console.warn('[fallback]', {
+        route: 'app/statement/improve/rewrite',
+        reason: 'axis_analysis_fallback',
+        axes: fallbackAxes,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [analysisByAxis.sourceByAxis, suggestions]);
 
   // rewriteMemo は reviewId 単位で localStorage に永続化（statement_rewrite_memo）。
   // 2 つの artifact を持つ：
@@ -335,6 +365,7 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
               const weaknessText = analysisByAxis.weakness[axisKey] ?? s.reasoning;
               const actionText = analysisByAxis.action[axisKey] ?? s.comment;
               const excerptText = analysisByAxis.excerpt[axisKey] ?? null;
+              const source = analysisByAxis.sourceByAxis[axisKey] ?? 'ai';
               return (
                 <li key={`work-${s.id}`}>
                   <ImprovementActionCard
@@ -348,6 +379,7 @@ function RewritePrep({ entry }: { entry: ReviewHistoryItem }) {
                     actionText={actionText}
                     excerptText={excerptText}
                     example={IMPROVEMENT_EXAMPLES[s.id]}
+                    source={source}
                   />
                 </li>
               );

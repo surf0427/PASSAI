@@ -48,6 +48,7 @@ export function ImprovementActionCard({
   actionText,
   excerptText,
   example,
+  source,
 }: {
   index: number;
   suggestion: ImprovementSuggestion;
@@ -59,6 +60,13 @@ export function ImprovementActionCard({
   actionText: string;
   excerptText: string | null;
   example: AxisExample | undefined;
+  // STEP-STATEMENT-FALLBACK-01:
+  //   weaknessText / actionText の出力元。
+  //   'ai'       : 両方とも分析レポート由来（pickAnalysisForAxes が hit）
+  //   'partial'  : weakness / action の片方だけ AI 由来、片方は generic 軸テンプレ
+  //   'fallback' : 両方とも generic 軸テンプレ（pickAnalysisForAxes が hit せず）
+  //   省略時は 'ai' 扱いで従来挙動を維持（後方互換）。
+  source?: 'ai' | 'partial' | 'fallback';
 }) {
   const filledCount = questions.reduce(
     (n, q) => n + (answers[q.key] && answers[q.key]!.length > 0 ? 1 : 0),
@@ -95,6 +103,23 @@ export function ImprovementActionCard({
         </span>
       </summary>
       <div className="space-y-5 px-4 sm:px-5 pb-5 pt-1">
+        {/* STEP-STATEMENT-FALLBACK-01: AI 由来でない場合の注意文。
+            両方 fallback のときは「テンプレートを表示しています」、片方だけ AI のときは
+            「一部の内容は基本テンプレートで表示されています」と文面を切り替える。 */}
+        {source === 'fallback' && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+            <p className="text-xs text-amber-800 leading-relaxed">
+              この軸は分析レポートから具体的な指摘が取得できなかったため、基本テンプレートを表示しています。必要に応じて再分析をお試しください。
+            </p>
+          </div>
+        )}
+        {source === 'partial' && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+            <p className="text-xs text-amber-800 leading-relaxed">
+              一部の内容は基本テンプレートで表示されています。必要に応じて再分析をお試しください。
+            </p>
+          </div>
+        )}
         {/* 1. analysis 由来の essay-specific な指摘（card の主役） */}
         <p className="text-sm text-slate-800 leading-relaxed break-words">
           {weaknessText}

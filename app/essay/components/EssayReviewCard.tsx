@@ -21,6 +21,12 @@ export function EssayReviewCard({
   review: ReviewEntry;
   index: number;
 }) {
+  // STEP-SILENT-FALLBACK-01:
+  //   review.source が 'fallback' / 'partial' のとき、AI 出力ではなく基本テンプレートが
+  //   含まれている可能性があるため UI で明示する。旧データ（source=undefined）は従来挙動。
+  const isFallback = review.source === 'fallback';
+  const isPartial = review.source === 'partial';
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5">
       {/* ヘッダ: 回数 + 日時 + verdict + totalScore */}
@@ -37,6 +43,17 @@ export function EssayReviewCard({
           </span>
         </div>
       </div>
+
+      {/* STEP-SILENT-FALLBACK-01: fallback 注意文 */}
+      {(isFallback || isPartial) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+          <p className="text-xs text-amber-800 leading-relaxed">
+            {isFallback
+              ? '一時的にAI生成に失敗したため、基本テンプレートを表示しています。再生成をお試しください。'
+              : '一部の内容は基本テンプレートで表示されています。必要に応じて再生成してください。'}
+          </p>
+        </div>
+      )}
 
       {/* breakdown 5 軸 */}
       {review.breakdown.length > 0 && (

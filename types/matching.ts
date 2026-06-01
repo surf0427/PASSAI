@@ -156,35 +156,54 @@ export type MatchingResult = {
 // 文章生成層 (/app/api/matching/route.ts) が大学ごとに返す narrative。
 // スコアリング層の MatchingResult と組み合わせて表示する。
 //
-// STEP1.1（AI 出力責務削減）以降、AI が生成するのは reason のみ。
-// strengthPoints / weaknesses / actionItems / nextStep は deterministic 側
-// （MatchingResult.* / lib/matching/generateReason.ts）へ委譲した。
-// 旧キャッシュ（localStorage:matchingResult）には 4 フィールドが残っている可能性が
-// あるため、型は optional として残す（読み出し互換のため・破壊的変更を避ける）。
-// UI は `aiAdvice?.strengthPoints ?? result.strengthPoints` のように
-// MatchingResult.* にフォールバックする経路を持つ。
+// STEP-AUDIT-TOP1-5-FIX-01: AI 出力責務を 5 fields に拡張した。
+//   reason / strengthPoints / weaknesses / actionItems / matchSummary を AI が個別最適化された
+//   narrative として生成する。client UI は `aiAdvice?.X ?? result.X` の fallback 経路で、
+//   AI 出力が空 / 失敗の場合は generateReason.ts の deterministic テンプレに自動的に倒れる。
+//
+// 旧 STEP1.1 で deprecated 化されていた 3 fields（strengthPoints / weaknesses / actionItems）は
+// 本 STEP で active output に復帰。`@deprecated` notation を解除する。
+// optional は維持する: (1) 失敗 candidate の空オブジェクト fallback で空配列を返すケース、
+// (2) 旧 cache（v6 以前）に reason field のみが残っている可能性があるため。
 
 export type AiMatchAdvice = {
   universityId: string;
   reason: string;
   /**
-   * @deprecated STEP1.1 以降、AI からは生成しない。
-   * 表示は `MatchingResult.strengthPoints`（generateReason.ts）にフォールバックする。
-   * 旧 localStorage キャッシュ読み出し互換のため optional として残置。
+   * この大学の評価軸に直接接続する生徒の強み（1〜3 件・40〜80 字 each）。
+   * AI 失敗時は空配列。UI は `MatchingResult.strengthPoints` にフォールバックする。
    */
   strengthPoints?: string[];
   /**
-   * @deprecated STEP1.1 以降、AI からは生成しない。
-   * 表示は `MatchingResult.weaknesses`（generateReason.ts）にフォールバックする。
+   * この大学を受験する上で補強が必要な点（1〜2 件・40〜80 字 each）。
+   * AI 失敗時は空配列。UI は `MatchingResult.weaknesses` にフォールバックする。
    */
   weaknesses?: string[];
   /**
-   * @deprecated STEP1.1 以降、AI からは生成しない。
-   * 表示は `MatchingResult.actionItems`（generateReason.ts）にフォールバックする。
+   * 生徒が今から取れる具体的アクション（1〜3 件・40〜80 字 each・行動レベル）。
+   * AI 失敗時は空配列。UI は `MatchingResult.actionItems` にフォールバックする。
    */
   actionItems?: string[];
   /**
-   * @deprecated UI で未参照の dead output。STEP1.1 で AI 生成からも除去。
+   * 候補一覧で一目見て分かるマッチ感の 1 行サマリ（40 字以内）。
+   * AI 失敗時は空文字。UI は `MatchingResult.matchSummary` にフォールバックする。
+   */
+  matchSummary?: string;
+  /**
+   * STEP-SILENT-FALLBACK-01: reason 出力元の明示。
+   *   'ai'       : Claude 呼び出し成功・AI 生成 reason
+   *   'fallback' : AI 失敗 / parse 失敗 → MatchingResult.reason（deterministic テンプレ）を表示
+   * 旧 cache データには本 field が無いため optional とする（UI は undefined を 'ai' 扱いせず
+   * 「不明 = AI として表示」の従来挙動を保ち、明示 'fallback' のみ注意文を出す）。
+   */
+  reasonSource?: 'ai' | 'fallback';
+  /**
+   * STEP-SILENT-FALLBACK-01: fallback 発火時の structured code（個人情報なし）。
+   * 例: 'ai_call_failed' / 'parse_failed' / 'truncated'
+   */
+  fallbackReason?: string;
+  /**
+   * @deprecated UI で未参照の dead output。STEP1.1 で AI 生成からも除去済み。
    */
   nextStep?: string;
 };

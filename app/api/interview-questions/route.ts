@@ -76,12 +76,23 @@ const TEMPERATURE = 0.4;
 //   - 1 回まで（無限 retry 禁止）
 //   - 補足指示はあくまで「主題分散と固定重要枠維持」だけ。AI に大幅修正を促さない
 //   - retry 後の出力に対しても validate するが、ここで fail しても warning log のみで返却
-const VALIDATION_RETRY_HINT = `【再生成時の補足指示】
-前回の生成では personalized 質問に偏りまたは固定重要枠の欠落が検出されました。今回は以下を厳守してください:
-・personalized 5 問のうち、同一活動だけを扱う質問が 3 問を超えないようにする。
-・固定重要枠（authenticity_check / university_fit / future_goal）を personalized から欠落させない。
-・素材で繰り返し言及される最重要エピソードを personalized から完全に消さない（最低 1 問は扱う）。
-他のルール（件数 5+5 / category 許可値 / 代筆禁止 / authenticity_check の作り方 / 出力 JSON 形式）は完全に維持してください。`;
+//
+// STEP-AUDIT-TOP1-5-FIX-01: retry hint を緩和した。
+//   旧 hint は「3 問を超えない / 固定枠を欠落させない / 重要エピソードを消さない」と
+//   厳格な禁止条項を並べていたため、AI が萎縮して bland な質問になる副作用が観測された
+//   （Top10 リスク #7）。新 hint では「禁止」だけを伝え、質問の中身（深掘り度・固有名詞言及・
+//   個性）は AI judgement に委ねる。これは「AI に大幅修正を促さない」既存ポリシーを
+//   弱める方向ではなく、「禁止だけ伝えて創造性を保つ」方向の refinement。
+const VALIDATION_RETRY_HINT = `【再生成時の調整事項（最小限の禁止のみ）】
+前回の生成では以下のいずれかが検出されました。今回はこれだけ避けてください。
+他のルール・トーン・深掘り度・固有名詞への言及は前回と同じ品質を維持してください。
+・personalized 5 問の中で、同一活動 1 つだけに 4 問以上を集中させない。
+・固定重要枠（authenticity_check / university_fit / future_goal）のどれかを丸ごと欠落させない。
+
+【重要】上記 2 点以外は前回の質問の質を落とさないでください。
+質問が抽象的 / generic に倒れる方が、上記の偏り問題よりも大きな品質劣化です。
+各質問は活動内容の固有要素（活動名・テーマ・場面・数字など）に直接言及し、
+受験生が具体的なエピソードを思い出せる聞き方にしてください。`;
 
 export async function POST(request: Request): Promise<Response> {
   let body: unknown;

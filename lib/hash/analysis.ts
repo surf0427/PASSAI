@@ -38,7 +38,26 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             hash 入力構造（HashAnalysisInput の signature）は不変。
 //             WallHittingResult の出力 shape は完全に不変（questions field は今まで通り
 //             string[5] が入る）。
-export const ANALYSIS_PROMPT_VERSION = 4;
+//   v4 → v5 : STEP-SELFANALYSIS-QUESTION-QUALITY-01 で「(B) 初期 5 問生成責務」を
+//             deterministic catalog から AI 生成に戻した。catalog が固定テンプレで activity
+//             の中身に言及しない generic 質問しか返せず、PASSAI 自己分析機能の中核価値
+//             （活動ごとに個別最適化された深掘り）を毀損していたため。
+//             ANALYSIS_SYSTEM_PROMPT に「6. 深掘り質問（必ず5問）」セクションを追加し、
+//             JSON schema にも questions field を復活。route 側は buildInitialQuestions の
+//             呼び出しを撤去し extractInitialQuestions(parsed) で AI 出力を取り出す。
+//             v4 cache（AI 出力に questions を含まない）が新コードに hit すると
+//             extractInitialQuestions が空配列を返し UX が破綻するため lane 分離が必要で
+//             bump 必須（intentional 1 回 cache miss）。
+//             hash 入力構造（HashAnalysisInput の signature）は不変。
+//             WallHittingResult の出力 shape は完全に不変。
+//   v5 → v6 : STEP-SELFANALYSIS-QUESTION-QUALITY-02 で「6. 深掘り質問」セクションに
+//             【読みやすさ要件】と NG / OK 例を追加。「1 質問に複数の問いを詰め込まない」
+//             「主問いは原則 1 つ・補助問いは最大 1 つ」「60〜110 字目安」を明文化し、
+//             活動への具体言及を維持したまま UX 上の答えやすさを改善する。
+//             generic 質問禁止ルール・5 軸構造・出力 schema は不変。
+//             prompt の指示が増えるため v5 cache の意味的妥当性が変わり lane 分離が
+//             必要で bump 必須（intentional 1 回 cache miss）。
+export const ANALYSIS_PROMPT_VERSION = 6;
 
 // /api/analysis が使用するモデル。server route.ts 側の MODEL 定数と一致させること。
 // モデル変更は cache invalidation の主因なので hash 入力に必ず含める。

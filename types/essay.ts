@@ -48,6 +48,10 @@ export type ReviewEntry = {
   createdAt: string; // ISO
   essayBodySnapshot: string; // この review 時点の本文
   sourceIssueId?: string; // 再添削起点となった issue。初回 review は undefined
+  // STEP-SILENT-FALLBACK-01: AI 出力 / fallback の判別（optional・旧データ互換）。
+  source?: 'ai' | 'partial' | 'fallback';
+  parseError?: boolean;
+  fallbackReason?: string;
 };
 
 // AI が生成する改善方針の整理結果（essay STEP F 新規）。
@@ -69,6 +73,14 @@ export type ImprovementSummary = {
   summary: string;
   focusPoints: string[];
   suggestedDirections: string[];
+  // STEP-SILENT-FALLBACK-01:
+  //   source='ai'       : AI 出力が正常採用
+  //   source='partial'  : 一部 field のみ FALLBACK_* で補完
+  //   source='fallback' : data 全体が非 object（完全 parse 失敗）
+  // optional のため旧データ / 旧クライアントとの互換性は保たれる。
+  source?: 'ai' | 'partial' | 'fallback';
+  parseError?: boolean;
+  fallbackReason?: string;
 };
 
 // 改善ワーク 1 個分（issue 単位の Q&A snapshot）。

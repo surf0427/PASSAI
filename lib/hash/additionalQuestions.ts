@@ -16,7 +16,17 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             ADDITIONAL_QUESTIONS_SUBJECT_GRADES_QUALIFIER を SYSTEM_PROMPT に接続。
 //             user prompt（buildAdditionalQuestionsPrompt の戻り値）は byte-identical。
 //             既存 cache の意味的妥当性が変わるため lane を分離する必要があり bump 必須。
-export const ADDITIONAL_QUESTIONS_PROMPT_VERSION = 2;
+//   v2 → v3 : STEP-SELFANALYSIS-QUESTION-QUALITY-01 で「質問品質要件（必須）」と「禁止」
+//             section を ADDITIONAL_QUESTIONS_SYSTEM_PROMPT に追加。activity 名・テーマ・
+//             固有名詞への直接言及を必須化し、generic 質問（「なぜ始めましたか」等）を
+//             明示的に禁止した。同 STEP で deterministic pool skip 経路（additionalQuestionsPool.ts）
+//             も完全廃止し、AI 経路のみとなる。
+//             prompt の意味が大きく変わるため lane 分離が必要で bump 必須。
+//   v3 → v4 : STEP-SELFANALYSIS-QUESTION-QUALITY-02 で【読みやすさ要件】と NG / OK 例を
+//             ADDITIONAL_QUESTIONS_SYSTEM_PROMPT に追加。1 質問に複数の問いを詰め込まない
+//             ことと 60〜110 字目安を明文化。具体言及・generic 禁止ルールは不変。
+//             prompt の指示が増えるため v3 cache の意味的妥当性が変わり bump 必須。
+export const ADDITIONAL_QUESTIONS_PROMPT_VERSION = 4;
 export const ADDITIONAL_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashAdditionalQuestionsInput = {

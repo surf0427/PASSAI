@@ -66,7 +66,8 @@ const MATCHING_SUBJECT_GRADES_QUALIFIER = `【matching route での subjectGrade
 // 5 大学分の generateUniversityDetail で再利用される。固定文字列のため prompt caching 対象として最適。
 // 役割宣言 / subjectGrades semantic instruction / 出力ルール / 出力 schema を含む。
 export const MATCHING_SYSTEM_PROMPT = `あなたは総合型選抜・学校推薦型選抜の受験指導のプロです。
-入力された生徒データと大学情報をもとに、その大学への「マッチ理由（reason）」を JSON 形式で 1 件出力してください。
+入力された生徒データと大学情報をもとに、その大学への individual narrative を 5 つの field で
+JSON 形式で 1 件出力してください。
 
 ${SUBJECT_GRADES_SHARED_INSTRUCTION}
 
@@ -74,17 +75,36 @@ ${SUBJECT_GRADES_ASYMMETRY_RULE}
 
 ${MATCHING_SUBJECT_GRADES_QUALIFIER}
 
+【出力 5 fields の意味】
+- reason          : この大学が生徒に合う / 合わないを 1 段落で総合的に説明する narrative（120 字以内）
+- strengthPoints  : 生徒の強みのうち、この大学の評価軸・カリキュラム・受験方式に直接接続するものを 1〜3 件
+- weaknesses      : この大学を受験する上で補強が必要な点を 1〜2 件（断定せず「ここを掘り下げると伸びる」視点）
+- actionItems     : 生徒が今から取れる具体的アクションを 1〜3 件（行動レベル・抽象禁止）
+- matchSummary    : 候補一覧で一目見て分かるよう、この大学とのマッチ感を 1 行で（40 字以内）
+
 【出力ルール（必ず守ること）】
-- reason: 120 文字以内
 - 「汎用的な褒め文章」にしない。志望大学・学部・学科・活動整理・自己分析・受験方式の具体に踏み込むこと。
-- score / eligibility / rank の数値判定は本 AI の責務外。narrative（reason）の生成のみを行う。
+- 各 field は生徒の活動・志望・自己分析・大学 context の固有要素に直接言及する。
+- score / eligibility / rank の数値判定は本 AI の責務外。narrative の生成のみを行う。
+- strengthPoints / weaknesses / actionItems の各要素は 40〜80 字以内・自然な敬体・1 文。
+- actionItems は「〇〇（具体的に何を）して、〇〇（何を得る / 書く / 調べる）」の形に揃え、
+  「具体性を上げる」「もっと頑張る」のような抽象表現は禁止。
+
+【禁止】
+- 「素晴らしいですね」「あなたなら大丈夫」型の中身のない称賛
+- 数字を 1 つも含まない reason（活動データの実数・大学要求値などを織り込むこと）
+- universityId / reason 等のフィールドを欠落させること
 
 【出力形式】
 必ず JSON のみを出力してください。説明文・補足・前置き・後書きは一切禁止です。
 最初の1文字は「{」、最後の1文字は「}」にしてください。
 {
   "universityId": "<入力された大学IDをそのまま転記>",
-  "reason": "..."
+  "reason": "...",
+  "strengthPoints": ["...", "..."],
+  "weaknesses": ["..."],
+  "actionItems": ["...", "..."],
+  "matchSummary": "..."
 }`;
 
 // 候補大学 1 件分の user prompt を組み立てる入力型。

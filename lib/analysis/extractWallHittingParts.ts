@@ -2,33 +2,26 @@
 //
 // 役割:
 //   - extractProfileMaterial: WallHittingResult から questions を除いた「profile 素材」を取り出す
-//   - extractInitialQuestions: WallHittingResult から初期質問配列を取り出す（defensive helper）
+//   - extractInitialQuestions: WallHittingResult から初期質問配列を取り出す
 //   - ProfileMaterial 型: questions を除いた WallHittingResult の片割れ
 //
 // 責務分離:
-//   /api/analysis ルートは元々 2 つの責務を 1 回の AI 呼び出しで処理していた。
+//   /api/analysis ルートは 1 回の AI 呼び出しで 2 つの責務を処理する。
 //     (A) profile 生成責務 → summary / strengths / weaknesses / futureConnections
 //                          （= toStudentProfile() の入力となる canonical な分析素材）
-//     (B) 質問生成責務（初期 5 問固定） → questions
+//     (B) 質問生成責務（初期 5 問） → questions
 //                          （= 壁打ちフロー内部の working memory）
-//   (B) は ANALYSIS_PROMPT_VERSION 3 → 4 の bump 時に AI 経路から外し、
-//   lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions で deterministic に生成する
-//   ようになった。route.ts は extractInitialQuestions ではなく buildInitialQuestions を使う。
-//   将来 /api/self-analysis/profile (=A) と /api/self-analysis/questions (=B) に分割する
-//   ときの境界線は本ヘルパ群の責務分離が引き続き示す。
-//
-// extractInitialQuestions の現状:
-//   PROMPT_VERSION 4 以降、AI 出力には questions field が含まれない（schema から削除）。
-//   本 helper はコールサイトを失った状態だが、defensive helper として残す:
-//     - 旧 cache（v3 以前）のテストデータを読む経路があれば assertion なしに空配列に倒せる
-//     - WallHittingResult の shape を読み出す「片割れ」契約のドキュメントとして機能する
+//   v4 で (B) を deterministic catalog に移管したが、固定テンプレが activity の中身に言及
+//   しない generic 質問しか返せず自己分析機能の中核価値を損なったため、v5 で AI 生成に戻した
+//   （STEP-SELFANALYSIS-QUESTION-QUALITY-01）。route.ts は extractInitialQuestions(parsed)
+//   で AI 出力から questions を取り出して WallHittingResult.questions に乗せ直す。
 //
 // 注意:
 //   - 戻り値 ProfileMaterial の shape を変えてはいけない。POST handler 側で
 //     `{ ...profileMaterial, questions: initialQuestions }` の組み立て直しが
 //     WallHittingResult 出力スキーマと等価であることに依存している。
 //   - questions が array でない場合の空配列フォールバックは defensive guard として
-//     後方互換のために維持する（元実装どおり）。
+//     維持する（v4 cache hit や AI schema 違反時の safety net）。
 
 import type { WallHittingResult } from '@/types/analysis';
 

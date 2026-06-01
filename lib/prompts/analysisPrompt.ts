@@ -32,12 +32,17 @@ import {
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildUniversityContextPromptSection } from '@/lib/buildUniversityContext';
 
-// buildWallHittingPrompt は (A) profile 生成責務のみを担う:
+// buildWallHittingPrompt は (A) profile 生成責務 + (B) 質問生成責務の双方を担う:
 //   1. 活動の要約 / 2. 強み / 3. 弱み・補強 / 4. 将来とのつながり / 5. 受験生タイプ推定
-// (B) 質問生成責務（初期 5 問）は ANALYSIS_PROMPT_VERSION 3 → 4 の bump 時に
-// deterministic catalog（lib/analysis/initialQuestionsCatalog.ts:buildInitialQuestions）へ移管した。
-// route 側で post-parse 時に questions を deterministic に注入するため、本 prompt からは
-// 「5. 深掘り質問」セクションと JSON schema の questions field を削除している。
+//   6. 活動内容に紐づいた深掘り質問 5 問
+//
+// 質問生成責務（初期 5 問）の経路復旧（STEP-SELFANALYSIS-QUESTION-QUALITY-01）:
+//   PROMPT_VERSION 4 で deterministic catalog（initialQuestionsCatalog.ts）に移管していたが、
+//   固定テンプレが activity の中身を読まず「なぜ始めましたか」「苦労したことは」など generic な
+//   質問しか返さなくなり、自己分析機能の中核価値（活動ごとに個別最適化された深掘り）を
+//   損なっていた。v5 で AI 生成へ戻す。catalog 経路は完全廃止。
+//   PASSAI の原則として「スコア計算・判定・集計」は deterministic 化してよいが、
+//   「質問生成」はプロダクト価値そのものであり cost reduction の対象にしない。
 export type BuildWallHittingOptions = {
   activityText: string;
 } & AnalysisPromptContext;
@@ -152,6 +157,49 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
      ・"growth_driven"   : 挑戦・克服・変化・自己成長・自分を変えたい気持ちが中心
      ・"value_driven"    : 原体験・人との関わり・価値観・感情的経験・人生経験が中心
 
+6. 深掘り質問（必ず5問）
+   - questions は必ず5問だけ生成する（4問以下にしない / 6問以上にしない）
+   - **PASSAI 自己分析機能の中核価値はここにある**: 活動ごとに個別最適化された質問で、
+     受験生が一人では掘り起こせなかった具体エピソードを引き出す
+   - 各質問には【カテゴリ】prefix を付ける（【動機】【課題】【行動】【成果】【将来】 など）
+   - 順序は「動機 → 課題 → 行動 → 成果 → 将来」の 5 軸を基本骨格とする
+
+   【必須要件】
+   ・各質問は「【活動データ】に登場する具体的な活動名・テーマ・場面・固有名詞」に直接言及する
+     - 例（活動: 留学・destination=オーストラリア）:「オーストラリア滞在中、英語が伝わらず困った場面はありましたか？」
+     - 例（活動: コンテスト・contestName=投資甲子園）:「投資甲子園の準備で一番粘ったポイントはどこでしたか？」
+     - 例（活動: その他・activityName=PASSAI開発）:「PASSAI開発で最初に直面した課題は何でしたか？」
+   ・具体的なエピソードを思い出させる聞き方にする（「いつ」「どの場面で」「何があったか」を引き出す）
+   ・感情・判断・行動を引き出す（STAR 法の素材になる：Situation / Task / Action / Result）
+   ・複数の活動がある場合は、最も自己分析素材として深掘り価値が高い活動（探究・コンテスト・留学・
+     リーダー経験など）を中心に置き、適宜他の活動にも触れる
+
+   【読みやすさ要件（必須）】
+   ・**1 つの質問に複数の問いを詰め込みすぎない**。原則として 1 質問につき主問いは 1 つ。
+   ・補助問いを入れる場合も最大 1 つまで（活動データの具体場面を絞り込むための場面提示や、
+     主問いを言い換える短い補足に限る）。3 つ以上の疑問符を 1 質問に並べない。
+   ・各質問は **60〜110 字程度** を目安に収める。長く書く方が答えやすくなる場合は超過してよいが、
+     冗長な前置きや同じ趣旨の言い換えで字数を伸ばさない。
+   ・**ただし、活動内容への具体言及（固有名詞・場面・数値）を削ってまで短くしない**。
+     具体性を保ったうえで読みやすく整形する。短くするために generic 質問に倒すのは禁止。
+
+   【NG / OK 例】
+   ・NG: 「その間どんなことを毎日考えていましたか？諦めようと思った瞬間はありましたか？」
+     （複数の問いを詰め込んでおり、ユーザーがどちらに答えればよいか迷う）
+   ・OK: 「寮生活で孤立していた3か月間、毎日どんな不安や葛藤を感じていましたか？」
+     （主問い 1 つ、具体場面（寮・3か月・孤立）に直接言及、答えやすい）
+
+   【禁止】
+   ・活動内容に紐付かない generic な質問は一切禁止。以下のような文面は使ってはならない:
+     - 「なぜ始めましたか？」（活動名への言及なし）
+     - 「苦労したことは何ですか？」（場面・テーマへの言及なし）
+     - 「工夫したことは何ですか？」（具体的な対象なし）
+     - 「学んだことは何ですか？」（活動への接続なし）
+   ・活動名・テーマ・固有名詞のいずれも含まない抽象的な質問を禁止する
+   ・活動データに登場しない情報を質問に書き込まない（推測で活動を盛らない）
+   ・活動データが極端に薄く具体名が無い場合のみ、活動カテゴリ名（例:「部活動」「探究」）への
+     言及で代替可とする
+
 【出力ルール（厳守）】
 ・出力は純粋なJSONのみ
 ・最初の文字は { でなければならない
@@ -177,7 +225,14 @@ ${ANALYSIS_SUBJECT_GRADES_QUALIFIER}
     "活動と将来をつなぐ仮説",
     "活動と将来をつなぐ仮説"
   ],
-  "applicantType": "activity_driven | issue_driven | academic_driven | growth_driven | value_driven のいずれか1つ"
+  "applicantType": "activity_driven | issue_driven | academic_driven | growth_driven | value_driven のいずれか1つ",
+  "questions": [
+    "【動機】活動データに登場する具体的な活動名・テーマに直接言及した質問",
+    "【課題】活動データに登場する具体的な場面に直接言及した質問",
+    "【行動】活動データに登場する具体的な対象に直接言及した質問",
+    "【成果】活動データに登場する具体的な経験に直接言及した質問",
+    "【将来】活動データに登場する具体的な学びと志望先を接続する質問"
+  ]
 }`;
 
 export function buildWallHittingPrompt(opts: BuildWallHittingOptions): string {

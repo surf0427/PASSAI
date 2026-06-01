@@ -16,6 +16,10 @@
 
 import type { ImprovementSummary } from '@/types/essay';
 
+// STEP-SILENT-FALLBACK-01: AI 出力か fallback テンプレかを判別するメタ field。
+// 既存 ImprovementSummary 型に optional field として追加するため、本ファイル内で source を
+// merge した戻り値を返す（type 拡張は types/essay.ts 側で同 STEP に追加済み）。
+
 const FALLBACK_SUMMARY =
   '改善方針が読み取れませんでした。もう一度「改善まとめを作成」を実行してください。';
 
@@ -37,10 +41,18 @@ function safeStringArray(value: unknown, max: number): string[] {
 
 export function safeParseImproveSummary(data: unknown): ImprovementSummary {
   if (typeof data !== 'object' || data === null) {
+    console.warn('[fallback]', {
+      route: 'api/essay-improve-summary',
+      reason: 'data_not_object',
+      timestamp: new Date().toISOString(),
+    });
     return {
       summary: FALLBACK_SUMMARY,
       focusPoints: FALLBACK_FOCUS_POINTS,
       suggestedDirections: FALLBACK_SUGGESTED_DIRECTIONS,
+      source: 'fallback',
+      parseError: true,
+      fallbackReason: 'data_not_object',
     };
   }
   const d = data as Record<string, unknown>;
@@ -54,6 +66,20 @@ export function safeParseImproveSummary(data: unknown): ImprovementSummary {
   const focusPoints = safeStringArray(d.focusPoints, 3);
   const suggestedDirections = safeStringArray(d.suggestedDirections, 3);
 
+  const fallbackFields: string[] = [];
+  if (summary === FALLBACK_SUMMARY) fallbackFields.push('summary');
+  if (focusPoints.length === 0) fallbackFields.push('focusPoints');
+  if (suggestedDirections.length === 0) fallbackFields.push('suggestedDirections');
+  const source = fallbackFields.length === 0 ? 'ai' : 'partial';
+  if (source === 'partial') {
+    console.warn('[fallback]', {
+      route: 'api/essay-improve-summary',
+      reason: 'partial_fallback',
+      fields: fallbackFields,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   return {
     summary,
     focusPoints: focusPoints.length > 0 ? focusPoints : FALLBACK_FOCUS_POINTS,
@@ -61,5 +87,8 @@ export function safeParseImproveSummary(data: unknown): ImprovementSummary {
       suggestedDirections.length > 0
         ? suggestedDirections
         : FALLBACK_SUGGESTED_DIRECTIONS,
+    source,
+    parseError: false,
+    ...(source === 'partial' && { fallbackReason: fallbackFields.join(',') }),
   };
 }

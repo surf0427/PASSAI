@@ -63,7 +63,14 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             bump により v4 cache（緩い variation 指示で生成）が新ルール出力契約と混ざる
 //             のを防ぐ（intentional 1 回 miss）。dailySeed 未送信 client は v4 と同様
 //             legacy 経路に落ちる（section ごと省略）。
-export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 5;
+//   v5 → v6 : STEP-AUDIT-TOP1-5-FIX-01 で VALIDATION_RETRY_HINT を緩和した。
+//             旧 hint は厳格な禁止条項を並べて AI を萎縮させ bland な質問を生む副作用が
+//             観測されたため、禁止だけ伝えて創造性（深掘り度・固有名詞言及）を保つ方針に
+//             refinement。validate fail 経路のみ影響する変更だが、retry 経由で生成された
+//             cache entry の意味的妥当性が変わるため lane 分離が必要。
+//             first-attempt prompt / system prompt / schema / 質問数 / category / 代筆禁止 /
+//             temperature は 1 字も変えない。
+export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 6;
 export const INTERVIEW_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashInterviewQuestionsInput = {

@@ -96,6 +96,12 @@ export function MatchingCard({ result, aiAdvice, eligibilityResults }: MatchingC
   const strengths  = aiAdvice?.strengthPoints ?? result.strengthPoints;
   const weaknesses = aiAdvice?.weaknesses    ?? result.weaknesses;
   const actions    = aiAdvice?.actionItems   ?? result.actionItems;
+  // STEP-SILENT-FALLBACK-01:
+  //   reasonSource='fallback' のとき、UI 上は (1)「AI強化済み」バッジを出さない、
+  //   (2) 詳細展開時に「一時的にテンプレ表示中」の注意文を出す。
+  //   reasonSource が undefined（旧 cache）の場合は従来挙動を維持（AI として扱う）。
+  const isFallback = aiAdvice?.reasonSource === 'fallback';
+  const aiEnhanced = aiAdvice !== null && !isFallback;
 
   const { score, suggestionType } = result;
   const isMyChoice = suggestionType === '自分の志望校';
@@ -124,9 +130,14 @@ export function MatchingCard({ result, aiAdvice, eligibilityResults }: MatchingC
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${tagColor}`}>
               {suggestionType}
             </span>
-            {aiAdvice && (
+            {aiEnhanced && (
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 border border-purple-200">
                 AI強化済み
+              </span>
+            )}
+            {isFallback && (
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                基本テンプレート表示中
               </span>
             )}
           </div>
@@ -154,6 +165,17 @@ export function MatchingCard({ result, aiAdvice, eligibilityResults }: MatchingC
       {/* 詳細（展開時） */}
       {open && (
         <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-4">
+
+          {/* STEP-SILENT-FALLBACK-01: AI 失敗時の注意文 */}
+          {isFallback && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-xs text-amber-800 leading-relaxed">
+                一時的にAI生成に失敗したため、基本テンプレートを表示しています。
+                <br className="sm:hidden" />
+                必要に応じて再診断をお試しください。
+              </p>
+            </div>
+          )}
 
           {/* 評価サマリー */}
           <div className="bg-gray-50 rounded-xl p-4">

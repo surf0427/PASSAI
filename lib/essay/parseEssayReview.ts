@@ -27,6 +27,14 @@ const VALID_BREAKDOWN_LABELS = ['論理構造', '具体性', '説得力', 'テ�
 
 type BreakdownItem = { label: string; score: number };
 
+// STEP-SILENT-FALLBACK-01:
+//   source / parseError は AI 出力か fallback テンプレかを UI 側で判別するためのメタ field。
+//   - source='ai'       : AI が returned した正常な JSON が一通り採用された
+//   - source='fallback' : data 全体が非 object / null（AI 呼び出し失敗 / 完全 parse 失敗）
+//   - source='partial'  : 一部 field のみ AI 出力、欠落部分は FALLBACK_* で補完された
+//   既存 ReviewResult shape の互換性のため optional 追加とする（旧 client は無視）。
+type OutputSource = 'ai' | 'fallback' | 'partial';
+
 type ReviewResult = {
   totalScore: number;
   verdict: string;
@@ -34,6 +42,12 @@ type ReviewResult = {
   improvement: string;
   goodPoints: string[];
   weakPoints: string[];
+  // STEP-SILENT-FALLBACK-01: 出力元の明示。UI が fallback 注意文を出す判定に使う。
+  source?: OutputSource;
+  // 完全 parse failure 時のみ true（AI 呼び出し / JSON parse / shape 検査の失敗）。
+  parseError?: boolean;
+  // fallback 発火理由の structured code（個人情報 / 本文全文は含めない）。
+  fallbackReason?: string;
 };
 
 function deriveVerdict(score: number): string {
@@ -63,6 +77,12 @@ function safeStringArray(value: unknown, max: number): string[] {
 
 export function safeParseResult(data: unknown): ReviewResult {
   if (typeof data !== 'object' || data === null) {
+    // STEP-SILENT-FALLBACK-01: 完全 parse 失敗時の warn。route / 理由 / timestamp のみログ。
+    console.warn('[fallback]', {
+      route: 'api/essay-review',
+      reason: 'data_not_object',
+      timestamp: new Date().toISOString(),
+    });
     return {
       totalScore: 0,
       verdict: '構造からやり直し',
@@ -70,6 +90,9 @@ export function safeParseResult(data: unknown): ReviewResult {
       improvement: FALLBACK_IMPROVEMENT,
       goodPoints: FALLBACK_GOOD_POINTS,
       weakPoints: FALLBACK_WEAK_POINTS,
+      source: 'fallback',
+      parseError: true,
+      fallbackReason: 'data_not_object',
     };
   }
   const d = data as Record<string, unknown>;
@@ -115,6 +138,22 @@ export function safeParseResult(data: unknown): ReviewResult {
   const goodPoints = safeStringArray(d.goodPoints, 3);
   const weakPoints = safeStringArray(d.weakPoints, 3);
 
+  // STEP-SILENT-FALLBACK-01: 一部欠落 / fallback 適用箇所を集計し、メタ field に乗せる。
+  const fallbackFields: string[] = [];
+  if (improvement === FALLBACK_IMPROVEMENT) fallbackFields.push('improvement');
+  if (goodPoints.length === 0) fallbackFields.push('goodPoints');
+  if (weakPoints.length === 0) fallbackFields.push('weakPoints');
+  if (breakdown.length !== 5) fallbackFields.push('breakdown');
+  const source: OutputSource = fallbackFields.length === 0 ? 'ai' : 'partial';
+  if (source === 'partial') {
+    console.warn('[fallback]', {
+      route: 'api/essay-review',
+      reason: 'partial_fallback',
+      fields: fallbackFields,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   return {
     totalScore: finalScore,
     verdict,
@@ -122,5 +161,8 @@ export function safeParseResult(data: unknown): ReviewResult {
     improvement,
     goodPoints: goodPoints.length > 0 ? goodPoints : FALLBACK_GOOD_POINTS,
     weakPoints: weakPoints.length > 0 ? weakPoints : FALLBACK_WEAK_POINTS,
+    source,
+    parseError: false,
+    ...(source === 'partial' && { fallbackReason: fallbackFields.join(',') }),
   };
 }
