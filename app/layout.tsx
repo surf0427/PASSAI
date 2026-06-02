@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Header } from "@/app/components/Header";
 import { DevValidationStatsHook } from "@/app/components/DevValidationStatsHook";
+import { AuthProvider } from "@/app/components/AuthProvider";
 import { BRAND_NAME } from "@/lib/brand";
 
 const geistSans = Geist({
@@ -31,10 +32,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased scroll-smooth scroll-pt-14`}
     >
       <body className="min-h-full flex flex-col">
-        <Header />
-        <DevValidationStatsHook />
-        {/* pt-14 は fixed ヘッダー（h-14 = 56px）の高さ分の余白 */}
-        <main className="flex-1 pt-14">{children}</main>
+        <AuthProvider>
+          <Header />
+          <DevValidationStatsHook />
+          {/* pt-14 は fixed ヘッダー（h-14 = 56px）の高さ分の余白 */}
+          <main className="flex-1 pt-14">{children}</main>
+        </AuthProvider>
       </body>
     </html>
   );

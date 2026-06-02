@@ -218,3 +218,26 @@ export function getThread(
   if (!threadId) return null;
   return store.threads.find((t) => t.id === threadId) ?? null;
 }
+
+// STEP-CHAT-RESTORE-01: Supabase から取り込んだ thread を canonical へ追加する。
+//
+// - 同じ id の thread が既に store に存在する場合は **重複追加せず** その thread を current にする。
+// - 新規追加時は先頭に置き、currentThreadId に設定する（ChatGPT の "選んで開く" 挙動）。
+// - 取り込んだ thread の id / messages は呼び出し側で確定済み（Supabase 由来の値の翻訳結果）。
+// - 既存の saveTutorChatStore (の上限管理 / pruning) を経由するため、書き込みは page 側の
+//   既存 useEffect が走ったタイミングで自然に反映される。
+export function addRestoredThread(
+  store: TutorChatStore,
+  thread: TutorChatThread,
+): TutorChatStore {
+  const existingIndex = store.threads.findIndex((t) => t.id === thread.id);
+  if (existingIndex !== -1) {
+    // 既に存在 → 取り込まず current にするだけ
+    return { ...store, currentThreadId: thread.id };
+  }
+  return {
+    ...store,
+    threads: [thread, ...store.threads],
+    currentThreadId: thread.id,
+  };
+}

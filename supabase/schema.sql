@@ -417,3 +417,234 @@ CREATE POLICY "activity_mirrors anon update"
   TO anon
   USING (true)
   WITH CHECK (true);
+
+
+-- 16. profiles — auth user 行（STEP-AUTH-02）。
+--
+--     Phase1 mirror layer とは別系統の "auth canonical" テーブル。
+--     mirror_* と違い READ する。所有者契約:
+--       - id は auth.users(id) を参照する。所有者判定 / RLS / 保存キーの正本。
+--       - display_user_id は表示用のみ。所有者判定・FK には絶対に使わない。
+--       - plan は Phase1 では 'free' 固定。Stripe 連携は別 STEP。
+--
+--     PII 観点:
+--       - id (uuid) は auth.users 由来で外部露出しても安全。
+--       - display_user_id はユーザー自身が選ぶ識別子。
+--       - plan は free/paid 等の課金状態。
+--       - 上記いずれも個人特定 PII を含まない（活動 narrative や本名なし）。
+--     したがって duplicate check 用に display_user_id を authenticated に
+--     read 許可することを許容する（後段 RLS 参照）。
+CREATE TABLE profiles (
+  id               uuid         PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  display_user_id  text         UNIQUE,
+  plan             text         NOT NULL DEFAULT 'free',
+  created_at       timestamptz  NOT NULL DEFAULT timezone('utc', now()),
+  updated_at       timestamptz  NOT NULL DEFAULT timezone('utc', now())
+);
+
+COMMENT ON TABLE profiles IS
+  'STEP-AUTH-02 auth canonical profile. id = auth.users.id (= auth.uid()) is '
+  'the only legitimate owner key. display_user_id is display-only and MUST NOT '
+  'be used for ownership / FK / billing identity. plan is free in Phase1; '
+  'Stripe wiring is a later STEP.';
+
+COMMENT ON COLUMN profiles.id IS
+  'auth.users(id). Owner identity (RLS / Stripe / permissions all use this).';
+
+COMMENT ON COLUMN profiles.display_user_id IS
+  'User-chosen display ID. Optional (nullable). UNIQUE for collision-free '
+  'lookup but never used as ownership key.';
+
+COMMENT ON COLUMN profiles.plan IS
+  'Billing plan label. Phase1 = "free". Will be driven by Stripe webhook in '
+  'a later STEP — do not write from client outside of admin operations.';
+
+
+-- 17. Trigger: keep updated_at fresh on every UPDATE
+--     (reuses set_updated_at() defined in §3).
+CREATE TRIGGER profiles_set_updated_at
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 18. RLS — profiles
+--     Anonymous auth で発行された JWT は role=authenticated として届く
+--     （`is_anonymous=true` claim 付き）。よって policy 対象は authenticated。
+--
+--     SELECT  : authenticated 全体に許可。
+--               profiles の列はいずれも非 PII（id=uuid, display_user_id=
+--               ユーザー選択 ID, plan=課金種別, timestamps）であり、
+--               display_user_id の重複チェックに必要。
+--     INSERT  : auth.uid() = id のみ。自分以外の行を作らせない。
+--     UPDATE  : auth.uid() = id のみ。他人の行を書き換えさせない。
+--               plan は client 側から書かないが、明示的な列制限は Phase1 では
+--               入れない（後段 Stripe STEP で UPDATE policy を絞る予定）。
+--     DELETE  : 未許可。退会フローは別 STEP で設計する。
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "profiles authenticated select"
+  ON profiles
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "profiles owner insert"
+  ON profiles
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = id);
+
+CREATE POLICY "profiles owner update"
+  ON profiles
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = id)
+  WITH CHECK (auth.uid() = id);
+
+
+-- ──────────────────────────────────────────────────────────────────────
+-- STEP-CHAT-PERSISTENCE-01: Tutor Chat 永続化（auth-scoped）
+--
+-- profiles と同じく Phase2 Auth 系の auth-scoped table。N=4 mirror freeze
+-- とは別レイヤー（mirror_* ではなく user_id を持つ canonical-ish 永続層）。
+-- localStorage canonical の "同期先 / mirror 的扱い" として導入する。
+-- Tutor 既存の localStorage 保存挙動は壊さず、Supabase 側は best-effort で
+-- 後追い同期する。RLS は常に auth.uid() = user_id で閉じる。
+--
+--   §19  tutor_chat_threads  table
+--   §20  tutor_chat_threads  trigger (set_updated_at)
+--   §21  tutor_chat_threads  RLS
+--   §22  tutor_chat_messages table
+--   §23  tutor_chat_messages RLS
+--
+-- 所有者契約:
+--   user_id は auth.users(id) を参照する owner key。
+--   display_user_id は本 table 群で扱わない（表示用の別 namespace）。
+-- ──────────────────────────────────────────────────────────────────────
+
+
+-- 19. tutor_chat_threads
+CREATE TABLE tutor_chat_threads (
+  id                uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title             text         NOT NULL DEFAULT '新しい相談',
+  created_at        timestamptz  NOT NULL DEFAULT now(),
+  updated_at        timestamptz  NOT NULL DEFAULT now(),
+  last_message_at   timestamptz,
+  local_thread_id   text,
+  metadata          jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT tutor_chat_threads_local_unique UNIQUE (user_id, local_thread_id)
+);
+
+COMMENT ON TABLE tutor_chat_threads IS
+  'STEP-CHAT-PERSISTENCE-01 Tutor chat thread (auth-scoped). user_id is the '
+  'sole owner key (auth.users.id). local_thread_id maps back to the '
+  'localStorage thread.id so the mirror is idempotent under retries.';
+
+COMMENT ON COLUMN tutor_chat_threads.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id.';
+
+COMMENT ON COLUMN tutor_chat_threads.local_thread_id IS
+  'localStorage の TutorChatThread.id をそのまま入れる。upsert の natural key '
+  '(user_id, local_thread_id) として使う。NULL は許容（古い row との互換）。';
+
+
+-- 20. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER tutor_chat_threads_set_updated_at
+  BEFORE UPDATE ON tutor_chat_threads
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 21. RLS — tutor_chat_threads
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は
+--     authenticated。すべての行操作は auth.uid() = user_id で閉じる。
+ALTER TABLE tutor_chat_threads ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "tutor_chat_threads owner select"
+  ON tutor_chat_threads
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_threads owner insert"
+  ON tutor_chat_threads
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_threads owner update"
+  ON tutor_chat_threads
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_threads owner delete"
+  ON tutor_chat_threads
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 22. tutor_chat_messages
+CREATE TABLE tutor_chat_messages (
+  id                uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id         uuid         NOT NULL REFERENCES public.tutor_chat_threads(id) ON DELETE CASCADE,
+  user_id           uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role              text         NOT NULL,
+  content           text         NOT NULL,
+  created_at        timestamptz  NOT NULL DEFAULT now(),
+  local_message_id  text,
+  metadata          jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT tutor_chat_messages_role_check
+    CHECK (role IN ('user', 'assistant', 'system')),
+  CONSTRAINT tutor_chat_messages_local_unique
+    UNIQUE (thread_id, local_message_id)
+);
+
+COMMENT ON TABLE tutor_chat_messages IS
+  'STEP-CHAT-PERSISTENCE-01 Tutor chat message (auth-scoped). thread_id FKs '
+  'tutor_chat_threads. user_id duplicates the owner key for direct RLS '
+  'enforcement (no need to JOIN threads). local_message_id maps back to the '
+  'localStorage TutorMessage.id for idempotent upsert.';
+
+COMMENT ON COLUMN tutor_chat_messages.user_id IS
+  'auth.users(id). Duplicated from thread for direct RLS without JOIN.';
+
+COMMENT ON COLUMN tutor_chat_messages.role IS
+  'CHECK constraint enforces user / assistant / system.';
+
+COMMENT ON COLUMN tutor_chat_messages.local_message_id IS
+  'localStorage の TutorMessage.id。NULL 許容。NULL 同士は SQL 標準で distinct '
+  '扱いなので、(thread_id, NULL) の複数行は許容される（古い row との互換）。';
+
+
+-- 23. RLS — tutor_chat_messages
+ALTER TABLE tutor_chat_messages ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "tutor_chat_messages owner select"
+  ON tutor_chat_messages
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_messages owner insert"
+  ON tutor_chat_messages
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_messages owner update"
+  ON tutor_chat_messages
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "tutor_chat_messages owner delete"
+  ON tutor_chat_messages
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);

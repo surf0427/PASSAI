@@ -27,3 +27,41 @@ export type TutorChatStore = {
   currentThreadId: string | null;
   version: number;
 };
+
+// ── STEP-CHAT-PERSISTENCE-01: Supabase 側の shape ─────────────────────
+//
+// localStorage canonical を維持したまま auth-scoped で同期するための型。
+// camelCase は API 境界の helper が DB の snake_case を内部翻訳した結果。
+
+export type SupabaseTutorRole = 'user' | 'assistant' | 'system';
+
+export type SupabaseTutorThread = {
+  /** tutor_chat_threads.id (uuid)。Supabase 側の主キー。 */
+  id: string;
+  /** auth.users.id。所有者判定はこちら（localStorage の id ではない）。 */
+  userId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string | null;
+  /** localStorage の TutorChatThread.id。upsert の natural key 部分。 */
+  localThreadId: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type SupabaseTutorMessage = {
+  id: string;
+  threadId: string;
+  userId: string;
+  role: SupabaseTutorRole;
+  content: string;
+  createdAt: string;
+  localMessageId: string | null;
+  metadata: Record<string, unknown>;
+};
+
+/** lib/supabase/tutorChat.ts の helper 戻り値共通 shape。失敗を throw せず返す。 */
+export type TutorChatSyncResult =
+  | { kind: 'ok' }
+  | { kind: 'no-env' }
+  | { kind: 'error'; message: string };

@@ -23,7 +23,7 @@
 //   - 機能接続ボタン化（parseTutorReply / TutorSuggestionLink は別 STEP）
 //   - Supabase / user_id / Auth との結合（明示的に範囲外）
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { tutorLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
@@ -31,7 +31,13 @@ import { detectTutorIntent } from '@/lib/tutor/detectTutorIntent';
 import { detectTutorStabilization } from '@/lib/tutor/detectTutorStabilization';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { TutorIntent } from '@/lib/tutor/types';
-import type { TutorChatStore } from '@/types/tutorChat';
+import type {
+  SupabaseTutorMessage,
+  SupabaseTutorThread,
+  TutorChatStore,
+  TutorChatThread,
+  TutorMessage,
+} from '@/types/tutorChat';
 import {
   loadTutorChatStore,
   saveTutorChatStore,
@@ -40,7 +46,14 @@ import {
   setCurrentThread,
   appendMessage,
   getThread,
+  addRestoredThread,
 } from '@/lib/tutorChatStorage';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
+import {
+  listTutorThreadsFromSupabase,
+  loadTutorMessagesFromSupabase,
+  mirrorTutorStoreDelta,
+} from '@/lib/supabase/tutorChat';
 import { TutorBubble } from './components/TutorBubble';
 import { TutorInput } from './components/TutorInput';
 import { TutorRemainingCount } from './components/TutorRemainingCount';
@@ -50,6 +63,61 @@ import { TutorSuggestedStarters } from './components/TutorSuggestedStarters';
 // ── 定数 ────────────────────────────────────────────────────────
 
 const TUTOR_DAILY_LIMIT = tutorLimit.getRemainingCount({ date: '', count: 0 });
+
+// ── STEP-CHAT-RESTORE-01: Supabase → localStorage 変換 helper ──
+//
+// 仕様:
+//   role:
+//     'system' role は既存 TutorMessage 型に存在しないため **除外**する
+//     （assistant 扱いにはしない）。
+//   content: そのまま採用。
+//   createdAt: Supabase の ISO 文字列をそのまま採用。
+//   message id:
+//     local_message_id があればそれを採用（mirror 経路で書いた元 id）。
+//     なければ `remote-${supabase.id}` を派生 id とする。
+//   thread id:
+//     remote.localThreadId があればそれを採用。
+//     なければ `remote-${supabase.id}` を派生 id とする。
+//   タイトル:
+//     remote.title をそのまま採用。
+//
+// 重複防止:
+//   同じ thread id が既に store にあれば addRestoredThread が current 切替に倒す。
+
+function deriveLocalThreadIdFromRemote(remote: SupabaseTutorThread): string {
+  return remote.localThreadId ?? `remote-${remote.id}`;
+}
+
+function remoteMessageToLocal(
+  m: SupabaseTutorMessage,
+): TutorMessage | null {
+  if (m.role !== 'user' && m.role !== 'assistant') {
+    // 'system' は既存型に無いため捨てる
+    return null;
+  }
+  return {
+    id: m.localMessageId ?? `remote-${m.id}`,
+    role: m.role,
+    content: m.content,
+    createdAt: m.createdAt,
+  };
+}
+
+function buildRestoredThread(
+  remote: SupabaseTutorThread,
+  remoteMessages: SupabaseTutorMessage[],
+): TutorChatThread {
+  const messages = remoteMessages
+    .map(remoteMessageToLocal)
+    .filter((m): m is TutorMessage => m !== null);
+  return {
+    id: deriveLocalThreadIdFromRemote(remote),
+    title: remote.title,
+    messages,
+    createdAt: remote.createdAt,
+    updatedAt: remote.lastMessageAt ?? remote.updatedAt,
+  };
+}
 
 const EMERGENCY_PATTERN =
   /(死にたい|死のう|消えたい|いなくなりたい|もう生きていけない|終わりにしたい|自殺|自害)/;
@@ -77,6 +145,42 @@ export default function TutorPage() {
   // store が空（thread 0 件）のときは初回 send 時に 1 thread を作る lazy 戦略。
   const [store, setStore] = useState<TutorChatStore>(loadTutorChatStore);
 
+  // STEP-CHAT-PERSISTENCE-01: Supabase mirror 用に「直前の store」を保持し、
+  // localStorage 保存後に差分を auth-scoped table へ best-effort 同期する。
+  //   - currentUserId が無いタイミングでの追加分は mirror されない（仕様通り）。
+  //   - 初回マウント時の既存 thread / message は同期しない（過去履歴移行は別 STEP）。
+  //   - mirror の成否は UI に伝えない（fire-and-forget）。
+  const currentUserId = useCurrentUserId();
+  const prevStoreRef = useRef<TutorChatStore | null>(null);
+
+  // STEP-CHAT-SIDEBAR-01: Supabase 側にも保存されている thread 一覧を
+  // 補助的に取得し、サイドバーへ渡す。
+  //   - 取得元: lib/supabase/tutorChat.ts:listTutorThreadsFromSupabase
+  //   - 所有者: currentUserId (= auth.uid())。display_user_id は使わない。
+  //   - 失敗時: 空配列のまま。サイドバーは localStorage のみで表示し続ける。
+  //   - 復元はしない（thread 選択は localStorage に閉じる、本 STEP の非ゴール）。
+  const [remoteThreads, setRemoteThreads] = useState<SupabaseTutorThread[]>([]);
+  useEffect(() => {
+    if (!isMounted || !currentUserId) {
+      setRemoteThreads([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const result = await listTutorThreadsFromSupabase(currentUserId);
+      if (cancelled) return;
+      if (result.kind === 'ok') {
+        setRemoteThreads(result.threads);
+      } else {
+        // no-env / error: fallback は「localStorage のみで表示」。state は空に保つ。
+        setRemoteThreads([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isMounted, currentUserId, store]);
+
   // store が変わるたびに永続化（初回 render はスキップ）。
   // setState-in-effect ではなく、user 操作起点で setStore された結果を save するだけの sync effect。
   useEffect(() => {
@@ -86,7 +190,15 @@ export default function TutorPage() {
     } catch {
       // ignore（safeStorage 内部でも try/catch 済）
     }
-  }, [isMounted, store]);
+    if (currentUserId) {
+      void mirrorTutorStoreDelta({
+        prev: prevStoreRef.current,
+        next: store,
+        userId: currentUserId,
+      });
+    }
+    prevStoreRef.current = store;
+  }, [isMounted, store, currentUserId]);
 
   const currentThread = useMemo(
     () => getThread(store, store.currentThreadId),
@@ -179,6 +291,52 @@ export default function TutorPage() {
 
   function handleDeleteThread(threadId: string) {
     setStore((prev) => deleteThreadFromStore(prev, threadId));
+  }
+
+  // ── STEP-CHAT-RESTORE-01: remote thread の取り込み ──
+  //
+  // - currentUserId が null なら何もしない（auth が確立していない）。
+  // - 同じ localThreadId が既に store にあれば再 fetch せず current に切り替える。
+  // - load 成功 → addRestoredThread で先頭に追加 + current にする。既存 useEffect が
+  //   localStorage 永続化 + Supabase delta mirror を処理（mirror は差分ゼロなので no-op）。
+  // - load 失敗 → error state にメッセージを出すだけ。UI は壊さない。
+  const [restoringRemoteId, setRestoringRemoteId] = useState<string | null>(null);
+
+  async function handleRestoreRemoteThread(remote: SupabaseTutorThread) {
+    if (!currentUserId) return;
+    if (restoringRemoteId !== null) return;
+
+    const derivedLocalId = deriveLocalThreadIdFromRemote(remote);
+    const existing = store.threads.find((t) => t.id === derivedLocalId);
+    if (existing) {
+      setStore((prev) => setCurrentThread(prev, derivedLocalId));
+      setInput('');
+      setError('');
+      setLastTutorIntent(undefined);
+      return;
+    }
+
+    setRestoringRemoteId(remote.id);
+    setError('');
+    try {
+      const result = await loadTutorMessagesFromSupabase({
+        userId: currentUserId,
+        threadId: remote.id,
+      });
+      if (result.kind !== 'ok') {
+        setError('履歴の復元に失敗しました');
+        return;
+      }
+      const thread = buildRestoredThread(remote, result.messages);
+      setStore((prev) => addRestoredThread(prev, thread));
+      setInput('');
+      setLastTutorIntent(undefined);
+    } catch {
+      // 念のための catch（helper 内で吸収済みのため通常到達しない）
+      setError('履歴の復元に失敗しました');
+    } finally {
+      setRestoringRemoteId(null);
+    }
   }
 
   // ── handleSubmit ──
@@ -297,6 +455,9 @@ export default function TutorPage() {
           onSelect={handleSelectThread}
           onCreate={handleCreateThread}
           onDelete={handleDeleteThread}
+          remoteThreads={remoteThreads}
+          onRestoreRemote={handleRestoreRemoteThread}
+          restoringRemoteId={restoringRemoteId}
         />
       )}
 
@@ -318,9 +479,13 @@ export default function TutorPage() {
           {isMounted && messages.length === 0 && !loading && (
             <TutorSuggestedStarters onPick={(text) => setInput(text)} />
           )}
-          {messages.map((msg) => (
-            <TutorBubble key={msg.id} role={msg.role} text={msg.content} />
-          ))}
+          {/* HYDRATION-DEBUG-01: messages は localStorage (= client only) 由来。
+              SSR では空、client hydration で復元 thread の messages が増える
+              ため、isMounted (= post-hydration) でのみ render して mismatch を避ける。 */}
+          {isMounted &&
+            messages.map((msg) => (
+              <TutorBubble key={msg.id} role={msg.role} text={msg.content} />
+            ))}
           {loading && (
             <div className="flex justify-start">
               <div className="max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed bg-gray-100 text-gray-500">

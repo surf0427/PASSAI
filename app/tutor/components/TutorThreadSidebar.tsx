@@ -1,10 +1,13 @@
-// STEP-CHAT-HISTORY-01: チャット履歴サイドバー（PC）/ ドロワー（Mobile）。
+// STEP-CHAT-HISTORY-01 / STEP-CHAT-SIDEBAR-01:
+//   チャット履歴サイドバー（PC）/ ドロワー（Mobile）。
 //
 // 役割:
 //   - thread 一覧表示（title + 最終更新日時）
 //   - 現在 thread の選択 highlight
 //   - 新しい相談ボタン
 //   - 削除ボタン（hover 表示）
+//   - 他端末でのみ残っている Supabase 履歴を末尾に locked 表示
+//     （クリック復元は本 STEP の非ゴール）
 //
 // レイアウト:
 //   PC（sm:） : 左 sidebar 280px・固定表示
@@ -14,8 +17,8 @@
 
 'use client';
 
-import { useState } from 'react';
-import type { TutorChatThread } from '@/types/tutorChat';
+import { useMemo, useState } from 'react';
+import type { SupabaseTutorThread, TutorChatThread } from '@/types/tutorChat';
 
 type Props = {
   threads: TutorChatThread[];
@@ -23,6 +26,18 @@ type Props = {
   onSelect: (threadId: string) => void;
   onCreate: () => void;
   onDelete: (threadId: string) => void;
+  /**
+   * Supabase 側から取得した thread 一覧（取得失敗時は空配列）。
+   * localStorage に対応 thread が無いものだけ「他端末の履歴」として表示する。
+   */
+  remoteThreads?: SupabaseTutorThread[];
+  /**
+   * STEP-CHAT-RESTORE-01: 「他端末の履歴」item クリック時に呼ばれる復元 handler。
+   * 未指定の場合は item を disabled 表示にフォールバックする。
+   */
+  onRestoreRemote?: (remote: SupabaseTutorThread) => void;
+  /** 現在復元中の remote.id（クリック中の二重発火防止）。 */
+  restoringRemoteId?: string | null;
 };
 
 function formatUpdatedAt(iso: string): string {
@@ -47,16 +62,48 @@ function formatUpdatedAt(iso: string): string {
   }
 }
 
+// STEP-CHAT-RESTORE-01: remote thread から localStorage 側で使う thread id を派生する。
+// - localThreadId があればそれをそのまま採用（永続化時の元 id を維持）。
+// - 無ければ "remote-${supabase.id}" を生成（restore 後の上書きは page 側で実施）。
+function deriveLocalThreadId(remote: SupabaseTutorThread): string {
+  return remote.localThreadId ?? `remote-${remote.id}`;
+}
+
 export function TutorThreadSidebar({
   threads,
   currentThreadId,
   onSelect,
   onCreate,
   onDelete,
+  remoteThreads = [],
+  onRestoreRemote,
+  restoringRemoteId = null,
 }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const currentThread = threads.find((t) => t.id === currentThreadId) ?? null;
+
+  // localStorage に対応行がない remote thread のみ表示する。
+  // 対応キーは deriveLocalThreadId(remote) ↔ localStorage thread.id。
+  // localThreadId が null の remote も `remote-<id>` の派生 key で識別する。
+  const remoteOnlyThreads = useMemo(() => {
+    if (remoteThreads.length === 0) return [];
+    const localIds = new Set(threads.map((t) => t.id));
+    return remoteThreads
+      .filter((r) => !localIds.has(deriveLocalThreadId(r)))
+      .sort((a, b) => {
+        const ax = a.lastMessageAt ?? a.updatedAt;
+        const bx = b.lastMessageAt ?? b.updatedAt;
+        return bx.localeCompare(ax);
+      });
+  }, [remoteThreads, threads]);
+
+  function handleRestore(e: React.MouseEvent, remote: SupabaseTutorThread) {
+    e.stopPropagation();
+    if (!onRestoreRemote || restoringRemoteId !== null) return;
+    onRestoreRemote(remote);
+    setMobileOpen(false);
+  }
 
   function handleDelete(e: React.MouseEvent, threadId: string) {
     e.stopPropagation();
@@ -126,6 +173,62 @@ export function TutorThreadSidebar({
             </button>
           );
         })}
+
+        {remoteOnlyThreads.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-gray-200">
+            <p className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+              他端末の履歴
+            </p>
+            {remoteOnlyThreads.map((r) => {
+              const restoring = restoringRemoteId === r.id;
+              const canRestore = Boolean(onRestoreRemote) && !restoring;
+              return (
+                <button
+                  key={`remote-${r.id}`}
+                  type="button"
+                  onClick={canRestore ? (e) => handleRestore(e, r) : undefined}
+                  disabled={!canRestore}
+                  className={`group w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                    canRestore
+                      ? 'hover:bg-blue-50 cursor-pointer'
+                      : 'cursor-not-allowed'
+                  }`}
+                  title={
+                    canRestore
+                      ? 'クリックでこの履歴を取り込んで再開'
+                      : restoring
+                        ? '復元中…'
+                        : undefined
+                  }
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p
+                      className={`text-sm leading-snug line-clamp-2 ${
+                        canRestore ? 'text-gray-600' : 'text-gray-400'
+                      }`}
+                    >
+                      {r.title}
+                    </p>
+                    <span
+                      className={`text-[10px] shrink-0 mt-0.5 ${
+                        restoring
+                          ? 'text-gray-400'
+                          : 'text-blue-600 opacity-0 group-hover:opacity-100'
+                      }`}
+                      aria-hidden
+                    >
+                      {restoring ? '復元中…' : '↓ 取り込む'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {formatUpdatedAt(r.lastMessageAt ?? r.updatedAt)}
+                    <span className="ml-1">・他端末</span>
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

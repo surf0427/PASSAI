@@ -31,6 +31,8 @@ anywhere else, stop and route through this boundary instead.
 | `mirrorConfig.ts` | Global kill-switch (`isMirrorRuntimeEnabled()`). Reads `NEXT_PUBLIC_SUPABASE_MIRROR_DISABLED`; default-enabled when unset. Sole reader of that env var. |
 | `mirrorMetrics.ts` | In-memory counters (`attempted` / `success` / `skipped` / `failed`). No persistence, no network, no localStorage, no external SDK. Reading requires an explicit `getMirrorMetricsSnapshot()` call. Counters aggregate across all feature mirrors — durable per-feature data lives in `mirror_events`. |
 | `mirrorEventSink.ts` | Best-effort INSERT into the `mirror_events` observability table (`supabase/schema.sql §5`). Exports `emitMirrorEvent(event)`. Independent kill-switch via `NEXT_PUBLIC_SUPABASE_OBSERVABILITY_DISABLED` (default-enabled when unset). No reads, never throws, no retries / batching / sampling. Invoked via `mirrorFinalize.finalize()` from every feature mirror. |
+| `auth.ts` | **Phase2 Auth (STEP-AUTH-01).** Browser-only helper. `ensureAnonymousUser()` calls `supabase.auth.getUser()` and falls back to `supabase.auth.signInAnonymously()`. Returns `string \| null` (never throws; null on env-missing / API failure). The only place outside Supabase's own modules that touches `supabase.auth.*`. Consumed by `AuthProvider`. See [`docs/supabase/phase2_auth_boundary.md`](../../docs/supabase/phase2_auth_boundary.md). |
+| `profile.ts` | **Phase2 Auth (STEP-AUTH-02).** Browser-only helper for the `profiles` table. Exports `loadProfile`, `ensureProfile`, `isDisplayUserIdTaken`, `saveDisplayUserId`. Reads + writes the canonical auth-side row (id = auth.uid()). Treats env-missing / Supabase failure as `null` (load/ensure) or `{ kind: 'error' }` (save). Unique-violation on display_user_id is translated to `{ kind: 'duplicate' }`. Owner key is always `auth.users.id`; `display_user_id` is display-only and **never** used as identity / FK / RLS subject. Table DDL: `supabase/schema.sql §16–§18`. Apply checklist: [`profiles_apply_checklist.md`](../../docs/supabase/profiles_apply_checklist.md). |
 
 ---
 
@@ -132,10 +134,40 @@ anywhere else, stop and route through this boundary instead.
   / [`diagnosis_post_apply_checklist.md`](../../docs/supabase/diagnosis_post_apply_checklist.md)
   / [`activity_mirror_schema_preview.md`](../../docs/supabase/activity_mirror_schema_preview.md)
   / [`activity_post_apply_checklist.md`](../../docs/supabase/activity_post_apply_checklist.md).
-- No auth UX, no login flow, no session-coupled rendering.
+- **Auth surface is intentionally minimal.** Phase2 Auth
+  ([`docs/supabase/phase2_auth_boundary.md`](../../docs/supabase/phase2_auth_boundary.md))
+  permits **only** the following beyond N=4 freeze:
+  - anonymous session creation (`auth.ts:ensureAnonymousUser()`)
+  - `currentUserId` exposure through `AuthProvider` (`useCurrentUserId()`)
+  - profile auto-ensure on mount (`profile.ts:ensureProfile()`)
+  - optional display_user_id management (`/account` page only)
+  - optional email opt-in (`email.ts:requestEmailChange()` / `/account/email`
+    page only) — requests an email change against `auth.users.email` via
+    `supabase.auth.updateUser({ email })`; Supabase sends the standard
+    confirmation mail and the new address is **not** persisted on
+    `auth.users.email` until the user clicks the confirmation link. The UI
+    treats success as "confirmation-sent", not "saved". **Does not** add
+    columns to `profiles` (STEP-AUTH-EMAIL-OPTIN-01)
 
-The shape above is intentional: Phase1 fixes the boundary first so each new
-mirror commit cannot accidentally widen the architecture.
+  Everything else stays forbidden:
+  - **no auth gating** — features must not require login to render
+  - **no login wall** — no modal / interstitial / redirect on existing pages
+  - **no existing-feature UI blocking** based on auth state (志望理由書 /
+    自己分析 / 小論文 / Tutor / mypage are auth-agnostic)
+  - **no session-coupled rendering** — Server Components must not branch on
+    `auth.uid()`; no SSR session reads
+  - **no Stripe coupling** — `profiles.plan` is fixed at `'free'`; do not
+    read or branch on plan from runtime
+  - **no email-required flow** — no sign-up form, no email verification gate,
+    no "register to continue" prompt (the `/account/email` page above is
+    opt-in only — no banner, modal, or interstitial drives users to it)
+  - **no existing-data user_id linking** — `lib/*Storage.ts` remains
+    user_id-free; mirror tables remain user_id-free
+
+The shape above is intentional: Phase1 fixes the mirror boundary first
+so each new mirror commit cannot accidentally widen the architecture.
+Phase2 Auth adds a strictly bounded identity layer on top **without
+modifying** the N=4 mirror freeze.
 
 ---
 
@@ -177,6 +209,41 @@ that file is the gate for any further change to this directory.
 See [`docs/supabase/phase1_boundary_freeze.md`](../../docs/supabase/phase1_boundary_freeze.md)
 for the full freeze contract, runtime invariants, accepted tradeoffs, and
 allowed future directions for Phase2+.
+
+---
+
+## Phase2 Auth Status
+
+**Auth boundary is intentionally minimal.** Phase2 Auth introduces a strictly
+bounded identity layer on top of the N=4 mirror freeze. The contract lives in
+[`docs/supabase/phase2_auth_boundary.md`](../../docs/supabase/phase2_auth_boundary.md);
+that file is the gate for any further change to the auth surface.
+
+- **Only two files participate in auth.** `auth.ts` (anonymous session
+  creation) and `profile.ts` (profiles row + display_user_id). No other file
+  in `lib/supabase/` reads `auth.users.id` or touches `supabase.auth.*`.
+- **Owner key is always `auth.users.id` (= `auth.uid()`).** `display_user_id`
+  is display-only — never used for RLS / FK / Stripe / save ownership.
+- **The N=4 mirror freeze is untouched.** Phase2 Auth does **not** add
+  `user_id` to any `mirrorXxx.ts`, does **not** add `user_id` columns to
+  mirror tables, and does **not** modify mirror dispatch sites or RLS.
+- **profiles must remain non-PII.** Adding email / school / real-name
+  columns directly to `profiles` is forbidden. The two allowed paths are
+  (a) a separate `profile_private` table with `auth.uid() = id` SELECT
+  policy, or (b) a `SECURITY DEFINER` function for the specific lookup.
+  See [`phase2_auth_boundary.md §5.3`](../../docs/supabase/phase2_auth_boundary.md).
+- **Operator verification.** `profiles` DDL is committed in
+  `supabase/schema.sql §16–§18`. Apply against the running project is
+  operator-driven. Procedure + post-apply check:
+  [`profiles_apply_checklist.md`](../../docs/supabase/profiles_apply_checklist.md).
+  Until applied, `loadProfile` / `ensureProfile` / `saveDisplayUserId`
+  return `null` / error and `/account` shows a save-failure state;
+  every other page continues to render off `localStorage` canonical.
+
+Auth surface extensions (new helpers in `auth.ts` / `profile.ts`, new
+`profiles` columns, new `AuthProvider` hooks, calls to `useCurrentUserId()`
+from feature pages) require a **doc-first PR** updating
+`phase2_auth_boundary.md` before the runtime change lands.
 
 ---
 
