@@ -12,11 +12,17 @@ import { analyzeStructure, type StructureAnalysis } from '@/lib/structureAnalysi
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // 文言を変える場合は ESSAY_REVIEW_PROMPT_VERSION（lib/hash/essayReview.ts）を必ず bump すること。
 import { ESSAY_REVIEW_SYSTEM_PROMPT } from '@/lib/prompts/essayReviewPrompt';
+import { buildPreviousOutputSummarySection } from '@/lib/contextBuilders/divergence/previousOutputSummarySection';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
+import type { PreviousOutputSummary } from '@/types/divergence';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/essay-review';
+// STEP-BILLING-06: usage_records.route に入れる識別子 (schema コメント規約に従う)。
+const USAGE_ROUTE = 'essay-review';
 
 // 受験方式に応じた小論文添削の方針を生成する。breakdown 構造（5項目固定）には影響を与えず、
 // improvement / weakPoints / goodPoints の中身を文脈に沿わせるためだけに使う。
@@ -78,6 +84,11 @@ export async function POST(req: Request) {
   const essayBody: string = body.essayBody ?? '';
   // basicInfo は任意。未送信や形が不正でも null として扱う。
   const basicInfo: BasicInfo | null = body.basicInfo ?? null;
+  // STEP-DIVERGENCE-02B: client が workspace.reviews[] の compact projection を
+  // buildPreviousOutputSummary() に通して送ってきた divergence context。
+  // 未送信なら null（完全後方互換 = section を出さない）。route 内で localStorage /
+  // Supabase は一切読まない（client が build 済みの struct をそのまま section へ流す）。
+  const previousOutputSummary: PreviousOutputSummary | null = body.previousOutputSummary ?? null;
 
   // V-6: client validator の最終防衛線。AI call / prompt build / aiUsageLog 未到達で 400。
   const validation = validateEssayReviewInput(essayBody);
@@ -89,6 +100,11 @@ export async function POST(req: Request) {
     });
     return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  // STEP-BILLING-06: Plan Gate。バリデーション後 / AI call 前に実施。
+  const gate = await ensurePlanQuota('essay');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
   const examTypeGuidance = buildExamTypeEssayGuidance(basicInfo?.examTypes);
@@ -103,6 +119,10 @@ export async function POST(req: Request) {
   // 同 essayBody → 同 structure → 同 prompt body の関係で cache identity に drift をもたらさない。
   // AI が同じ 6 要素を再 discovery する往復コストを削減し、改善提案 / 具体例作成に token を割けるようにする。
   const structureSection = buildStructureAnalysisSection(analyzeStructure(essayBody));
+  // STEP-DIVERGENCE-02B: 過去に提示済みフィードバック section。空なら空文字（履歴 0/1 件・
+  // 未送信＝旧挙動と等価）。SYSTEM_PROMPT 側の ESSAY_REVIEW_PREVIOUS_OUTPUT_QUALIFIER と組で動く。
+  // 実データは user message にだけ載せ、system（cache 対象）には入れない（prompt cache 維持）。
+  const previousOutputSection = buildPreviousOutputSummarySection(previousOutputSummary);
 
   const userMessage = `以下の小論文を採点・添削してください。
 
@@ -120,7 +140,7 @@ ${reasonOne || '（未入力）'}
 【理由②】
 ${reasonTwo || '（未入力）'}
 
-${structureSection ? `${structureSection}\n\n` : ''}【本文】
+${structureSection ? `${structureSection}\n\n` : ''}${previousOutputSection ? `${previousOutputSection}\n\n` : ''}【本文】
 ${essayBody}`;
 
   try {
@@ -156,6 +176,7 @@ ${essayBody}`;
         rawTextTail: text.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_REVIEW_TRUNCATED',
@@ -184,6 +205,14 @@ ${essayBody}`;
       cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
       cache_read_input_tokens: message.usage?.cache_read_input_tokens,
     });
+    // STEP-BILLING-06: parse 失敗はユーザーが本来の AI 出力を得ていないため
+    // quota は消費させない (status='error')。parse 成功時のみ ok でカウントする。
+    await recordUsage({
+      userId,
+      route: USAGE_ROUTE,
+      model: MODEL,
+      status: parseOk ? 'ok' : 'error',
+    });
     return Response.json(safeParseResult(parsed));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -191,6 +220,7 @@ ${essayBody}`;
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json(
       { error: 'AIの処理に失敗しました。時間をおいてお試しください。' },
       { status: 500 }

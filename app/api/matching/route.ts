@@ -45,6 +45,8 @@ import { anthropic } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseJson } from '@/lib/matching/safeParseJson';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 import {
   buildUniversityContextsFromBasicInfo,
   findUniversityContextByName,
@@ -70,6 +72,7 @@ import type { StudentProfile } from '@/types/studentProfile';
 // anthropic.messages.create() を呼ぶため、log は per-call で発火する（1 request = 5 log line）。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/matching';
+const USAGE_ROUTE = 'matching';
 
 // STEP DET-M1 / STEP-AUDIT-TOP1-5-FIX-01: マッチング reason の AI 経路。
 //   true       : AI 経路を有効化（generateUniversityDetail → Claude 呼び出し）。
@@ -343,6 +346,14 @@ export async function POST(req: Request) {
     return Response.json({ error: 'selfAnalysis and results are required' }, { status: 400 });
   }
 
+  // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。本 route は最大 N 大学分
+  // (RERANK_POOL_SIZE 分) AI 呼び出しするが、ユーザー視点では「1 回のマッチング
+  // リクエスト」なので 1 quota 消費。USE_AI_MATCHING_REASON=false の deterministic
+  // 経路でも matching feature を使っている事実は同じなので gate は通す。
+  const gate = await ensurePlanQuota('self-pr');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
+
   try {
     // 自己分析は 1 回だけ StudentProfile を確定して、候補大学ごとの prompt 生成で使い回す。
     // 受信側で WallHittingResult を直接 prompt に流さない（questions / answers が混入する
@@ -372,6 +383,7 @@ export async function POST(req: Request) {
         universityId: candidate.university.id,
         reason: candidate.reason,
       }));
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
       return Response.json({ advices });
     }
 
@@ -441,6 +453,7 @@ export async function POST(req: Request) {
     // 空 advices を返すと UI が「全大学に空 reason」を表示する経路に入ってしまうため。
     if (successfulCandidates === 0) {
       console.error('matching: all candidates failed');
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         { error: 'AI matching failed', detail: 'all candidates failed' },
         { status: 500 },
@@ -450,6 +463,8 @@ export async function POST(req: Request) {
     // partial fail の観測情報を optional 添付。partial=false（全成功）時は既存 shape `{ advices }` のまま。
     // 既存 client は data.advices だけを読むため、追加 field は無視されても壊れない。
     const partial = failedCandidates > 0;
+    // partial 失敗を含めて少なくとも 1 件成功していれば、ユーザーは使える結果を得たので 'ok' で計上。
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({
       advices,
       ...(partial && { partial: true, successfulCandidates, failedCandidates }),
@@ -457,6 +472,7 @@ export async function POST(req: Request) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Matching AI error:', msg);
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'AI matching failed', detail: msg }, { status: 500 });
   }
 }

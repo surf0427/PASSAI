@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import type { InterviewQuestionFormData, InterviewQuestionsViewState } from '../types';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { TwoLayerInterviewQuestions } from '@/types/interviewQuestions';
@@ -87,6 +88,10 @@ function isUsableTwoLayer(q: TwoLayerInterviewQuestions): boolean {
 }
 
 export function InterviewQuestionForm() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const [formData, setFormData] = useState<InterviewQuestionFormData>(() => {
     const initialData = loadInterviewQuestionInitialData();
     return { ...INITIAL_FORM_DATA, ...initialData };
@@ -198,6 +203,12 @@ export function InterviewQuestionForm() {
           dailySeed,
         }),
       });
+
+      // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログに委譲して早期 return。
+      // setUsedFallback / setLoading 等のクリーンアップは外側 finally に任せる。
+      if (await handleQuotaResponse(response)) {
+        return;
+      }
 
       if (!response.ok) throw new Error('AI_HTTP_FAILED');
 
@@ -375,6 +386,9 @@ export function InterviewQuestionForm() {
           />
         </>
       )}
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

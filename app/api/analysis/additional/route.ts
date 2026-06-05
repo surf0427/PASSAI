@@ -22,15 +22,19 @@ import {
 } from '@/lib/prompts/additionalQuestionsPrompt';
 import { anthropic, extractJson } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
+import { buildThemeFrequency } from '@/lib/contextBuilders/divergence/buildThemeFrequency';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 側と同じパターン。model を切り替えるときはここを変えれば log も追従する。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/analysis/additional';
+const USAGE_ROUTE = 'analysis/additional';
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -56,6 +60,11 @@ export async function POST(req: Request) {
     });
     return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
+  const gate = await ensurePlanQuota('self-pr');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   const activityText = formatActivityData(activityData);
 
@@ -88,6 +97,11 @@ export async function POST(req: Request) {
             existingQuestions,
             basicInfo,
             universityContext,
+            // STEP-DIVERGENCE-03C: テーマ偏り（activityData から決定論派生）を質問生成の探索 context に。
+            // この段階では StudentProfile 未生成のため studentProfile は null（activityData のみで集計）。
+            // activityData は既に HashAdditionalQuestionsInput に含まれるため hash field は増やさず
+            // PROMPT_VERSION bump のみ（03A/DET 系と同型）。StudentProfile 生成には一切作用しない。
+            themeFrequency: buildThemeFrequency({ activityData, studentProfile: null }),
           }),
         },
       ],
@@ -108,6 +122,7 @@ export async function POST(req: Request) {
         rawTextTail: raw.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_ADDITIONAL_QUESTIONS_TRUNCATED',
@@ -133,6 +148,7 @@ export async function POST(req: Request) {
         outputTokens: message.usage?.output_tokens,
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED',
@@ -143,6 +159,7 @@ export async function POST(req: Request) {
     }
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ questions });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -150,6 +167,7 @@ export async function POST(req: Request) {
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」が集計できる状態にする（/api/analysis と同じ方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json(
       { error: '質問の追加生成に失敗しました', detail: msg },
       { status: 500 },

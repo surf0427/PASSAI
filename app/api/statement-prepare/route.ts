@@ -13,11 +13,15 @@ import {
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { detectNgWords } from '@/lib/detectNgWords';
 import { buildStatementUniversityContext } from '@/lib/statement/review/buildStatementUniversityContext';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // 429（rate limit）は AI call 前の弾きなので usage log は出さない（AI を消費していない）。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/statement-prepare';
+// STEP-GATE-COMPLETE: usage_records.route 識別子 (schema コメント規約)。
+const USAGE_ROUTE = 'statement-prepare';
 
 // ── rate limit 設定 ──────────────────────────────────────────────
 // 同一IPあたり 1時間 5回。実装は lib/serverRateLimit.ts 側（暫定メモリ実装）。
@@ -105,6 +109,11 @@ export async function POST(req: Request) {
     );
   }
 
+  // STEP-GATE-COMPLETE: Plan Gate (rate limit 後 / AI call 前)。
+  const gate = await ensurePlanQuota('statement');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
+
   try {
     // STEP4.10: 既存 control flow を変えずに観測する。messages.create() と JSON.parse を
     // 個別 try/catch で囲み、log → re-throw で外側の既存 catch に届ける。レスポンス shape /
@@ -184,6 +193,7 @@ export async function POST(req: Request) {
       // JSON は parse できたが期待 shape ではない（AI schema 違反）。
       // 「AI 出力を期待通りに読み取れなかった」という意味で parse_failed として記録する。
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         { error: '整理に失敗しました。もう一度お試しください。' },
         { status: 500 },
@@ -191,11 +201,13 @@ export async function POST(req: Request) {
     }
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json(parsed);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('statement-prepare API error:', msg);
     // inner で具体 status を log 済みのため、ここでは追加 log しない（double-log 回避）。
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json(
       { error: '整理に失敗しました。もう一度お試しください。' },
       { status: 500 },

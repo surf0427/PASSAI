@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   buildInputSignature,
   clearStatementPrepareFollowUpAnswers,
@@ -84,6 +85,10 @@ const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
 export default function StatementPreparePage() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const router = useRouter();
   const [interest, setInterest] = useState('');
   const [experience, setExperience] = useState('');
@@ -229,6 +234,12 @@ export default function StatementPreparePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(answers),
       });
+
+      // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログに委譲して早期 return。
+      // finally で loading 解除されるため state 整合性は保たれる。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       // STEP 11: サーバ側 rate limit に引っかかった場合は専用文言を表示する。
       // クライアント側の1日3回カウントは進めない（成功時のみ進める仕様を維持）。
@@ -545,6 +556,9 @@ export default function StatementPreparePage() {
           {quoteToast}
         </div>
       )}
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

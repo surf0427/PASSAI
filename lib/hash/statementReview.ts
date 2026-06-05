@@ -10,13 +10,21 @@
 // ANALYSIS_* / ADDITIONAL_QUESTIONS_* / SUMMARIZE_* の contract には一切影響しない。
 //
 // hash に含めないもの:
-//   - statementReviewHistory（出力ストック、入力ではない）
+//   - statementReviewHistory の生データ（本文 essay / score / 日付など）。出力ストックそのもの
 //   - statementReviewLimit（観測対象だが AI 入力ではない）
 //   - score / feedback / 全 response 系（出力）
 //   - temperature / max_tokens は PROMPT_VERSION 側で invalidate を集約
+//
+// hash に含めるもの（STEP-DIVERGENCE-02A で追加）:
+//   - previousOutputSummary（statementReviewHistory から派生した「既出の助言・論点」の圧縮）。
+//     生履歴ではなく派生 summary を入力として hash に含める。DET-2/DET-4（essay 等から
+//     deterministic 派生・hash 不変）と異なり、statementReviewHistory は時間で変化するため、
+//     これを hash に含めないと「同本文 + 履歴変化」で app-cache が hit し、divergence prompt が
+//     再実行されず feature が実質無効になる。意図的に hash 入力へ含める（PREIMPLEMENTATION 監査）。
 
 import { djb2 } from '@/lib/hash/djb2';
 import { stableStringify } from '@/lib/hash/stableStringify';
+import type { PreviousOutputSummary, UnusedExperience } from '@/types/divergence';
 
 // PROMPT_VERSION bump 履歴:
 //   v1 → v2 : STEP15b で SUBJECT_GRADES_SHARED_INSTRUCTION / SUBJECT_GRADES_ASYMMETRY_RULE /
@@ -78,7 +86,46 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             section と独立 / 共存（順序: structure → ng → 【本文】、大局 → 細部 → 本体）。
 //             bump により旧 v7 cache は一律 miss になる（intentional 1 回損失）が、cache hit 経路の
 //             仕様は何も変えていない。
-export const STATEMENT_REVIEW_PROMPT_VERSION = 8;
+//   v8 → v9 : STEP-DIVERGENCE-02A で Divergence Layer v1 を statement-review に導入。
+//             statementReviewHistory から派生した PreviousOutputSummary（既出の助言・論点の圧縮）を
+//             user prompt に【過去に提示済みのフィードバック】section として注入し、出力収束
+//             （毎回同じ弱点・改善アクション・論点）を抑える。SYSTEM_PROMPT 側に
+//             STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER を追加（探索型 + 安全弁 / 採点不反映）。
+//             DET-2/DET-4 と違い、入力源（statementReviewHistory）が時間で変化するため
+//             previousOutputSummary を hash 入力構造（HashStatementReviewInput）にも追加した。
+//             同本文でも履歴が変われば hash が変わり、app-cache を miss させて divergence prompt を
+//             必ず再実行させる（これが無いと feature が cache-hit 経路で無効化される）。
+//             履歴 0/1 件・projection 空のときは previousOutputSummary が空 struct になり section も
+//             出ないため prompt 本文は旧挙動と等価。bump により旧 v8 cache は一律 miss（intentional
+//             1 回損失）。response shape / JSON contract / scoring rule（5 軸 8〜20）は不変。
+//   v9 → v10: STEP-DIVERGENCE-03A で ThemeFrequency Layer を導入。ユーザーのテーマ偏り
+//             （activityData + studentProfile から決定論派生）を user prompt に【テーマの偏り（参考）】
+//             section として注入し、同じテーマへの収束を抑えて薄い／未探索テーマの探索を促す。
+//             SYSTEM_PROMPT 側に STATEMENT_REVIEW_THEME_FREQUENCY_QUALIFIER を追加（探索型のみ /
+//             採点・減点に不反映 / overused 否定せず underused 強制せず）。
+//             ThemeFrequency は activityData + studentProfile からの deterministic 派生であり、
+//             両者は既に HashStatementReviewInput に含まれている（DET-2/DET-4 と同型）。よって
+//             hash 入力構造（HashStatementReviewInput の signature）は不変・新規 field を追加しない
+//             （同 activityData + 同 studentProfile → 同 ThemeFrequency → 同 prompt body の関係で
+//             cache identity を保つ）。route 側で buildThemeFrequency() を生成するため body 追加も
+//             caller 変更も不要。prompt 本文が変わり出力が変わるため bump は必須。bump により旧 v9
+//             cache は一律 miss（intentional 1 回損失）。response shape / JSON contract / scoring
+//             rule（5 軸 8〜20）は不変。
+//   v10 → v11: STEP-DIVERGENCE-04B で UnusedExperience Layer を導入。activityData × 使用面
+//             （現 essay + statementReviewHistory.essay + selfPRs.text + interview answers +
+//             StudentProfile）から「まだ活用できていない可能性のある経験」を deterministic に検出し、
+//             user prompt に【まだ活用できていない可能性のある経験】section として注入。SYSTEM_PROMPT
+//             側に STATEMENT_REVIEW_UNUSED_EXPERIENCE_QUALIFIER を追加（探索型 / 主軸保護 / 未使用と
+//             断定せず / 捏造禁止 / 採点不反映）。
+//             ThemeFrequency（03A）と違い usedText が selfPRs / interview_records などの hash 外・
+//             時間変化 source を含むため activityData の単純な決定論派生ではない。よって
+//             PreviousOutputSummary（02A v8→v9）と同型で unusedExperience を hash 入力構造
+//             （HashStatementReviewInput）に追加する（hash 外 source の変化で同 essay でも cache を
+//             miss させ stale を防ぐ）。client(edit page) で 1 回 build し hash 入力と body の両方へ
+//             同一 struct を渡す（digest 不整合回避）。未送信 / unused 空 / totalExperiences < 3 の
+//             ときは section も出ず prompt 本文は旧挙動と等価。bump により旧 v10 cache は一律 miss
+//             （intentional 1 回損失）。response shape / JSON contract / scoring rule（5 軸 8〜20）は不変。
+export const STATEMENT_REVIEW_PROMPT_VERSION = 11;
 export const STATEMENT_REVIEW_MODEL = 'claude-sonnet-4-6';
 
 // hash と prompt body の input source は STEP-F 以降 intentional に非対称:
@@ -96,10 +143,23 @@ export type HashStatementReviewInput = {
   basicInfo: unknown;
   activityData: unknown;
   studentProfile: unknown;
+  // STEP-DIVERGENCE-02A: 過去添削の派生 summary。未指定は関数内で null 正規化する。
+  previousOutputSummary?: PreviousOutputSummary | null;
+  // STEP-DIVERGENCE-04B: 未使用経験の派生 struct。usedText が hash 外・時間変化 source を含むため
+  // previousOutputSummary と同様に hash 対象に含める。未指定は関数内で null 正規化する。
+  unusedExperience?: UnusedExperience | null;
   model: string;
   promptVersion: number;
 };
 
 export function hashStatementReviewInput(input: HashStatementReviewInput): string {
-  return djb2(stableStringify(input));
+  // STEP-DIVERGENCE-02A/04B: previousOutputSummary / unusedExperience を hash 対象に含める。
+  // 未指定は null に正規化し、caller 横断（projection を送らない caller 含む）で決定論的に同じ hash に
+  // なるようにする。
+  const normalized = {
+    ...input,
+    previousOutputSummary: input.previousOutputSummary ?? null,
+    unusedExperience: input.unusedExperience ?? null,
+  };
+  return djb2(stableStringify(normalized));
 }

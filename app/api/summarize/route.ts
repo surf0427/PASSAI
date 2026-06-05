@@ -19,11 +19,14 @@ import {
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateSummarizeInput } from '@/lib/validation/validateSummarizeInput';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis / /api/analysis/additional と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/summarize';
+const USAGE_ROUTE = 'summarize';
 
 // normalizeSummary は lib/summarizeNormalize.ts に co-locate（input 正規化 helpers と同居）。
 // 戻り値 SummaryResult shape および fallback 挙動は完全に同一。
@@ -56,6 +59,11 @@ export async function POST(req: Request) {
     });
     return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
+  const gate = await ensurePlanQuota('self-pr');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   // 各質問の任意「追加深掘りメモ」。
   // body 省略時 / 配列でない / 長さズレに耐えるため、必ず共有 helper で正規化する。
@@ -126,6 +134,7 @@ export async function POST(req: Request) {
         rawTextTail: raw.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_SUMMARY_TRUNCATED',
@@ -151,6 +160,7 @@ export async function POST(req: Request) {
         outputTokens: message.usage?.output_tokens,
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_SUMMARY_PARSE_FAILED',
@@ -161,6 +171,7 @@ export async function POST(req: Request) {
     }
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ summary });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -168,6 +179,7 @@ export async function POST(req: Request) {
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系 3 route 共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'AI summarize failed', detail: msg }, { status: 500 });
   }
 }

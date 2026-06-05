@@ -32,6 +32,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   loadEssayWorkspace,
   upsertEssayWorkspace,
@@ -52,6 +53,8 @@ import {
 import { logAiCache } from '@/lib/aiCacheLog';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { buildBasicInfoForAi } from '@/lib/essay/buildBasicInfoForAi';
+// STEP-DIVERGENCE-02B: 過去 review（workspace.reviews[]）→ 既出の助言（divergence context）。
+import { buildPreviousOutputSummary } from '@/lib/contextBuilders/divergence/buildPreviousOutputSummary';
 import { Textarea } from '@/components/ui/Textarea';
 import {
   BUTTON_BASE,
@@ -70,6 +73,10 @@ const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
 export default function EssayRewritePage() {
+  // STEP-BILLING-07A: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const params = useParams<{ wid: string }>();
   const router = useRouter();
   const wid = params?.wid ?? '';
@@ -197,6 +204,21 @@ export default function EssayRewritePage() {
       workspace.target,
     );
 
+    // STEP-DIVERGENCE-02B: この workspace の過去 review から「既出の助言」を抽出する
+    // divergence context。再添削ループ（improve/rewrite）でのみ reviews[] が非空になるため、
+    // ここが essay divergence の本戦場（write/body・structure/body は reviews.length>0 で guard
+    // されており初回専用＝PrevOut 空）。
+    // - body には ReviewEntry 全体を送らず、weakPoints / improvement だけの compact projection を渡す
+    //   （essayBodySnapshot / score / breakdown / verdict / 日付などは載せない）。essay の論点反復は
+    //   weakPoints + improvement に集約されるため strengths 相当は送らない（repeatedThemes は空）。
+    // - 生成 struct を hash 入力と fetch body の両方に渡し、hash と prompt の内容を一致させる。
+    const previousOutputSummary = buildPreviousOutputSummary(
+      workspace.reviews.map((r) => ({
+        weaknesses: r.weakPoints,
+        actions: r.improvement ? [r.improvement] : [],
+      })),
+    );
+
     // 既存 /api/essay-review の cache 入力と完全に揃える（同 body なら hit する）。
     const inputHash = hashEssayReviewInput({
       theme: themeText,
@@ -206,6 +228,7 @@ export default function EssayRewritePage() {
       reasonTwo: workspace.mini.reasonTwo,
       essayBody: submitBody,
       basicInfo: basicInfoForAi,
+      previousOutputSummary,
       model: ESSAY_REVIEW_MODEL,
       promptVersion: ESSAY_REVIEW_PROMPT_VERSION,
     });
@@ -238,8 +261,15 @@ export default function EssayRewritePage() {
           reasonTwo: workspace.mini.reasonTwo,
           essayBody: submitBody,
           basicInfo: basicInfoForAi,
+          // STEP-DIVERGENCE-02B: hash 入力と同一 struct を送る（hash と prompt 内容を一致させる）。
+          previousOutputSummary,
         }),
       });
+
+      // STEP-BILLING-07A: 402 quota-exceeded はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       const data = await res.json();
 
@@ -508,6 +538,9 @@ export default function EssayRewritePage() {
           </div>
         </div>
       </div>
+
+      {/* STEP-BILLING-07A: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

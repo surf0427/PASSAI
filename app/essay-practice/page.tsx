@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   saveEssayProgress,
   saveReviewResult,
@@ -126,6 +127,10 @@ const EMPTY_SELECTED_ESSAY_TARGET: SelectedEssayTarget = {
 };
 
 export default function EssayPracticePage() {
+  // STEP-BILLING-07A: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   // ステップ番号: 0=練習条件設定 / 1=テーマ確認 / 2=ミニ思考欄 / 3=本文 / 4=壁打ち / 5=添削結果
   const [currentStep, setCurrentStep] = useState(0);
   // テーマ候補（themeCandidates）の中のどれを表示中か。
@@ -263,6 +268,11 @@ export default function EssayPracticePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theme: essayTheme, themeType: essayThemeType, conclusion, reasonOne, reasonTwo, essayBody, userQuestion, basicInfo: basicInfoForAi }),
       });
+
+      // STEP-GATE-COMPLETE: essay-chat も 402 ダイアログ対象 (essay-review と同じ hook を流用)。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       const data = await res.json();
 
@@ -437,6 +447,11 @@ export default function EssayPracticePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theme: essayTheme, themeType: essayThemeType, conclusion, reasonOne, reasonTwo, essayBody, basicInfo: basicInfoForAi }),
       });
+
+      // STEP-BILLING-07A: 402 quota-exceeded はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       const data = await res.json();
 
@@ -1111,6 +1126,8 @@ export default function EssayPracticePage() {
         </section>
       )}
 
+      {/* STEP-BILLING-07A: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

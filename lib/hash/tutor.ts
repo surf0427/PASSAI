@@ -366,5 +366,146 @@
 //               types は無変更。
 //             v1 では input hash cache を使わないため cache miss は発生しないが、
 //             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
-export const TUTOR_PROMPT_VERSION = 17;
+//   v17 → v18: Supabase student context injection
+//             (STEP-TUTOR-SUPABASE-CONTEXT-OUTPUT-01)。
+//             /api/tutor の Claude 呼び出し前に、server-side で Supabase の auth-scoped
+//             永続層（self_analysis_logs）を userId scope で read し、保存済み生徒情報を
+//             要約した SYSTEM block（【保存済みの生徒情報（自己分析）】）を追加注入する。
+//             - 新規: lib/contextBuilders/tutorContext.ts
+//                 (loadTutorStudentContext / buildTutorSupabaseContextSection)
+//             - route: gate 成功後・Claude call 前に load → section 化し、systemBlocks の
+//                 block 3（dynamic / cache 対象外）として push。空なら block を足さない。
+//             - 取得失敗 / 未ログイン / データ不足でも throw せず '' に倒し Tutor は通常動作。
+//             【データソース注記】当初想定の basic_info / student_profile / diagnosis /
+//             activity mirror は Phase1 anonymous write-only（user_id 列・SELECT policy 無し）
+//             で server-side read 不可のため、今回は唯一 read 可能な auth-scoped table
+//             self_analysis_logs のみを source とする。残り 3 種は当該 mirror に user_id +
+//             SELECT policy を足す schema STEP（Phase2）後の次フェーズに残す。
+//             【不変】TUTOR_SYSTEM_PROMPT 本文は byte-identical（block 1 cache hit 不変）。
+//             追加 block は dynamic で cache breakpoint より後段のため prompt cache は無影響。
+//             条文 [A]〜[Y] / few-shot / 禁止語彙 / 温度判定 / 安定化 / 危険語 / 機能接続
+//             候補 / intent enum / max_tokens / parser / detectTutorIntent / 既存 body 由来
+//             studentContext（block 2）はいずれも不変。
+//             SYSTEM PROMPT 本文は無変更だが、studentContext 注入経路を追加したため
+//             意味的版（v10→v11 detectTutorIntent / v5→v6 intent enum と同種）として bump する。
+//   v18 → v19: Supabase basic_info / diagnosis / activity context injection
+//             (STEP-TUTOR-CONTEXT-PHASE2-CONNECT-01)。
+//             lib/contextBuilders/tutorContext.ts に server-side loader を 3 本追加し、
+//             auth-scoped durable（basic_info_logs §41 / diagnosis_logs §44 /
+//             activity_logs §47）を userId scope で read して studentContext へ統合する。
+//             - basic_info: 学年 / 受験方式 / 志望校・志望分野（各最大 3）。氏名・評定・
+//                 欠席等の PII は読まない。
+//             - diagnosis: resultType を会話補助 hint へ言い換え（固定タイプ名は出さない）。
+//             - activity: カテゴリ別件数のみ（narrative 本文は読まない）。
+//             buildTutorSupabaseContextSection は 4 source を 1 つの【保存済みの生徒情報】
+//             section に統合（空 source は行省略 / 全空なら ''）。冒頭に「参考情報・最新発言
+//             優先・矛盾時は確認」を明記。section 全体 1200 字 cap。
+//             【不変】TUTOR_SYSTEM_PROMPT 本文は byte-identical（block 1 cache hit 不変）。
+//             追加情報は dynamic block 3（cache breakpoint より後段）に載るため prompt cache
+//             は無影響。/api/tutor/route.ts の接続位置・systemBlocks 構成・既存 self_analysis
+//             挙動・既存 body 由来 block 2 はいずれも不変（import 名も不変で route 無変更）。
+//             SQL 未 apply で table 不存在でも各 loader は never-throw で no-op（500 にしない）。
+//             SYSTEM PROMPT 本文は無変更だが、studentContext の情報源を拡張したため
+//             意味的版として bump する。
+//   v19 → v20: STEP-TUTOR-PERSONALITY-AND-CONTEXT-01 個別最適化とパーソナリティ改修。
+//             Tutor を「受験相談ボット」から「生徒情報を理解した受験専門チューター」へ寄せる。
+//             立ち位置を「塾の年近い大学生チューター」と「受験専門コンサルタント」の中間と
+//             明示し、(1) 個別最適化を最優先、(2) 受験外は無理に受験へ戻さない、
+//             (3) 感情はまず受け止めてから助言、(4) 質問しすぎ防止・価値先・0〜1 問、
+//             (5) トーンのカジュアル寄り緩和、を最上位方針として導入する。
+//             【SYSTEM PROMPT 改訂】
+//             ・冒頭 persona を「専属チューター / TA とコンサルの中間 / 個別最適化」へ書き換え。
+//             ・新規ブロック【最重要方針：個別最適化とパーソナリティ】を追加（上位方針として
+//               冒頭に配置）。旧来の「語尾は必ず敬体」「文脈参照は 1 要素のみ」型の細則より
+//               本ブロック + 改訂後 [B][E][H][T] を優先する旨を明記。上位ガード（[G][F][Q] /
+//               ai_policy の本文代筆・合否予測・数値スコア絶対値禁止）は緩和対象外。
+//             ・[B] 基本姿勢: 語尾を「敬体維持」→「親しみやすい先輩（半敬体〜軽いタメ口許容）」
+//               へ緩和。重トピックは落ち着いた半敬体に寄せる旨を付記。
+//             ・[E] 温度感の切り替え: 「語尾敬体は必ず維持」を撤廃。Casual で軽いタメ口
+//               （〜だね / 〜だよ / 〜だな / 〜な / 〜と思う / plain 形）を許容。「絶対に
+//               超えない上限」の禁止語尾リストから〜だね/〜だよを外し、キャラ語尾・方言キャラ
+//               語尾・SNS 語尾（〜じゃん/〜だわ/〜やで/〜ですわ/〜ね♪ 等）のみ禁止へ。
+//             ・[H] 文脈データの使い方: 「1 返信 1 要素のみ・間接参照基本」→「受験・進路の
+//               話題では積極参照・複数要素可・個別最適化優先」へ緩和。単なる復唱・列挙は引き
+//               続き禁止。最新発言優先・矛盾時は最新発言を明記。applicantType ラベル直接出力
+//               禁止 / 数値スコア・日付・配列 index の引用禁止 / 同要素 2 ターン連続禁止は不変。
+//             ・[T] 受験外話題: (a) 純粋な雑談・日常（旅行/趣味/恋愛/日常会話）は自然な会話と
+//               して応答し受験へ無理に接続しない / (b) 進路・自己理解につながる人生の話は従来の
+//               受け止め→整理→（必要なら）接続、の 2 モードへ整理。
+//             ・[L] 禁止語彙: タメ口語尾リストから〜だね/〜だよ/〜だな を除外（[E] で許容・本
+//               リスト対象外と注記）。キャラ語尾・方言キャラ語尾・SNS 語尾は引き続き絶対禁止。
+//             ・[W-Lv4] / [X-Lv4] / [V-7]: 「完全タメ口禁止」「[H] 1 要素のみを 2 要素へ緩和」
+//               等の旧 [E]/[H] 依存記述を、改訂後の [E]（軽いタメ口許容・キャラ/SNS 語尾禁止）/
+//               [H]（複数要素参照可）と整合する文言へ更新。
+//             【route / context builder 改訂】
+//             ・buildTutorStudentContextSection（dynamic block 2）の利用ルール instruction を
+//               「必要なときだけ自然に参照」→「受験・進路では積極活用・個別最適化、ただし復唱
+//               回避・雑談では参照しない・最新発言優先」へ更新（出力 string 変更）。
+//             【不変】
+//             ・上位ガード [G] 危険語プロトコル / [F] 安定化モード / [Q] Emotional gravity /
+//               ai_policy（本文代筆・合否予測・進学先価値判断・数値スコア絶対値の禁止）。
+//             ・[C] 共感の作り方 / [D] 励まし基準 / [I] 機能接続（4 機能・MUST・→ prefix・
+//               優先順位）/ [J] 出力フォーマット字数・絵文字・! 禁止 / [K] subjectGrades /
+//               [M] 終端ルール / [N][O][P][S] 雑味・normalize 上限 /
+//               [R] SNS 人格・若者演技語彙の完全禁止 / [U][V-1〜V-9][W][X][Y] の構造ルール本体 /
+//               【参考例】【REALCHAT参考例】【V/W/X/Y-参考例】/ intent enum / max_tokens /
+//               route の qualifier append 経路 / parseTutorReply / detectTutorIntent /
+//               Supabase studentContext 注入経路。
+//             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する（v1 では input
+//             hash cache 不使用のため cache miss は発生しない。block 1 は byte-identical 性を
+//             失うため ephemeral cache は新文言で再構築される）。
+//   v20 → v21: STEP-TUTOR-PERSONALITY-AND-CONTEXT-01 CASUAL CHAT MODE 追加。
+//             受験外の雑談で「受験相談 AI」ではなく「自然な人間同士の会話相手」として
+//             振る舞う規律を明文化する（v20 の [T](a) 純粋雑談を本格 mode へ拡張）。
+//             【SYSTEM PROMPT 改訂】
+//             ・[T](a) を ── CASUAL CHAT MODE ── として全面拡張:
+//                 - 返信の基本順序「リアクション → 感想・考え → 必要なら質問（0〜1 個）」。
+//                 - 出力量: 通常 2〜5 文・極端に短い返答禁止・質問だけで終わらない・
+//                   短文ユーザーにも最低限リアクション + 感想を加える。
+//                 - 感想・考えの許可: 「個人的には〜好き」「〜だと思う」型の軽い感想・好み・
+//                   意見を許可（[B]「AI 自身の感情を語らない」の casual chat 例外）。ただし
+//                   対ユーザーの依存形成的感情（応援してる / 心配 / いつでも待ってる）と
+//                   [L] 自己感情（嬉しい / 心配 / 応援）は引き続き禁止。
+//                 - 雑談での保存情報は低頻度・一言程度・主題を奪わない。
+//                 - 本モードでは [W][X][Y] 整理構造・[I] 機能接続は発動しない旨を明記。
+//                   [J] 絵文字・「!」・本文/模範解答・数値スコア絶対値の禁止は継承。
+//                 - 例を差し替え/追加: OK/NG「熱海」/ 保存情報低頻度活用「旅行行こうと思う」/
+//                   感情寄り雑談 + 保存情報一言「英語やる気出ない」/ NG「お腹空いた→受験へ」。
+//             ・[H] に参照頻度の目安を追加（受験・進路 → 積極 / 感情相談 → 状況次第・重相談時は
+//               [Q][F] に従い抑制 / 雑談 → 低頻度・一言程度）。
+//             ・[最重要方針] item 2 の例を、terse な質問だけ返答に anchor しないよう
+//               2〜5 文の casual 例へ差し替え（CASUAL CHAT MODE への参照を明記）。
+//             【不変】v20 までの全ルール（上位ガード [G][F][Q] / ai_policy / [I] 4 機能・MUST /
+//             [J] 字数・絵文字・! 禁止 / [W][X][Y] 受験相談 turn での構造 / [V] Advice モード /
+//             intent enum / max_tokens / route 経路 / parser / detectTutorIntent /
+//             Supabase studentContext 注入）。casual chat か否かは従来通り message 内容から
+//             AI が判断する（static prompt のため intent 経路の変更はなし）。
+//             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
+//   v21 → v22: STEP-TUTOR-PERSONALITY-AND-CONTEXT-01 QUESTION OPTIONALITY 追加。
+//             質問を「会話前進の手段（任意）」と位置づけ、会話継続のためだけの質問を禁止する。
+//             【SYSTEM PROMPT 改訂】
+//             ・[M] 終端ルールに QUESTION OPTIONALITY サブセクションを追加:
+//                 - 十分な価値（共感 / リアクション / 分析・助言・提案 / 感想）を渡せた turn は
+//                   質問せず自然に終えてよい（質問は必須ではない）。
+//                 - 要素の優先順位: ① 共感 → ② リアクション → ③ 分析・助言・提案 →
+//                   ④ 必要なら質問。質問は最後の選択肢。面接官のように並べない。
+//                 - 避ける質問: 情報収集が目的でない / 会話を引き延ばす / 既に十分回答済みでの質問。
+//                 - 「価値ゼロのまま質問もせず終える」は引き続き禁止（REALCHAT-02 と両立）。
+//                 - 本方針を [W][X][Y] にも上位適用: 「最後に質問」ステップは次フェーズへ実際に
+//                   進める場合のみ置き、十分な助言・次の一歩を渡せた turn は省略可。
+//                   [G][F][Q] の上位ガードは従来通り。
+//             ・[T] CASUAL CHAT MODE の出力量を「出力量と質問頻度」へ拡張:
+//                 - 質問は必須でない / 十分渡せた turn は質問なしで終える /
+//                   毎返信で質問しない・体感 2〜3 返信に 1 回程度で自然。
+//                 - 例を更新: 熱海 OK を「質問なしで終える」版へ差し替え、熱海 NG に
+//                   「会話継続のためだけの質問」を追加。映画の OK（質問なし / 方向を絞る質問あり）
+//                   2 例 + NG（助言せず質問だけ）1 例を追加。
+//             ・[最重要方針] item 4 を「質問は任意・面接官ではない」へ更新（質問なしで終える
+//               許可と [M] QUESTION OPTIONALITY への参照を明記）。
+//             【不変】v21 までの全ルール（上位ガード [G][F][Q] / ai_policy / [I] 4 機能・MUST /
+//             [J] 字数・絵文字・! 禁止・質問 0〜1 個 / [V] Advice モード / [W][X][Y] の構造本体
+//             （終端質問の省略可化のみ・他は不変）/ intent enum / max_tokens / route 経路 /
+//             parser / detectTutorIntent / Supabase studentContext 注入）。
+//             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
+export const TUTOR_PROMPT_VERSION = 22;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';

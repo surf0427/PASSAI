@@ -10,13 +10,21 @@
 // ANALYSIS_* / ADDITIONAL_QUESTIONS_* / SUMMARIZE_* / STATEMENT_REVIEW_* の contract には一切影響しない。
 //
 // hash に含めないもの:
-//   - savedReview / reviewHistory（出力ストック）
+//   - savedReview / reviewHistory の生データ（本文 snapshot / score 系。出力ストックそのもの）
 //   - output / feedback / score 系（出力）
 //   - loading / error / UI state
 //   - temperature / max_tokens は PROMPT_VERSION 側で invalidate を集約
+//
+// hash に含めるもの（STEP-DIVERGENCE-02B で追加）:
+//   - previousOutputSummary（workspace.reviews[] から派生した「既出の助言」の圧縮）。
+//     DET-3（essayBody から deterministic 派生・hash 不変）と異なり、reviews は再添削で
+//     蓄積し時間で変化するため、これを hash に含めないと「同本文 + 履歴変化」で
+//     essayReviewInputHash cache が hit し、divergence prompt が再実行されず feature が
+//     実質無効になる。意図的に hash 入力へ含める（statement 02A と同方針）。
 
 import { djb2 } from '@/lib/hash/djb2';
 import { stableStringify } from '@/lib/hash/stableStringify';
+import type { PreviousOutputSummary } from '@/types/divergence';
 
 // PROMPT_VERSION bump 履歴:
 //   v1 → v2 : STEP15h で SUBJECT_GRADES_SHARED_INSTRUCTION / SUBJECT_GRADES_ASYMMETRY_RULE /
@@ -36,7 +44,20 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             （再判定を抑える / 重複指摘を避ける / 採点には反映しない）を AI に伝える。
 //             bump により旧 v2 cache は一律 miss になる（intentional 1 回損失）が、cache hit
 //             経路の仕様は何も変えていない。
-export const ESSAY_REVIEW_PROMPT_VERSION = 3;
+//   v3 → v4 : STEP-DIVERGENCE-02B で Divergence Layer を essay-review に横展開。
+//             workspace.reviews[] から派生した PreviousOutputSummary（既出の weakPoints /
+//             improvement の圧縮）を user prompt に【過去に提示済みのフィードバック】section
+//             として注入し、出力収束（毎回同じ弱点・同じ improvement・同じ改善指示）を抑える。
+//             SYSTEM_PROMPT 側に ESSAY_REVIEW_PREVIOUS_OUTPUT_QUALIFIER を追加（探索型 + 安全弁 /
+//             採点・breakdown には不反映）。DET-3 と違い入力源（reviews）が時間で変化するため
+//             previousOutputSummary を hash 入力構造（HashEssayReviewInput）にも追加した。
+//             同本文でも履歴が変われば hash が変わり、essayReviewInputHash cache を miss させて
+//             divergence prompt を必ず再実行させる（これが無いと feature が cache-hit 経路で
+//             無効化される）。履歴 0/1 件・projection 空のときは previousOutputSummary が空 struct に
+//             なり section も出ないため prompt 本文は旧挙動と等価。bump により旧 v3 cache は一律
+//             miss（intentional 1 回損失）。response shape / JSON contract / breakdown 5 軸 0〜20 /
+//             verdict 4 値 / totalScore 0〜100 / deriveVerdict 等のサーバ側 normalize は不変。
+export const ESSAY_REVIEW_PROMPT_VERSION = 4;
 export const ESSAY_REVIEW_MODEL = 'claude-sonnet-4-6';
 
 export type HashEssayReviewInput = {
@@ -47,10 +68,19 @@ export type HashEssayReviewInput = {
   reasonTwo: string;
   essayBody: string;
   basicInfo: unknown;
+  // STEP-DIVERGENCE-02B: 過去 review の派生 summary。未指定は関数内で null 正規化する。
+  previousOutputSummary?: PreviousOutputSummary | null;
   model: string;
   promptVersion: number;
 };
 
 export function hashEssayReviewInput(input: HashEssayReviewInput): string {
-  return djb2(stableStringify(input));
+  // STEP-DIVERGENCE-02B: previousOutputSummary を hash 対象に含める。未指定は null に正規化し、
+  // projection を送らない caller（write/body・structure/body・essay-practice 等）含めて
+  // caller 横断で決定論的に同じ hash になるようにする。
+  const normalized = {
+    ...input,
+    previousOutputSummary: input.previousOutputSummary ?? null,
+  };
+  return djb2(stableStringify(normalized));
 }

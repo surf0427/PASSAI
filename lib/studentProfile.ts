@@ -19,6 +19,10 @@ import type {
   SignatureEpisode,
   StudentProfile,
 } from '@/types/studentProfile';
+// STEP-DIVERGENCE-03A: VALUE_KEYWORD_MAP を共有辞書へ lift（single source of truth）。
+// ThemeFrequency builder と本ファイルの extractValueKeywords が同一辞書を参照する。
+// 辞書の値は不変のため valueKeywords 出力は byte-identical（後方互換維持）。
+import { VALUE_KEYWORD_MAP } from '@/lib/contextBuilders/divergence/themeDictionary';
 
 // 任意の追加素材（activityData / answers など）を sourceHash の入力にしたい場合に渡す。
 // 渡さなければ wallHitting 自身だけが hash の入力になる。
@@ -100,22 +104,9 @@ function hashSourceContent(input: unknown): string {
 //
 // 下流が「strengths 全文を毎回 AI に読ませる」のを避けるため、価値観タグだけ抽出して渡す。
 // 抽出は deterministic（辞書ベース）。AI は使わない。最初は単純実装で OK。
-
-const VALUE_KEYWORD_MAP: Array<{ tag: string; patterns: string[] }> = [
-  { tag: '継続力',           patterns: ['継続', '粘り強', '続け', '長期間', 'やり抜'] },
-  { tag: '主体性',           patterns: ['主体', '自ら', '率先', '自分から', 'リーダー'] },
-  { tag: '探究心',           patterns: ['探究', '探求', '研究', '仮説', '掘り下', '突き詰'] },
-  { tag: '協調性',           patterns: ['協調', 'チーム', '協力', '仲間', '一緒に'] },
-  { tag: '論理的思考',       patterns: ['論理', '分析', '構造化', 'データ', '根拠'] },
-  { tag: '行動力',           patterns: ['行動', '動いた', '実行', '実践', '取り組ん'] },
-  { tag: 'コミュニケーション', patterns: ['対話', '伝え', '聞く', '対人', '交渉'] },
-  { tag: '適応力',           patterns: ['適応', '柔軟', '変化', '対応'] },
-  { tag: '創造性',           patterns: ['創造', '工夫', '新しい', 'アイデア', '発想'] },
-  { tag: '責任感',           patterns: ['責任', '任さ', '担当', '託'] },
-  { tag: '国際性',           patterns: ['国際', '英語', '留学', '異文化', 'グローバル'] },
-  { tag: '課題解決',         patterns: ['課題解決', '解決', '問題発見', '原因'] },
-  { tag: '挑戦',             patterns: ['挑戦', 'チャレンジ', '初めて'] },
-];
+// STEP-DIVERGENCE-03A: 辞書本体（VALUE_KEYWORD_MAP）は
+// lib/contextBuilders/divergence/themeDictionary.ts に lift 済み（import 済み）。
+// 本ファイルは presence 抽出ロジックのみ保持する。
 
 // 抽出上限。AI prompt に流すとき長くなりすぎないように 8 で打ち切る。
 const VALUE_KEYWORDS_MAX = 8;

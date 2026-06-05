@@ -19,6 +19,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import type { SchoolPreference } from '@/types/basicInfo';
 import {
@@ -95,6 +96,10 @@ function isApiResult(value: unknown): value is StatementPrepareApiResult {
 }
 
 export default function StatementPrepareUniversityPage() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const isMounted = useSyncExternalStore(
     subscribeMount,
     getMountedSnapshot,
@@ -199,6 +204,11 @@ export default function StatementPrepareUniversityPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...apiInput, ...universityInfo }),
       });
+
+      // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       if (res.status === 429) {
         setError(
@@ -324,6 +334,9 @@ export default function StatementPrepareUniversityPage() {
           onStartOver={handleStartOver}
         />
       )}
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

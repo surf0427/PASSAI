@@ -1,11 +1,10 @@
-import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
+import type { PlanId } from '@/lib/billing/plans';
+import { PricingCheckoutButton } from './PricingCheckoutButton';
 
 // 2 プラン比較カード（ベーシック / プレミアム）。
 // プレミアムは ring-accent-500 + 「おすすめ」フローティングバッジで強調。
-// Stripe / 認証は未実装。CTA はいったん /home へ仮リンク。
-//
-// 機能リストの拡張や Stripe 接続が入る STEP では components/Pricing/ に切り出す。
+// STEP-BILLING-04: CTA は PricingCheckoutButton 経由で Stripe Checkout に結線済み。
 
 type PricingCardProps = {
   name: string;
@@ -15,7 +14,7 @@ type PricingCardProps = {
   extras?: string[];      // プレミアム追加要素（あれば下にもう一段表示）
   note: string;           // カード内補足（features の下、CTA の上）
   ctaLabel: string;
-  ctaHref: string;
+  plan: PlanId;           // Stripe Checkout に渡す plan 識別子
   highlight?: boolean;
   badge?: string;
 };
@@ -28,7 +27,7 @@ function PricingCard({
   extras,
   note,
   ctaLabel,
-  ctaHref,
+  plan,
   highlight,
   badge,
 }: PricingCardProps) {
@@ -110,19 +109,13 @@ function PricingCard({
         </p>
       </div>
 
-      {/* PricingCard CTA: text-sm sm:text-base + font-bold + shadow-sm の独自サイズで
-          LinkButton の lg / cta どちらとも完全一致しないため、ここは Link のまま残す。
-          色はトークン（brand / accent）化済み。 */}
-      <Link
-        href={ctaHref}
-        className={`mt-auto inline-flex justify-center items-center font-bold text-sm sm:text-base px-6 py-3 rounded-xl shadow-sm transition-colors ${
-          highlight
-            ? 'bg-accent-600 hover:bg-accent-700 text-white'
-            : 'bg-brand-600 hover:bg-brand-700 text-white'
-        }`}
-      >
-        {ctaLabel}
-      </Link>
+      {/* CTA は client side で /api/billing/checkout を叩き Stripe Checkout に遷移する。
+          スタイルは旧 <Link> と揃えてある (bg-{brand|accent}-600 / rounded-xl / shadow-sm)。 */}
+      <PricingCheckoutButton
+        plan={plan}
+        label={ctaLabel}
+        highlight={highlight}
+      />
     </Card>
   );
 }
@@ -195,7 +188,7 @@ export function PricingSection() {
             ]}
             note="総合型・学校推薦型対策を、1つの流れで進められます。"
             ctaLabel="ベーシックで始める"
-            ctaHref="/home"
+            plan="basic"
           />
           <PricingCard
             name="プレミアムプラン"
@@ -215,7 +208,7 @@ export function PricingSection() {
             ]}
             note="より深く・高頻度で使いたい人向け。"
             ctaLabel="プレミアムで始める"
-            ctaHref="/home"
+            plan="premium"
             highlight
             badge="おすすめ"
           />

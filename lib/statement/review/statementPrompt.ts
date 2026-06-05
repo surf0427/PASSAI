@@ -4,6 +4,9 @@ import type { WallHittingResult } from '@/types/analysis';
 import type { StudentProfile } from '@/types/studentProfile';
 import type { NgWordIssue } from '@/lib/detectNgWords';
 import type { StructureAnalysis } from '@/lib/structureAnalysis';
+import type { PreviousOutputSummary, ThemeFrequency, UnusedExperience } from '@/types/divergence';
+import { buildThemeFrequencySection } from '@/lib/contextBuilders/divergence/themeFrequencySection';
+import { buildUnusedExperienceSection } from '@/lib/contextBuilders/divergence/unusedExperienceSection';
 import { toStudentProfile } from '@/lib/studentProfile';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildStatementUniversityContext } from '@/lib/statement/review/buildStatementUniversityContext';
@@ -52,6 +55,31 @@ export type StatementReviewPromptOptions = {
   // （旧 v7 と意味等価）。構造分析は essay から deterministic に派生するため hash 入力には
   // 含めない（hash signature 不変）。DET-2 の NG section と独立 / 共存する。
   structureAnalysis?: StructureAnalysis[];
+  // STEP-DIVERGENCE-02A: 過去の添削履歴から抽出した「既出の助言・論点」。
+  // caller（app/statement/edit/page.tsx）が statementReviewHistory の compact projection を
+  // buildPreviousOutputSummary() に通して生成し、body 経由で渡す。出力収束（毎回同じ弱点・
+  // 同じ改善アクション・同じ論点）を抑えるための divergence context。
+  // 空 / 未指定 / 両配列空なら【過去に提示済みのフィードバック】section を出さない（後方互換）。
+  // DET-2/DET-4 と異なり statementReviewHistory（時間で変化する出力ストック）由来のため、
+  // caller 側で hash 入力にも含める（同本文でも履歴変化で app-cache を miss させる）。
+  // SYSTEM_PROMPT 側の STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER と組で動く。
+  previousOutputSummary?: PreviousOutputSummary | null;
+  // STEP-DIVERGENCE-03A: ユーザーのテーマ偏り（activityData + StudentProfile から route 側で
+  // 決定論派生）。同じテーマへの収束を可視化し、薄い／未探索テーマの観点を探索させる。
+  // PreviousOutputSummary（AI 出力助言の記憶）とは source / unit / action が別レーン。
+  // 空 / 未指定 / documentsConsidered < 3 / underused 空なら section を出さない（後方互換）。
+  // activityData / studentProfile は既に hash 入力に含まれる決定論派生のため hash field は増やさず、
+  // PROMPT_VERSION bump のみで cache lane を分離する（DET-2/DET-4 と同型）。
+  // SYSTEM_PROMPT 側の STATEMENT_REVIEW_THEME_FREQUENCY_QUALIFIER と組で動く。
+  themeFrequency?: ThemeFrequency | null;
+  // STEP-DIVERGENCE-04B: まだ活用できていない可能性のある経験（activityData × 使用面から
+  // client 側で決定論派生）。同じ経験の使い回しを抑え、未活用の経験を改善提案で検討させる。
+  // ThemeFrequency（テーマ偏り）とは別レーン（経験カード単位）。
+  // 空 / 未指定 / totalExperiences < 3 / unused 空なら section を出さない（後方互換）。
+  // usedText が selfPRs / interview / statementReviewHistory など hash 外・時間変化 source を含むため、
+  // caller 側で hash 入力にも含める（PreviousOutputSummary と同型）。
+  // SYSTEM_PROMPT 側の STATEMENT_REVIEW_UNUSED_EXPERIENCE_QUALIFIER と組で動く。
+  unusedExperience?: UnusedExperience | null;
 };
 
 // 受験方式に応じた添削方針を生成する。志望理由書専用の文言。
@@ -128,6 +156,38 @@ function buildStructureAnalysisSection(
     '以下は deterministic 構造分析結果です。',
     'これらを再判定するのではなく、改善提案や具体例作成に注力してください。',
   ].join('\n');
+}
+
+// STEP-DIVERGENCE-02A: 過去の添削で既に提示済みの助言・論点を AI に提示する section。
+// 目的は「新しい角度の探索」であって、正しい助言の禁止ではない（探索型 + 安全弁）。
+// repeatedAdvice / repeatedThemes が両方空、または summary が null/undefined のときは
+// 空文字を返し section を出さない（履歴 0/1 件・builder が空を返したケース＝旧挙動と等価）。
+// 採点に使わない / 過去指摘済みでも未解決なら繰り返し可、という解釈ルールは SYSTEM_PROMPT 側の
+// STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER に置く（本 section は素材のみ載せる）。
+function buildPreviousOutputSummarySection(
+  summary: PreviousOutputSummary | null | undefined,
+): string {
+  if (!summary) return '';
+  const repeatedAdvice = Array.isArray(summary.repeatedAdvice) ? summary.repeatedAdvice : [];
+  const repeatedThemes = Array.isArray(summary.repeatedThemes) ? summary.repeatedThemes : [];
+  if (repeatedAdvice.length === 0 && repeatedThemes.length === 0) return '';
+
+  const lines: string[] = [
+    '【過去に提示済みのフィードバック】',
+    '',
+    '以下は過去のフィードバックですでに伝えた論点です。',
+    '今回は同じ指摘の繰り返しに留めず、達成度を確認したうえで、まだ触れていない論点・別の角度・次の段階の改善を優先してください。',
+    'ただし未解決の重要課題は、繰り返しになっても必ず指摘して構いません。',
+  ];
+  if (repeatedAdvice.length > 0) {
+    lines.push('', '既出の指摘・改善アクション:');
+    lines.push(...repeatedAdvice.map((a) => `- ${a}`));
+  }
+  if (repeatedThemes.length > 0) {
+    lines.push('', '既出の論点・テーマ:');
+    lines.push(...repeatedThemes.map((t) => `- ${t}`));
+  }
+  return lines.join('\n');
 }
 
 // 【LEGACY】WallHittingResult を直接プロンプトに流すレガシー経路。
@@ -221,6 +281,55 @@ const STATEMENT_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER = `【既存構造分析に�
 
 ・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
 
+// STEP-DIVERGENCE-02A: user prompt に【過去に提示済みのフィードバック】section が来た時の
+// 解釈ルール。出力収束（毎回同じ弱点・同じ改善アクション・同じ論点）を抑えつつ、正しい助言の
+// 握り潰しを防ぐ。DET-2 NG_ISSUES_QUALIFIER / DET-4 STRUCTURE_ANALYSIS_QUALIFIER と同形・同思想。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER = `【過去に提示済みのフィードバックについて】
+・user prompt に【過去に提示済みのフィードバック】section が含まれている場合、それはこのユーザーが過去の添削で既に受け取った弱点・改善アクション・論点です。
+
+・目的は「新しい角度の探索」であり、正しい助言を禁止することではありません。同じ指摘の単純な繰り返しに留めず、達成度を確認したうえで、まだ触れていない論点・別の角度・次の段階の改善を優先してください。
+
+・ただし未解決の重要課題は、過去に提示済みであっても繰り返し指摘して構いません。本文にまだ残っている弱点を、既出だからという理由で省かないでください。
+
+・採点（totalScore / scores の 5 軸: logic / specificity / universityFit / futureGoal / originality）には【過去に提示済みのフィードバック】を一切反映しません。過去に指摘済みだからといって減点も加点もしないでください。採点は今回の本文の質のみで行います。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
+// STEP-DIVERGENCE-03A: user prompt に【テーマの偏り（参考）】section が来た時の解釈ルール。
+// ユーザーが繰り返し使っているテーマへの収束を抑え、薄い／未探索テーマの観点を探索させる。
+// ただし探索型のみ — overused テーマを禁止・抑制せず、underused テーマも強制しない。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const STATEMENT_REVIEW_THEME_FREQUENCY_QUALIFIER = `【テーマの偏りについて】
+・user prompt に【テーマの偏り（参考）】section が含まれている場合、それはこのユーザーが activityData・自己分析でこれまで繰り返し使ってきたテーマ（よく出ているテーマ）と、まだ薄いテーマ（underused）を deterministic に集計したものです。AI の過去フィードバックではありません。
+
+・目的は新しい観点の探索です。「よく出ているテーマ」を否定・抑制・回避してはいけません。本人の核となる強みであれば、よく出ているテーマを引き続き評価・活用して構いません。
+
+・「まだ薄いテーマ」は、本人の本文・活動に実際に当てはまる場合に限り、改善提案（actions / weaknesses）の中で別観点として検討してよい。当てはまらないテーマを無理に持ち出したり、本文に無い経験を捏造させたりしてはいけません。
+
+・採点（totalScore / scores の 5 軸: logic / specificity / universityFit / futureGoal / originality）には【テーマの偏り】を一切反映しません。よく出ている／薄いを理由に減点も加点もしないでください。採点は今回の本文の質のみで行います。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
+// STEP-DIVERGENCE-04B: user prompt に【まだ活用できていない可能性のある経験】section が来た時の
+// 解釈ルール。同じ経験の使い回しを抑え、未活用の経験を探索させる。志望理由書は言い換え・抽象化が
+// 多く literal 判定の false-unused が起きやすいため、「未使用」と断定せず探索 suggestion に留める。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const STATEMENT_REVIEW_UNUSED_EXPERIENCE_QUALIFIER = `【まだ活用できていない可能性のある経験について】
+・user prompt に【まだ活用できていない可能性のある経験】section が含まれている場合、それは活動データに登録されているが、今回の志望理由書本文でまだ明示的に触れられていない可能性のある経験です。AI の過去出力ではありません。
+
+・目的は新しい経験の探索です。本人に当てはまり、志望理由・将来像を自然に補強できる場合のみ、改善提案（actions / weaknesses）の中で触れてください。
+
+・「使っていない」と断定しないでください。言い換えや抽象表現で既に本文に含まれている場合があります（例：テーマ名を伏せて活動内容だけ書いている）。本文を読み、実際に欠けている場合のみ提案してください。
+
+・本人の活動に無い経験を無理に持ち出したり、書かれていない事実（年数・大会名・役職・受賞歴等）を捏造させたりしてはいけません。
+
+・志望理由書の主軸（中心となる経験・論旨）を変える必要はありません。未活用の経験は補強の候補であって、主軸の差し替えではありません。
+
+・採点（totalScore / scores の 5 軸: logic / specificity / universityFit / futureGoal / originality）には【まだ活用できていない可能性のある経験】を一切反映しません。未活用を理由に減点も加点もしないでください。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
 export const STATEMENT_REVIEW_SYSTEM_PROMPT = `あなたは総合型選抜・学校推薦型選抜の指導に精通したアドバイザーです。
 
 ${SUBJECT_GRADES_SHARED_INSTRUCTION}
@@ -232,6 +341,12 @@ ${STATEMENT_REVIEW_SUBJECT_GRADES_QUALIFIER}
 ${STATEMENT_REVIEW_NG_ISSUES_QUALIFIER}
 
 ${STATEMENT_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER}
+
+${STATEMENT_REVIEW_THEME_FREQUENCY_QUALIFIER}
+
+${STATEMENT_REVIEW_UNUSED_EXPERIENCE_QUALIFIER}
+
+${STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER}
 
 【基本ルール】
 - 志望理由書の全文を書き直したり、完成文を代わりに生成したりしてはいけません
@@ -334,11 +449,26 @@ export function buildStatementReviewPrompt(opts: StatementReviewPromptOptions): 
   // 空ならそのまま空文字。SYSTEM_PROMPT 側の STRUCTURE_ANALYSIS_QUALIFIER と組で動く。
   // DET-2 の NG section と独立 / 共存。AI は両 section を踏まえて重複しない指摘に集中する。
   const structureSection = buildStructureAnalysisSection(opts.structureAnalysis);
+  // STEP-DIVERGENCE-02A: 過去に提示済みのフィードバック section。空なら空文字。
+  // SYSTEM_PROMPT 側の STATEMENT_REVIEW_PREVIOUS_OUTPUT_QUALIFIER と組で動く。
+  // PreviousOutputSummary の実データは user prompt にだけ載せ、system（cache 対象）には
+  // 入れない（Anthropic prompt cache の cached prefix を壊さない）。
+  const previousOutputSection = buildPreviousOutputSummarySection(opts.previousOutputSummary);
+  // STEP-DIVERGENCE-03A: テーマの偏り section。空なら空文字（documentsConsidered < 3 等）。
+  // SYSTEM_PROMPT 側の STATEMENT_REVIEW_THEME_FREQUENCY_QUALIFIER と組で動く。
+  // 実データは user prompt にだけ載せ、system（cache 対象）には入れない（prompt cache 維持）。
+  const themeFrequencySection = buildThemeFrequencySection(opts.themeFrequency);
+  // STEP-DIVERGENCE-04B: まだ活用できていない可能性のある経験 section。空なら空文字
+  // （totalExperiences < 3 / unused 空 / 未指定）。SYSTEM_PROMPT 側の
+  // STATEMENT_REVIEW_UNUSED_EXPERIENCE_QUALIFIER と組で動く。実データは user prompt のみ。
+  const unusedExperienceSection = buildUnusedExperienceSection(opts.unusedExperience);
   const departmentLine = department ? `\n志望学科：${department}` : '';
 
   // 採点軸・トーン規律・JSON schema 等の static 部は STATEMENT_REVIEW_SYSTEM_PROMPT に
   // 切り出し済み（route.ts 側で system パラメータに渡す）。ここでは「今回の入力データ」だけを返す。
-  // section 配置順: ...examTypeGuidance → structureSection（大局）→ ngIssuesSection（細部）→ 【本文】
+  // section 配置順: ...examTypeGuidance → structureSection（大局）→ ngIssuesSection（細部）
+  //   → themeFrequencySection（自己のテーマ偏り・大局）→ unusedExperienceSection（未使用経験・具体）
+  //   → previousOutputSection（既出フィードバック・直近）→ 【本文】
   return `以下の志望理由書を採点・添削してください。
 
 ${basicInfoSection}
@@ -347,6 +477,6 @@ ${basicInfoSection}
 志望大学：${university || '（未入力）'}
 志望学部：${faculty || '（未入力）'}${departmentLine}
 
-${universityDbSection ? `${universityDbSection}\n\n` : ''}${admissionFocusSection ? `${admissionFocusSection}\n\n` : ''}${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}${structureSection ? `${structureSection}\n\n` : ''}${ngIssuesSection ? `${ngIssuesSection}\n\n` : ''}【志望理由書本文】
+${universityDbSection ? `${universityDbSection}\n\n` : ''}${admissionFocusSection ? `${admissionFocusSection}\n\n` : ''}${activitySection ? `${activitySection}\n\n` : ''}${wallHittingSection ? `${wallHittingSection}\n\n` : ''}${examTypeGuidance ? `${examTypeGuidance}\n\n` : ''}${structureSection ? `${structureSection}\n\n` : ''}${ngIssuesSection ? `${ngIssuesSection}\n\n` : ''}${themeFrequencySection ? `${themeFrequencySection}\n\n` : ''}${unusedExperienceSection ? `${unusedExperienceSection}\n\n` : ''}${previousOutputSection ? `${previousOutputSection}\n\n` : ''}【志望理由書本文】
 ${essay}`;
 }

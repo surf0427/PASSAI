@@ -22,7 +22,9 @@
 //
 // 責務外:
 //   - localStorage アクセス (server で不可能だが明示的に禁止)
-//   - Supabase / data/ 直 import
+//   - data/ 直 import
+//   ※ Supabase は STEP-TUTOR-SUPABASE-CONTEXT-OUTPUT-01 で studentContext 取得のため
+//     read のみ許可（lib/contextBuilders/tutorContext.ts 経由。write はしない）。
 //   - StudentProfile の生成・mutation
 //   - conversation state 管理（topic/concern/emotion の persisted 抽出は本 STEP の範囲外）
 //   - thread 単位の永続化（thread storage / thread list UI は本 STEP の範囲外）
@@ -42,14 +44,28 @@ import { logAiUsage } from '@/lib/aiUsageLog';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { checkServerRateLimit } from '@/lib/serverRateLimit';
 import { TUTOR_MODEL } from '@/lib/aiInputHash';
-import { TUTOR_SYSTEM_PROMPT, buildTutorUserPrompt } from '@/lib/tutor/tutorPrompt';
+import {
+  TUTOR_SYSTEM_PROMPT,
+  buildTutorUserPrompt,
+  buildTutorStudentContextSection,
+} from '@/lib/tutor/tutorPrompt';
 import { buildTutorPromptContext } from '@/lib/contextBuilders/tutor/buildTutorPromptContext';
+import { buildTutorStudentContext } from '@/lib/contextBuilders/tutorStudentContext';
+import {
+  loadTutorStudentContextCached,
+  buildTutorSupabaseContextSection,
+} from '@/lib/contextBuilders/tutorContext';
 import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
+import { authenticateRequest, checkPlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
+import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import type { TutorIntent, PreferredProfileField } from '@/lib/tutor/types';
 
 // ── 定数 ─────────────────────────────────────────────────────────
 
 const ROUTE = 'api/tutor';
+// STEP-BILLING-06: usage_records.route 識別子。
+const USAGE_ROUTE = 'tutor';
 const MAX_MESSAGE_LENGTH = 500;
 const TEMPERATURE = 0.4;
 // max_tokens は intent 別に動的化（STEP-MVP-E）。getMaxTokensForIntent を参照。
@@ -196,9 +212,26 @@ function getMaxTokensForIntent(intent: TutorIntent): number {
   return 500;
 }
 
+// STEP-TUTOR-ROUTING-AUDIT-01 (P0): userId をログへ出す際の最小化。
+// 再識別を避けるため末尾 6 文字だけを出す（UUID の末尾断片）。未認証は 'anon'。
+function userIdTail(userId: string | null | undefined): string {
+  return userId ? userId.slice(-6) : 'anon';
+}
+
 // ── route handler ────────────────────────────────────────────────
 
 export async function POST(req: Request): Promise<Response> {
+  // STEP-TUTOR-500-ROOTCAUSE-01: route handler 全体を最外周 try/catch で囲み、
+  // どの層で uncaught throw が起きても「空 body の 500」ではなく JSON を必ず返す。
+  //   - 既存の各内部 return（400/401/402/429/502/200）はこの try 内でそのまま機能する。
+  //   - catch は本来内部で握れていない例外（例: ensurePlanQuota 内の service_role client
+  //     構築失敗 = SUPABASE_SERVICE_ROLE_KEY 未設定）だけを拾う安全網。
+  //
+  // STEP-TUTOR-ROUTING-AUDIT-01 (P0): 各区間の所要時間を [TutorLatency] で観測する。
+  // tracker は外側 try の前に作り、catch（最終安全網）からも flush できるようにする。
+  const lat = createLatencyTracker();
+  const tParse = lat.now();
+  try {
   // ── body parse ──
   let body: Record<string, unknown>;
   try {
@@ -232,12 +265,14 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
   const message = rawMessage.trim();
+  lat.record('parse_ms', tParse);
 
   // ── 危険語 1 次検出 ──
   // 検出時は AI / context builder / rate limit のいずれも触らずに早期 return。
   // body 本文・受験生情報を一切 log に出さない（個人情報ガード）。
   if (EMERGENCY_PATTERN.test(message)) {
     console.info('tutor emergency', { route: ROUTE });
+    lat.flush({ phase: 'emergency' });
     return NextResponse.json({ reply: EMERGENCY_REPLY }, { status: 200 });
   }
 
@@ -249,6 +284,7 @@ export async function POST(req: Request): Promise<Response> {
     maxRequests: RATE_LIMIT_MAX_REQUESTS,
   });
   if (!rateLimit.allowed) {
+    lat.flush({ phase: 'rate_limited' });
     return NextResponse.json(
       { error: 'RATE_LIMITED', message: 'しばらく時間をおいてからお試しください。' },
       {
@@ -258,7 +294,20 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // ── 認証 ──（STEP-TUTOR-ROUTING-AUDIT-01 P0）
+  //   auth を quota から分離。userId 確定後に「quota 判定」と「Supabase context load」を
+  //   並列実行する。auth.getUser の RTT は 1 回だけ（user-scoped client を後続で共有）。
+  const tAuth = lat.now();
+  const auth = await authenticateRequest();
+  lat.record('auth_ms', tAuth);
+  if (auth.kind === 'reject') {
+    lat.flush({ phase: 'reject_auth' });
+    return auth.response;
+  }
+  const userId = auth.userId;
+
   // ── intent / preferredProfileField 正規化 ──
+  // 純粋・DB 不要なので並列ブロックの前に確定させる（context builder が intent を使うため）。
   // 不正値・欠損は黙って fallback（'general' / undefined）。
   const intent: TutorIntent = isTutorIntent(body.intent) ? body.intent : 'general';
   const preferredProfileField: PreferredProfileField | undefined =
@@ -270,6 +319,38 @@ export async function POST(req: Request): Promise<Response> {
   // STEP-TUTOR-CONTEXT-01: client から渡る直近会話履歴を shape guard + 整列。
   // 不正値は 400 にせず graceful に [] に倒す。Anthropic messages 配列の先頭に置く。
   const sanitizedHistory = sanitizeTutorHistory(body.history);
+
+  // ── plan quota 判定 と Supabase context load を並列実行 ──（STEP-TUTOR-ROUTING-AUDIT-01 P0）
+  //   - どちらも userId-scope の読み取りで相互依存がないため Promise.all で並列化する
+  //     （従来は ensurePlanQuota 完了後に context load を直列実行していた）。
+  //   - quota の意味（profiles 解決 / QA bypass / 当月 status='ok' COUNT / 上限判定）は
+  //     checkPlanQuota 内で一切変えていない。
+  //   - context load は never-throw（失敗・未ログイン・データ不足は空に倒れる）。60 秒 per-user
+  //     cache 付き。auth 済の user-scoped supabase client を共有して client 再生成を避ける。
+  //   - quota reject 時は context load 結果を破棄して即 return（Claude には進まない＝AI 課金なし）。
+  const tGateCtx = lat.now();
+  const [gate, contextResult] = await Promise.all([
+    (async () => {
+      const t = lat.now();
+      const r = await checkPlanQuota(auth.supabase, userId, 'tutor');
+      lat.record('planGate_ms', t);
+      return r;
+    })(),
+    (async () => {
+      const t = lat.now();
+      const r = await loadTutorStudentContextCached(userId, auth.supabase);
+      lat.record('context_load_ms', t);
+      return r;
+    })(),
+  ]);
+  lat.record('gate_context_parallel_ms', tGateCtx);
+  if (gate.kind === 'reject') {
+    lat.flush({ phase: 'reject_quota', userId: userIdTail(userId) });
+    return gate.response;
+  }
+
+  // 以降の prompt build〜Claude 呼び出しの所要時間計測の起点。
+  const tBuild = lat.now();
 
   // ── context 組み立て ──
   // builder は純粋関数で throw しない設計だが、念のため try で包む。
@@ -304,6 +385,56 @@ export async function POST(req: Request): Promise<Response> {
     contextString = '';
   }
 
+  // ── studentContext 組み立て（STEP-TUTOR-STUDENT-CONTEXT） ──
+  // PASSAI 内の保存データ（client が body で送る）を横断要約し、SYSTEM の 2 つ目の
+  // block として渡す「【PASSAI内の生徒情報】」section を作る。
+  //   - intent に依存せず常に組み立てる（既存 contextString とは別レイヤー）。
+  //   - builder は throw しない純粋関数だが、念のため try で包み、例外時は '' に倒す
+  //     （graceful degradation: studentContext 無しで AI call は続行）。
+  //   - studentProfile は body の生データを直接渡す（getStudentProfileFromRequest は
+  //     full StudentProfile 以外を弾くため、compact profile の strengths/weaknesses を
+  //     拾えるよう builder 側の defensive guard に委ねる）。
+  let studentContextSection = '';
+  try {
+    const studentContext = buildTutorStudentContext({
+      basicInfo: body.basicInfo ?? null,
+      studentProfile: body.studentProfile ?? null,
+      statementReviewLatest: body.statementReviewLatest ?? null,
+      activityData: body.activityData ?? null,
+      essayReviewLatest: body.essayReviewLatest ?? null,
+      interviewRecordLatest: body.interviewRecordLatest ?? null,
+      interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+      mypageSummary: body.mypageSummary ?? null,
+    });
+    studentContextSection = buildTutorStudentContextSection(studentContext);
+  } catch (error) {
+    console.error('tutor student context build error', {
+      route: ROUTE,
+      name: error instanceof Error ? error.name : 'UnknownError',
+    });
+    studentContextSection = '';
+  }
+
+  // ── Supabase studentContext section（STEP-TUTOR-SUPABASE-CONTEXT-OUTPUT-01）──
+  // 上の studentContextSection は client が body で送る localStorage 由来データを要約する。
+  // 本 section は Supabase（self_analysis / basic_info / diagnosis / activity）由来。
+  //   - context は上の並列ブロックで取得済み（60 秒 per-user cache 経由・DB アクセスは並列側で完了）。
+  //     ここでは pre-loaded な contextResult.context を section 文字列へ整形するだけ（同期・DB なし）。
+  //   - buildTutorSupabaseContextSection は throw しない純粋関数だが、念のため try で包み、
+  //     例外時は '' に倒して Tutor は通常動作させる（空 context も '' を返すので従来挙動と同一）。
+  let supabaseStudentContextSection = '';
+  try {
+    supabaseStudentContextSection = buildTutorSupabaseContextSection(
+      contextResult.context,
+    );
+  } catch (error) {
+    console.error('tutor supabase context build error', {
+      route: ROUTE,
+      name: error instanceof Error ? error.name : 'UnknownError',
+    });
+    supabaseStudentContextSection = '';
+  }
+
   // ── user prompt 合成 ──
   // なぜ userPrompt 末尾に intent=advice を載せるのか:
   //   SYSTEM PROMPT は static const で AI に「今回 turn の intent」を伝える経路がないため、
@@ -330,19 +461,46 @@ export async function POST(req: Request): Promise<Response> {
   // STEP-TUTOR-CONTEXT-01: messages 配列は sanitizedHistory + 今回 userPrompt の
   // multi-turn 形式。contextString / basicInfo / studentProfile は今回 userPrompt
   // にのみ載せ、過去 history には載せない（builder の出力を過去 turn に重ねない）。
+  // SYSTEM block 構成:
+  //   block 1: TUTOR_SYSTEM_PROMPT（byte-identical / cache_control: 'ephemeral'）。
+  //            cache breakpoint はここ。studentContext を足しても block 1 の cache hit は不変。
+  //   block 2: studentContextSection（body 由来 / ユーザーごとに変わる dynamic 情報、cache 対象外）。
+  //            空のときは block 自体を足さない。
+  //   block 3: supabaseStudentContextSection（Supabase self_analysis_logs 由来 / dynamic）。
+  //            空のときは block 自体を足さない。block 1 の cache breakpoint より後段。
+  const systemBlocks: Array<{
+    type: 'text';
+    text: string;
+    cache_control?: { type: 'ephemeral' };
+  }> = [
+    {
+      type: 'text',
+      text: TUTOR_SYSTEM_PROMPT,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
+  if (studentContextSection !== '') {
+    systemBlocks.push({ type: 'text', text: studentContextSection });
+  }
+  // block 3: Supabase 由来 studentContext（self_analysis_logs）。dynamic / cache 対象外。
+  // 空のときは block 自体を足さない。block 1 の cache breakpoint より後段なので cache hit は不変。
+  if (supabaseStudentContextSection !== '') {
+    systemBlocks.push({ type: 'text', text: supabaseStudentContextSection });
+  }
+  // prompt build（body 由来 context + studentContext section + Supabase section + userPrompt
+  // + systemBlocks 組み立て）はすべて in-memory。ここまでの所要時間を記録する。
+  lat.record('prompt_build_ms', tBuild);
+
   let response;
+  // Claude 呼び出し開始点（request 開始からの offset も記録 = pre-Claude の総直列時間）。
+  const tClaude = lat.now();
+  lat.set('claude_start_offset_ms', lat.sinceStart());
   try {
     response = await anthropic.messages.create({
       model: TUTOR_MODEL,
       max_tokens: getMaxTokensForIntent(intent),
       temperature: TEMPERATURE,
-      system: [
-        {
-          type: 'text',
-          text: TUTOR_SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
+      system: systemBlocks,
       messages: [
         ...sanitizedHistory,
         { role: 'user', content: userPrompt },
@@ -350,12 +508,20 @@ export async function POST(req: Request): Promise<Response> {
     }, { signal: createTimeoutSignal() });
   } catch (error) {
     // 本文・prompt は log に出さない（aiUsageLog の方針に従う）。
+    lat.record('claude_ms', tClaude);
     console.error('tutor api error', {
       route: ROUTE,
       model: TUTOR_MODEL,
       name: error instanceof Error ? error.name : 'UnknownError',
     });
     logAiUsage({ route: ROUTE, model: TUTOR_MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: TUTOR_MODEL, status: 'error' });
+    lat.flush({
+      phase: 'claude_error',
+      intent,
+      contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      userId: userIdTail(userId),
+    });
     return NextResponse.json(
       {
         error: 'AI_REQUEST_FAILED',
@@ -364,9 +530,14 @@ export async function POST(req: Request): Promise<Response> {
       { status: 502 },
     );
   }
+  // 非 streaming のため「first response」=「total」。claude_ms = 推論全体の wall-clock。
+  lat.record('claude_ms', tClaude);
 
   // ── AI response handling (plain text) ──
   // JSON.parse / extractJson は使わない。text block を取り出して trim するだけ。
+  // 注: parseTutorReply（→ redirect ボタン抽出）は client 側で実行されるため server には無い。
+  // ここで測るのは server 側の response handling（text 抽出 + stop_reason 判定）。
+  const tRespHandle = lat.now();
   const textBlock = response.content.find((b) => b.type === 'text');
   const reply = textBlock?.type === 'text' ? textBlock.text.trim() : '';
 
@@ -384,6 +555,14 @@ export async function POST(req: Request): Promise<Response> {
       usage: response.usage,
       cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
       cache_read_input_tokens: response.usage?.cache_read_input_tokens,
+    });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: TUTOR_MODEL, status: 'error' });
+    lat.record('response_handle_ms', tRespHandle);
+    lat.flush({
+      phase: 'truncated',
+      intent,
+      contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      userId: userIdTail(userId),
     });
     return NextResponse.json(
       {
@@ -408,6 +587,14 @@ export async function POST(req: Request): Promise<Response> {
       cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
       cache_read_input_tokens: response.usage?.cache_read_input_tokens,
     });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: TUTOR_MODEL, status: 'error' });
+    lat.record('response_handle_ms', tRespHandle);
+    lat.flush({
+      phase: 'empty_reply',
+      intent,
+      contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      userId: userIdTail(userId),
+    });
     return NextResponse.json(
       {
         error: 'AI_REQUEST_FAILED',
@@ -426,5 +613,34 @@ export async function POST(req: Request): Promise<Response> {
     cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
     cache_read_input_tokens: response.usage?.cache_read_input_tokens,
   });
+  await recordUsage({ userId, route: USAGE_ROUTE, model: TUTOR_MODEL, status: 'ok' });
+  lat.record('response_handle_ms', tRespHandle);
+  lat.flush({
+    phase: 'success',
+    intent,
+    contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+    systemBlocks: systemBlocks.length,
+    replyChars: reply.length,
+    cacheReadTokens: response.usage?.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: response.usage?.cache_creation_input_tokens ?? 0,
+    userId: userIdTail(userId),
+  });
   return NextResponse.json({ reply });
+  } catch (error) {
+    // STEP-TUTOR-500-ROOTCAUSE-01: 内部 try で握れなかった uncaught throw の安全網。
+    // 空 body の 500 を返さず、必ず JSON error response を返す（恒久処理）。
+    // 本文・prompt・個人情報は出さず、error name のみ log する。
+    console.error('tutor unhandled error', {
+      route: ROUTE,
+      name: error instanceof Error ? error.name : 'UnknownError',
+    });
+    lat.flush({ phase: 'unhandled_error' });
+    return NextResponse.json(
+      {
+        error: 'internal_error',
+        message: 'AIの呼び出し中にエラーが発生しました。時間をおいてお試しください。',
+      },
+      { status: 500 },
+    );
+  }
 }

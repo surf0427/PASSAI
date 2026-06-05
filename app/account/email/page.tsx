@@ -28,11 +28,19 @@ import {
   useCurrentUserId,
 } from '@/app/components/AuthProvider';
 import { isValidEmailFormat, requestEmailChange } from '@/lib/supabase/email';
+import { signInWithEmailOtp } from '@/lib/supabase/auth';
 
 type RequestState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
   | { kind: 'confirmation-sent' }
+  | { kind: 'error'; message: string };
+
+// STEP-SUPABASE-IDENTITY-02: 別端末ログイン（OTP マジックリンク送信）の state。
+type LoginState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'sent' }
   | { kind: 'error'; message: string };
 
 export default function AccountEmailPage() {
@@ -44,6 +52,11 @@ export default function AccountEmailPage() {
   const [requestState, setRequestState] = useState<RequestState>({
     kind: 'idle',
   });
+
+  // STEP-SUPABASE-IDENTITY-02: 別端末ログイン用の独立 state。
+  const [loginValue, setLoginValue] = useState('');
+  const [loginTouched, setLoginTouched] = useState(false);
+  const [loginState, setLoginState] = useState<LoginState>({ kind: 'idle' });
 
   // 「送信ボタン押下後」または「一度フォーカスを外した後」のときだけ
   // 形式エラーを表示する。初期表示で赤字が出るのを避ける。
@@ -110,6 +123,53 @@ export default function AccountEmailPage() {
       return;
     }
     setRequestState({ kind: 'error', message: result.message });
+  }
+
+  // STEP-SUPABASE-IDENTITY-02: 登録済みメールにログインリンクを送る。
+  // 既存の匿名 session には触れない（リンク click 後の /auth/callback で初めて
+  // セッションが既存 user_id へ切り替わる）。
+  const loginFormatError = (() => {
+    if (!loginTouched) return undefined;
+    if (loginValue === '') return 'メールアドレスを入力してください。';
+    if (!isValidEmailFormat(loginValue)) {
+      return 'メールアドレスの形式が正しくありません。';
+    }
+    return undefined;
+  })();
+  const isLoginSubmitting = loginState.kind === 'submitting';
+  const canLoginSubmit =
+    !isLoginSubmitting && loginValue !== '' && isValidEmailFormat(loginValue);
+
+  async function handleLoginSubmit() {
+    setLoginTouched(true);
+    if (loginValue === '' || !isValidEmailFormat(loginValue)) {
+      setLoginState({
+        kind: 'error',
+        message: 'メールアドレスの形式が正しくありません。',
+      });
+      return;
+    }
+
+    setLoginState({ kind: 'submitting' });
+    const result = await signInWithEmailOtp(loginValue);
+    if (result.kind === 'ok') {
+      setLoginState({ kind: 'sent' });
+      return;
+    }
+    if (result.kind === 'no-env') {
+      setLoginState({
+        kind: 'error',
+        message:
+          'ストレージに接続できません。少し時間をおいて再度お試しください。',
+      });
+      return;
+    }
+    // 未登録メール / その他失敗は一般化文言（メール列挙の手掛かりを与えない）。
+    setLoginState({
+      kind: 'error',
+      message:
+        'ログインリンクを送信できませんでした。このメールはまだ登録されていない可能性があります。',
+    });
   }
 
   const statusBanner = (() => {
@@ -197,6 +257,67 @@ export default function AccountEmailPage() {
           </div>
 
           {statusBanner}
+        </div>
+      </Card>
+
+      {/* STEP-SUPABASE-IDENTITY-02: 別端末から続ける（OTP マジックリンクログイン） */}
+      <Card padding="md" className="mt-6">
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800">
+              別端末から続ける
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              登録済みのメールアドレスにログインリンクを送ります。別の端末・ブラウザで
+              同じ学習データに戻りたいときに使ってください。
+            </p>
+          </div>
+
+          <FormField
+            label="登録済みメールアドレス"
+            hint="メール登録（上のフォーム）を完了済みのアドレスを入力してください。"
+            error={loginFormatError}
+          >
+            <Input
+              type="email"
+              value={loginValue}
+              onChange={(e) => {
+                setLoginValue(e.target.value);
+                if (loginState.kind === 'sent' || loginState.kind === 'error') {
+                  setLoginState({ kind: 'idle' });
+                }
+              }}
+              onBlur={() => setLoginTouched(true)}
+              placeholder="yourname@example.com"
+              autoComplete="email"
+              autoCapitalize="off"
+              spellCheck={false}
+              inputMode="email"
+              disabled={isLoginSubmitting}
+            />
+          </FormField>
+
+          {loginState.kind === 'sent' && (
+            <AlertBox variant="success">
+              <p>ログインリンクを送信しました。メール内のリンクを開くとログインが完了します。</p>
+              <p className="mt-1 text-xs">
+                リンクは送信した端末・ブラウザで開いてください。
+              </p>
+            </AlertBox>
+          )}
+
+          {loginState.kind === 'error' && (
+            <AlertBox variant="error">{loginState.message}</AlertBox>
+          )}
+
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={handleLoginSubmit}
+            disabled={!canLoginSubmit}
+          >
+            {isLoginSubmitting ? '送信中…' : 'ログインリンクを送る'}
+          </Button>
         </div>
       </Card>
     </div>

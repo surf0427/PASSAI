@@ -6,6 +6,7 @@ import type { ActivityData } from '@/types/activity';
 import type { SummaryResult, WallHittingResult, AnalyzeStep } from '@/types/analysis';
 import type { BasicInfo } from '@/types/basicInfo';
 import { useWallHitting } from '@/hooks/useWallHitting';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import { StepIndicator } from '@/app/analyze/components/StepIndicator';
 import { QuestionsSection } from '@/app/analyze/components/QuestionsSection';
 import { SummarySection } from '@/app/analyze/components/SummarySection';
@@ -30,6 +31,7 @@ import {
 } from '@/lib/additionalQuestionsCache';
 import { loadSummarizeCache, saveSummarizeCache } from '@/lib/summarizeCache';
 import { persistSelfAnalysisLog } from '@/lib/selfAnalysisLogStorage';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 import { FREE_MEMO_MAX_CHARS, normalizeDeepAnswers, normalizeFreeMemo } from '@/lib/summarizeNormalize';
 import { decideSummarizeMode } from '@/lib/summarizeMode';
 import { logAiCache } from '@/lib/aiCacheLog';
@@ -110,6 +112,22 @@ function splitSummaryStrengths(raw: string): string[] {
 }
 
 export default function SelfAnalysisPage() {
+  // STEP-SUPABASE-COMPLETE-04D: persist 後の dualWrite に使う owner key。
+  // null（auth 未確定）なら dualWrite は呼ばず、AuthProvider の backfill が後で拾う。
+  const currentUserId = useCurrentUserId();
+
+  // persistSelfAnalysisLog の戻り値を Supabase へ即時 mirror する（best-effort）。
+  //   - userId 未確定なら no-op（後続 backfill が拾う）。
+  //   - await しない / 例外握り潰し / dynamic import で boundary 安全。
+  //   - 失敗が summarize フローを壊さないこと（fire-and-forget）。
+  function mirrorSelfAnalysisLog(log: ReturnType<typeof persistSelfAnalysisLog>) {
+    if (!currentUserId) return;
+    const userId = currentUserId;
+    void import('@/lib/repository/selfAnalysisLogRepository')
+      .then((mod) => mod.dualWriteSelfAnalysisLog({ log, userId }))
+      .catch(() => {});
+  }
+
   const [step, setStep] = useState<AnalyzeStep>(() => {
     const savedState = loadAnalyzeState();
     if (!savedState) return 'confirm';
@@ -226,8 +244,15 @@ export default function SelfAnalysisPage() {
   const [analysisLoadingStartedAt, setAnalysisLoadingStartedAt] = useState<number | null>(null);
   const [summarizeLoadingStartedAt, setSummarizeLoadingStartedAt] = useState<number | null>(null);
 
+  // STEP-GATE-COMPLETE: 402 quota-exceeded を analysis / additional / summarize の
+  // 3 fetch すべてで共通捕獲する。useWallHitting にも optional callback で渡す。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   // freshAnalysis: APIから取得した新規結果。analysis: 新規 or 復元のいずれか
-  const { result: freshAnalysis, loading: analysisLoading, error: analysisError, run: runAnalysis } = useWallHitting(activityData, basicInfo);
+  const { result: freshAnalysis, loading: analysisLoading, error: analysisError, run: runAnalysis } = useWallHitting(activityData, basicInfo, {
+    onResponse: handleQuotaResponse,
+  });
   const analysis = freshAnalysis ?? restoredAnalysis;
 
   // 新規分析完了時のみステップ2へ遷移（復元時は answers をリセットしない）
@@ -342,6 +367,10 @@ export default function SelfAnalysisPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activityData, existingQuestions: displayedQuestions, basicInfo }),
       });
+      // STEP-GATE-COMPLETE: 402 はダイアログで吸収して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setAddQuestionsError(data.detail ?? '質問の追加に失敗しました');
@@ -444,7 +473,7 @@ export default function SelfAnalysisPage() {
       // summaryInputHash で dedup されるため、cache hit で同入力を再評価しても重複 entry は増えない。
       // analysis (WallHittingResult) は displayedQuestions に差し替えていない原本を入れ、
       // displayedQuestions / answers / deepAnswers / freeMemo は別フィールドで snapshot する。
-      persistSelfAnalysisLog({
+      const cachedLog = persistSelfAnalysisLog({
         summaryInputHash: inputHash,
         analysis,
         displayedQuestions,
@@ -453,6 +482,7 @@ export default function SelfAnalysisPage() {
         freeMemo: normalizedFreeMemo,
         summary: cached.summary,
       });
+      mirrorSelfAnalysisLog(cachedLog);
       return;
     }
     logAiCache({ route: 'api/summarize', action: 'miss', inputHash });
@@ -475,6 +505,10 @@ export default function SelfAnalysisPage() {
           basicInfo,
         }),
       });
+      // STEP-GATE-COMPLETE: 402 はダイアログで吸収して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setSummarizeError(data.detail ?? 'まとめの生成に失敗しました');
@@ -498,7 +532,7 @@ export default function SelfAnalysisPage() {
       // cache hit 経路と完全同形。同じ summaryInputHash なら同一 entry を上書き更新。
       // 保存対象は server に送った deepAnswers / freeMemo の **正規化後** 値であり、
       // hash 一致の正本に揃える。
-      persistSelfAnalysisLog({
+      const savedLog = persistSelfAnalysisLog({
         summaryInputHash: inputHash,
         analysis,
         displayedQuestions,
@@ -507,6 +541,7 @@ export default function SelfAnalysisPage() {
         freeMemo: normalizedFreeMemo,
         summary: summaryResult,
       });
+      mirrorSelfAnalysisLog(savedLog);
     } catch {
       setSummarizeError('エラーが発生しました。しばらくしてから再試行してください。');
     } finally {
@@ -767,6 +802,8 @@ export default function SelfAnalysisPage() {
         </section>
       )}
 
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ (analysis / additional / summarize 共通)。 */}
+      {quotaDialog}
     </div>
   );
 }

@@ -23,9 +23,17 @@ import { logAiValidation } from '@/lib/aiValidationLog';
 // server route.ts の ROUTE 定数と揃えてある（server は変更しないため別箇所で定義）。
 const ROUTE = 'api/analysis';
 
+// STEP-GATE-COMPLETE: caller 側で 402 quota-exceeded を捕まえるための optional hook。
+// useQuotaDialog().handleResponse をそのまま渡せる形にしてある (戻り値 true で「処理停止」)。
+// 渡さない場合 (legacy callers) は何もしない。
+type UseWallHittingOptions = {
+  onResponse?: (res: Response) => Promise<boolean>;
+};
+
 export function useWallHitting(
   activityData: ActivityData | null,
   basicInfo: BasicInfo | null = null,
+  options?: UseWallHittingOptions,
 ) {
   const [result, setResult] = useState<WallHittingResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -88,6 +96,13 @@ export function useWallHitting(
         // TODO: 将来は client 側で大学DB検索済みの universityContext を直接送るオプションも追加できる。
         body: JSON.stringify({ activityData, basicInfo }),
       });
+
+      // STEP-GATE-COMPLETE: caller (useQuotaDialog) が 402 を捕まえたら早期 return。
+      // finally で loading 解除されるため state 整合性は保たれる。
+      if (options?.onResponse && (await options.onResponse(res))) {
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         setError(data.detail ?? '分析に失敗しました。もう一度お試しください。');

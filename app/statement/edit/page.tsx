@@ -2,6 +2,8 @@
 
 import { Suspense, useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import type { StatementImprovementTargetSection } from '@/types/statementInterviewInsights';
 import type { StudentProfile } from '@/types/studentProfile';
 import {
@@ -47,6 +49,12 @@ import {
   loadStatementReviewCache,
   saveStatementReviewCache,
 } from '@/lib/statement/review/statementReviewCache';
+// STEP-DIVERGENCE-02A: 過去添削履歴 → 既出の助言・論点（divergence context）。
+import { buildPreviousOutputSummary } from '@/lib/contextBuilders/divergence/buildPreviousOutputSummary';
+// STEP-DIVERGENCE-04B: まだ活用できていない可能性のある経験（activityData × 使用面）。
+import { buildUnusedExperience } from '@/lib/contextBuilders/divergence/buildUnusedExperience';
+import { loadSelfPRs } from '@/lib/selfPRStorage';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 import { parseStatementReviewError } from '@/lib/statement/review/parseStatementReviewError';
 import { validateStatementReviewInput } from '@/lib/validation/validateStatementReviewInput';
 import {
@@ -190,6 +198,31 @@ const STATEMENT_REVIEW_SUB_MESSAGES: readonly string[] = [
 // useSearchParams を本コンポーネントが使うため、default export 側で <Suspense> ラップする
 // （Next.js 16 の prerender bailout warning を抑える）。本体は実装は維持。
 function StatementPageInner() {
+  // STEP-BILLING-07A: 402 quota-exceeded を受けたら QuotaExceededDialog を出す。
+  // handleResponse(res) を fetch 後に呼び、true なら早期 return すれば
+  // 既存の res.ok 分岐は変わらない。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
+  // STEP-SUPABASE-COMPLETE-06D: statementReviewHistory を Supabase
+  // statement_review_history に即時 mirror するための auth。
+  // 未ログイン / userId 未確定では mirror を skip する（read / 保存経路は不変）。
+  const currentUserId = useCurrentUserId();
+
+  // saveReviewHistory(item) 直後に呼ぶ best-effort mirror dispatch（上りのみ）。
+  //   - canonical（localStorage）保存は呼び出し側で必ず先に実行済み。本 dispatch は後段。
+  //   - userId 未確定なら no-op。
+  //   - dynamic import で browser-only repository を server bundle に引き込まない
+  //     （selfPRs dualWrite と同方式）。
+  //   - await しない / catch で握り潰す。mirror 失敗は添削結果表示・履歴保存を壊さない。
+  //   - delete / 10 件 cap eviction は伝播しない（upsert のみ。restore は 06E）。
+  const mirrorStatementReview = (item: ReviewHistoryItem) => {
+    if (!currentUserId) return;
+    void import('@/lib/repository/statementReviewHistoryRepository')
+      .then((mod) => mod.mirrorStatementReviewOnce({ userId: currentUserId, item }))
+      .catch(() => {});
+  };
+
   // form 入力（value 属性が render に直結するので SSR-stable の空値で初期化、useEffect で seeding）。
   // 後段の mount-init useEffect で復元する。
   //   - statementText: ?rewriteFrom=<id> の essay → draft の statementText の優先順で復元
@@ -439,6 +472,46 @@ function StatementPageInner() {
     //   この非対称は cache identity と prompt 入力を別レーンとして扱う設計。
     //   STEP-F は minimum migration で、studentProfile.generatedAt drift の完全解消は
     //   別 STEP として残す（C1 useMemo が session 内 stabilizer として依然必要）。
+    // STEP-DIVERGENCE-02A: 過去の添削履歴から「既出の助言・論点」を抽出する divergence context。
+    // - submit 時に毎回 loadReviewHistory() を読む（mount-time memo にしない）。直前の
+    //   saveReviewHistory で増えた履歴を次の submit に反映させるため。builder は pure / Date 非使用
+    //   なので、同じ履歴内容なら同じ struct = 同じ hash で安定する。
+    // - body には ReviewHistoryItem 全体を送らず、weaknesses / actions / strengths だけの
+    //   compact projection を builder に渡す（essay / score / 大学名 / 日付などは載せない）。
+    // - 生成した struct を hash 入力と fetch body の両方に渡し、hash と prompt の内容を一致させる。
+    const previousOutputSummary = buildPreviousOutputSummary(
+      loadReviewHistory().map((h) => ({
+        weaknesses: h.result?.weaknesses,
+        actions: h.result?.actions,
+        strengths: h.result?.strengths,
+      })),
+    );
+
+    // STEP-DIVERGENCE-04B: まだ活用できていない可能性のある「経験」を抽出する divergence context。
+    // usedText は cross-feature のユーザー記述 + canonical persona を連結する（AI 出力は含めない）:
+    //   現 essay + statementReviewHistory.essay + selfPRs.text + interview answers + StudentProfile。
+    // 現 essay を含めることで、今書いている経験を未使用提案しない。無制限ストアは cap。
+    // builder は pure / Date 非使用なので、同じ usedText/activityData なら同じ struct = 同じ hash で安定。
+    // usedText が hash 外・時間変化 source（selfPRs / interview / 過去 essay）を含むため、
+    // PreviousOutputSummary と同様に struct を hash 入力と body の両方へ渡す（digest 不整合回避）。
+    const SELFPR_CAP = 20;
+    const INTERVIEW_CAP = 20;
+    const usedTextParts: string[] = [
+      essay,
+      ...loadReviewHistory().map((h) => h.essay ?? ''),
+      ...loadSelfPRs().slice(0, SELFPR_CAP).map((pr) => pr.text ?? ''),
+      ...getInterviewRecords()
+        .slice(0, INTERVIEW_CAP)
+        .flatMap((r) => [r.myAnswers ?? '', r.questionsAsked ?? '']),
+    ];
+    if (studentProfile) {
+      usedTextParts.push(studentProfile.summary ?? '');
+      usedTextParts.push(...(studentProfile.strengths ?? []));
+      usedTextParts.push(...(studentProfile.signatureEpisodes ?? []).map((e) => e.title ?? ''));
+    }
+    const usedText = usedTextParts.filter((s) => s !== '').join('\n');
+    const unusedExperience = buildUnusedExperience({ activityData: activities, usedText });
+
     const inputHash = hashStatementReviewInput({
       university,
       faculty,
@@ -447,6 +520,8 @@ function StatementPageInner() {
       basicInfo,
       activityData: activities,
       studentProfile,
+      previousOutputSummary,
+      unusedExperience,
       model: STATEMENT_REVIEW_MODEL,
       promptVersion: STATEMENT_REVIEW_PROMPT_VERSION,
     });
@@ -465,7 +540,7 @@ function StatementPageInner() {
       setError('');
       const mapped = mapApiResponse(cached.response);
       setResult(mapped);
-      saveReviewHistory({
+      const cachedReviewItem: ReviewHistoryItem = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         university,
@@ -473,7 +548,9 @@ function StatementPageInner() {
         department,
         essay: statementText,
         result: mapped,
-      });
+      };
+      saveReviewHistory(cachedReviewItem);
+      mirrorStatementReview(cachedReviewItem);
       options.afterSuccess?.();
       return;
     }
@@ -512,8 +589,17 @@ function StatementPageInner() {
           activityData: activities,
           studentProfile,
           wallHittingResult: wallHitting,
+          // STEP-DIVERGENCE-02A/04B: hash 入力と同一 struct を送る（hash と prompt 内容を一致させる）。
+          previousOutputSummary,
+          unusedExperience,
         }),
       });
+
+      // STEP-BILLING-07A: 402 quota-exceeded ならダイアログを開いて早期 return。
+      // finally で loading 解除 + abort controller cleanup される。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       const data = await res.json();
 
@@ -531,7 +617,7 @@ function StatementPageInner() {
       incrementStatementReviewCount();
       setRemainingCount(getRemainingStatementReviewCount());
 
-      saveReviewHistory({
+      const apiReviewItem: ReviewHistoryItem = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         university,
@@ -539,7 +625,9 @@ function StatementPageInner() {
         department,
         essay: statementText,
         result: mapped,
-      });
+      };
+      saveReviewHistory(apiReviewItem);
+      mirrorStatementReview(apiReviewItem);
 
       // STEP5.10: 成功時のみ cache 書き込み（!res.ok / catch では保存しない）。
       saveStatementReviewCache({
@@ -780,6 +868,9 @@ function StatementPageInner() {
         onConfirm={confirmDeletePrepareEntry}
         onCancel={cancelDeletePrepareEntry}
       />
+
+      {/* STEP-BILLING-07A: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

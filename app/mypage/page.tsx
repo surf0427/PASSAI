@@ -25,6 +25,8 @@ import {
 } from '@/lib/mypage/loadMypageData';
 import { ScoreLineChart } from './ScoreLineChart';
 import { EmptyState } from './EmptyState';
+import { BillingCard } from './BillingCard';
+import { UsageStatusCard } from './UsageStatusCard';
 
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
@@ -76,6 +78,16 @@ export default function MyPage() {
 
       {/* ── プロフィール小バナー ─────────────────────────── */}
       <ProfileBanner header={header} />
+
+      {/* ── 課金情報カード (STEP-BILLING-05) ───────────────
+          empty-state 分岐の外側に置く: 課金状態は活動有無に依存しないため、
+          初回ユーザーでも Free / 契約導線が見える。 */}
+      <BillingCard />
+
+      {/* ── 今月の利用状況 (STEP-BILLING-07) ─────────────
+          BillingCard と同じく empty-state の外。Free ユーザーには内部で
+          自動的に何も描画されない。 */}
+      <UsageStatusCard />
 
       {showEmptyState ? (
         <div className="mt-8">

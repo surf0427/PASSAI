@@ -8,12 +8,15 @@ import { createTimeoutSignal } from '@/lib/aiTimeout';
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // essay-chat は cache を持たないため PROMPT_VERSION bump 対象外。文言改修は PR description で明示する。
 import { ESSAY_CHAT_SYSTEM_PROMPT } from '@/lib/prompts/essayChatPrompt';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。
 // 本 route は plain text 応答（JSON parse なし）のため parse_failed は発生しない。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/essay-chat';
+const USAGE_ROUTE = 'essay-chat';
 
 // SYSTEM_PROMPT（ESSAY_CHAT_SYSTEM_PROMPT）は lib/prompts/essayChatPrompt.ts に lift 済み（STEP-LIB-05）。
 // 役割（不変）: 役割宣言 / 禁止 4 項目 / やること 4 種 / 生徒の志望情報の踏まえ方 / 出力ルール。
@@ -34,6 +37,11 @@ export async function POST(req: Request) {
   if (!userQuestion.trim()) {
     return Response.json({ error: '質問を入力してください' }, { status: 400 });
   }
+
+  // STEP-GATE-COMPLETE: Plan Gate (essay feature)。validation 後 / AI 前。
+  const gate = await ensurePlanQuota('essay');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   const basicInfoSection = buildBasicInfoPromptSection(basicInfo);
   const firstPreference = basicInfo?.preferences?.[0];
@@ -86,6 +94,7 @@ ${userQuestion}`;
       const rawTail = message.content[0].type === 'text' ? message.content[0].text.slice(-200) : '';
       console.error('essay-chat truncated', { stopReason: message.stop_reason, rawTextTail: rawTail });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_REPLY_TRUNCATED',
@@ -97,6 +106,7 @@ ${userQuestion}`;
 
     const reply = message.content[0].type === 'text' ? message.content[0].text.trim() : '';
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ reply });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -104,6 +114,7 @@ ${userQuestion}`;
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」を集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'AIの処理に失敗しました。時間をおいてお試しください。' }, { status: 500 });
   }
 }

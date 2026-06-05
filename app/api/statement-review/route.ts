@@ -14,15 +14,22 @@ import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateStatementReviewInput } from '@/lib/validation/validateStatementReviewInput';
 import { detectNgWords } from '@/lib/detectNgWords';
 import { analyzeStructure } from '@/lib/structureAnalysis';
+import { buildThemeFrequency } from '@/lib/contextBuilders/divergence/buildThemeFrequency';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 import type { BasicInfo } from '@/types/basicInfo';
 import type { ActivityData } from '@/types/activity';
 import type { WallHittingResult } from '@/types/analysis';
 import type { StudentProfile } from '@/types/studentProfile';
+import type { PreviousOutputSummary, UnusedExperience } from '@/types/divergence';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/statement-review';
+// STEP-BILLING-06: usage_records.route に入れる識別子。
+// schema コメント (supabase/schema.sql §30) 規約: app/api/<name>/route.ts の <name>。
+const USAGE_ROUTE = 'statement-review';
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -37,6 +44,15 @@ export async function POST(req: Request) {
   // 新規: クライアントが localStorage の canonical StudentProfile を送ってきた場合に受ける。
   // 形が壊れていれば null として扱い、wallHittingResult 側 fallback に任せる。
   const studentProfile: StudentProfile | null = getStudentProfileFromRequest({ body });
+  // STEP-DIVERGENCE-02A: client が statementReviewHistory の compact projection を
+  // buildPreviousOutputSummary() に通して送ってきた divergence context。
+  // 未送信なら null（完全後方互換 = section を出さない）。route 内で localStorage /
+  // Supabase は一切読まない（client が build 済みの struct をそのまま prompt builder へ流す）。
+  const previousOutputSummary: PreviousOutputSummary | null = body.previousOutputSummary ?? null;
+  // STEP-DIVERGENCE-04B: client(edit page) が activityData × 使用面から決定論派生した
+  // 「まだ活用できていない可能性のある経験」struct。未送信なら null（完全後方互換 = section なし）。
+  // route 内で localStorage / Supabase は読まない（client が build 済みの struct をそのまま渡す）。
+  const unusedExperience: UnusedExperience | null = body.unusedExperience ?? null;
 
   // V-6: client validator の最終防衛線。同じ deterministic rule を server でも適用する。
   // direct API call / stale client / bypassed JS で invalid 入力が到達した場合に AI call /
@@ -50,6 +66,12 @@ export async function POST(req: Request) {
     });
     return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  // STEP-BILLING-06: Plan Gate。バリデーション後 / AI call 前に実施。
+  // 401 (未認証) / 402 (quota-exceeded) / 500 (内部エラー) は本ヘルパが組み立てる。
+  const gate = await ensurePlanQuota('statement');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   try {
     // STEP3.2: static rule（役割宣言・採点ルール・JSON schema 等）を system に切り出した。
@@ -101,6 +123,18 @@ export async function POST(req: Request) {
             // drift をもたらさない。DET-2 の NG section と独立 / 共存させ、AI が両者を踏まえた
             // 重複しない指摘 / 具体例 / 行動レベル actions に token を割けるようにする。
             structureAnalysis: analyzeStructure(essay),
+            // STEP-DIVERGENCE-02A: 過去に提示済みフィードバックの divergence context。
+            // DET-2/DET-4 と違い statementReviewHistory（時間で変化する出力）由来のため、
+            // client 側で hash 入力にも含めて app-cache を履歴変化時に miss させている。
+            previousOutputSummary,
+            // STEP-DIVERGENCE-03A: ユーザーのテーマ偏り（activityData + studentProfile から
+            // 決定論派生）。DET-2/DET-4 と同型で、既に hash 済みの入力からの派生のため hash field は
+            // 増やさず PROMPT_VERSION bump のみで cache lane を分離する。AI review 出力は数えない
+            // （PreviousOutputSummary との二重計上回避）。route 側で localStorage / Supabase は読まない。
+            themeFrequency: buildThemeFrequency({ activityData, studentProfile }),
+            // STEP-DIVERGENCE-04B: まだ活用できていない可能性のある経験（client build・body 経由）。
+            // usedText が hash 外・時間変化 source を含むため client 側で hash 入力にも含めている。
+            unusedExperience,
           }),
         },
       ],
@@ -116,6 +150,7 @@ export async function POST(req: Request) {
         rawTextTail: text.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_REVIEW_TRUNCATED',
@@ -129,10 +164,12 @@ export async function POST(req: Request) {
       const json = extractJson(text);
       const result = JSON.parse(json);
       logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
       return Response.json(result);
     } catch {
       console.error('statement-review parse failed', { rawTextTail: text.slice(-200) });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_REVIEW_PARSE_FAILED',
@@ -147,6 +184,7 @@ export async function POST(req: Request) {
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'AIの処理に失敗しました。時間をおいてお試しください。' }, { status: 500 });
   }
 }

@@ -20,6 +20,7 @@
 //     type-only import で参照する（runtime 循環なし）。
 
 import type { AnalysisPromptContext } from '@/lib/prompts';
+import type { ThemeFrequency } from '@/types/divergence';
 import {
   STUDENT_FIT_INSTRUCTION,
   SUBJECT_GRADES_SHARED_INSTRUCTION,
@@ -35,7 +36,56 @@ import { buildUniversityContextPromptSection } from '@/lib/buildUniversityContex
 export type BuildAdditionalQuestionsOptions = {
   activityText: string;
   existingQuestions: string[];
+  // STEP-DIVERGENCE-03C: ユーザーのテーマ偏り（activityData から route 側で決定論派生）。
+  // 質問生成の探索範囲を広げるための「参考情報」であり、StudentProfile 生成には作用しない。
+  // 空 / 未指定 / documentsConsidered < 3 / underused 空なら section を出さない（後方互換）。
+  // activityData は既に HashAdditionalQuestionsInput に含まれる決定論派生のため hash field は
+  // 増やさず PROMPT_VERSION bump のみで cache lane を分離する（03A / DET 系と同型）。
+  themeFrequency?: ThemeFrequency | null;
 } & AnalysisPromptContext;
+
+// 質問生成の参考になる「テーマ探索」定数。
+const THEME_FREQUENCY_MIN_DOCUMENTS = 3;
+const THEME_FREQUENCY_MAX_OVERUSED = 3;
+
+// STEP-DIVERGENCE-03C: ThemeFrequency を「質問文脈用」section に整形する local helper。
+// 既存 themeFrequencySection.ts（改善提案文脈・「採点には利用しません」等）は意味が異なるため
+// 流用しない。本 section は「探索の問いを足す」目的に限定し、強みの断定や profile 生成を促さない。
+// documentsConsidered < 3 / underused 空なら空文字（section なし＝後方互換）。
+function buildThemeFrequencyQuestionSection(
+  freq: ThemeFrequency | null | undefined,
+): string {
+  if (!freq) return '';
+  const documentsConsidered = freq.basis?.documentsConsidered ?? 0;
+  if (documentsConsidered < THEME_FREQUENCY_MIN_DOCUMENTS) return '';
+  const themes = Array.isArray(freq.themes) ? freq.themes : [];
+  const underused = Array.isArray(freq.underused) ? freq.underused : [];
+  if (underused.length === 0) return '';
+
+  const overused = themes
+    .filter((t) => t.count > 0)
+    .slice(0, THEME_FREQUENCY_MAX_OVERUSED)
+    .map((t) => t.theme);
+
+  const lines: string[] = ['【テーマ探索の参考】', ''];
+  lines.push('以下は活動データから見えるテーマの頻度です（質問生成の参考情報）。');
+  lines.push('');
+  if (overused.length > 0) {
+    lines.push('よく出ているテーマ:');
+    lines.push(...overused.map((t) => `- ${t}`));
+    lines.push('');
+  }
+  lines.push('まだ十分に掘られていないテーマ:');
+  lines.push(...underused.map((t) => `- ${t}`));
+  lines.push('');
+  lines.push('・これらは質問生成の参考情報であり、本人の強みを断定するものではありません。');
+  lines.push('・存在しない経験・強みを前提にしないでください。');
+  lines.push(
+    '・「まだ十分に掘られていないテーマ」は、本人の活動データから自然に接続できる場合のみ深掘り質問にしてください。接続できない場合は無視してください。',
+  );
+  lines.push('・活動データに登場しない情報を質問に書き込まないでください（generic 質問禁止・上記の質問品質要件を維持）。');
+  return lines.join('\n');
+}
 
 // ── STEP3.8: static rule を system パラメータへ切り出し ──────────
 // 「毎回変わらない指示」（役割宣言・志望先文脈の解釈方針・制約・出力ルール・JSON schema）を
@@ -87,6 +137,23 @@ const ADDITIONAL_QUESTIONS_SUBJECT_GRADES_QUALIFIER = `【analysis/additional ro
 
 ・subjectGrades 未入力時は、評定・欠席に関する質問を作らない。`;
 
+// STEP-DIVERGENCE-03C: user prompt に【テーマ探索の参考】section が来た時の解釈ルール。
+// ユーザーが同じテーマばかり語ることによる探索範囲の縮小を防ぎ、まだ薄いテーマの観点も
+// 深掘り質問で拾えるようにする。ただし質問生成への作用に限定し、StudentProfile（人格・強み）
+// 生成には絶対に influence させない。section が未提示なら本 qualifier を適用しない（後方互換）。
+const ADDITIONAL_QUESTIONS_THEME_FREQUENCY_QUALIFIER = `【テーマ探索の参考について】
+・user prompt に【テーマ探索の参考】section が含まれている場合、それは活動データから deterministic に集計した「よく出ているテーマ」と「まだ十分に掘られていないテーマ」です。AI の過去出力ではありません。
+
+・これは追加質問の観点を広げるための参考情報です。本人の強みを断定したり、profile（人格・強み・価値観）を生成・上書きしたりするものではありません。StudentProfile には一切反映しません。
+
+・「まだ十分に掘られていないテーマ」は、本人の活動データに実際に接続できる場合のみ深掘り質問の切り口にしてください。活動データに無い経験・強みを前提にした質問や、本人が持っていない前提を埋め込む質問を作ってはいけません。接続できないテーマは無視してください。
+
+・「よく出ているテーマ」を避ける必要はありません。本人の核となる経験であれば引き続き深掘りして構いません。
+
+・本ルールは上位の質問品質要件（活動名・テーマ・固有名詞への直接言及必須 / generic 質問禁止）を上書きしません。テーマ探索の問いも必ず活動データの具体に紐付けてください。
+
+・section が含まれていない場合は、本ルールを適用せず従来通り判断してください。`;
+
 export const ADDITIONAL_QUESTIONS_SYSTEM_PROMPT = `あなたは総合型選抜・学校推薦型選抜の受験指導のプロです。
 以下の活動データをもとに、深掘り質問を2問だけ追加生成してください。
 
@@ -97,6 +164,8 @@ ${SUBJECT_GRADES_SHARED_INSTRUCTION}
 ${SUBJECT_GRADES_ASYMMETRY_RULE}
 
 ${ADDITIONAL_QUESTIONS_SUBJECT_GRADES_QUALIFIER}
+
+${ADDITIONAL_QUESTIONS_THEME_FREQUENCY_QUALIFIER}
 
 追加質問は、上記の志望大学・学部・学科の特性に踏み込む内容にすること。
 学部のカリキュラム適合性、学科の専門性、受験方式に応じた観点を意識する。
@@ -172,6 +241,11 @@ export function buildAdditionalQuestionsPrompt(opts: BuildAdditionalQuestionsOpt
   const sections: string[] = [basicInfoSection];
   if (uniContextSection) sections.push(uniContextSection);
   sections.push(`【活動データ】\n${activityText}`);
+  // STEP-DIVERGENCE-03C: テーマ探索の参考（質問文脈用）。空なら省略（documentsConsidered < 3 等）。
+  // 活動データの後・既存質問の前に置き、SYSTEM_PROMPT 側の
+  // ADDITIONAL_QUESTIONS_THEME_FREQUENCY_QUALIFIER と組で動く。
+  const themeFrequencySection = buildThemeFrequencyQuestionSection(opts.themeFrequency);
+  if (themeFrequencySection) sections.push(themeFrequencySection);
   sections.push(`【すでに出している質問（重複禁止）】\n${existingQuestionsText}`);
   return `以下の活動データから追加の深掘り質問を生成してください。\n\n${sections.join('\n\n')}`;
 }

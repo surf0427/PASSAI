@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { useRouter } from 'next/navigation';
 import { saveActivityData, loadActivityData, clearActivityData } from '@/lib/activityStorage';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 import { validateActivityForm } from '@/lib/activityValidator';
 import type { BasicInfo } from '@/types/basicInfo';
 import type {
@@ -57,6 +58,9 @@ const getMountedServerSnapshot = () => false;
 
 export function useActivityForm() {
   const router = useRouter();
+  // STEP-TUTOR-CONTEXT-PHASE2-REPOSITORY-01: submit-driven dualWrite に使う owner key。
+  // null（auth 未確定）なら dualWrite は呼ばず、AuthProvider の backfill が後で拾う。
+  const currentUserId = useCurrentUserId();
   const [activityData, setActivityData] = useState<ActivityData>(
     () => loadActivityData() ?? initialActivityData,
   );
@@ -330,6 +334,19 @@ export function useActivityForm() {
           }),
         )
         .catch(() => {});
+
+      // STEP-TUTOR-CONTEXT-PHASE2-REPOSITORY-01: auth-scoped durable（activity_logs）へ
+      // best-effort dualWrite（submit-driven・fire-and-forget）。
+      //   - userId 未確定なら no-op（AuthProvider の backfill が後で拾う）。
+      //   - await しない / 例外握り潰し / dynamic import で boundary 安全。
+      //   - 既存 anonymous mirror（上の mirrorActivityData）には触らない（別経路）。
+      //   - autosave (saveActivityData) には絶対に dualWrite を入れない（flood 防止）。
+      if (currentUserId) {
+        const userId = currentUserId;
+        void import('@/lib/repository/activityRepository')
+          .then((mod) => mod.dualWriteActivityLog({ userId, activityData }))
+          .catch(() => {});
+      }
     } catch (e) {
       console.error('useActivityForm: sessionStorage save failed', e);
       setErrors(['保存に失敗しました。入力内容をコピーしてから再読み込みしてください。']);

@@ -438,6 +438,7 @@ CREATE TABLE profiles (
   id               uuid         PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   display_user_id  text         UNIQUE,
   plan             text         NOT NULL DEFAULT 'free',
+  is_qa_user       boolean      NOT NULL DEFAULT false,
   created_at       timestamptz  NOT NULL DEFAULT timezone('utc', now()),
   updated_at       timestamptz  NOT NULL DEFAULT timezone('utc', now())
 );
@@ -456,8 +457,15 @@ COMMENT ON COLUMN profiles.display_user_id IS
   'lookup but never used as ownership key.';
 
 COMMENT ON COLUMN profiles.plan IS
-  'Billing plan label. Phase1 = "free". Will be driven by Stripe webhook in '
-  'a later STEP — do not write from client outside of admin operations.';
+  'Billing plan label. Phase1 default = "free". Driven by Stripe webhook in '
+  'STEP-BILLING-02 以降 (service_role 経由)。client からの直接書き換えは '
+  '§24 trigger (enforce_profile_plan_protection) で禁止済み。';
+
+COMMENT ON COLUMN profiles.is_qa_user IS
+  'QA bypass flag. true のユーザーは課金プラン / 月次回数制限を全 feature で '
+  'bypass する (lib/billing/planGate.ts ensurePlanQuota)。権限昇格フラグなので '
+  'client (anon/authenticated) からの書き換えは §24 trigger '
+  '(enforce_profile_plan_protection) で禁止。設定は service_role / SQL 経由のみ。';
 
 
 -- 17. Trigger: keep updated_at fresh on every UPDATE
@@ -478,8 +486,9 @@ CREATE TRIGGER profiles_set_updated_at
 --               display_user_id の重複チェックに必要。
 --     INSERT  : auth.uid() = id のみ。自分以外の行を作らせない。
 --     UPDATE  : auth.uid() = id のみ。他人の行を書き換えさせない。
---               plan は client 側から書かないが、明示的な列制限は Phase1 では
---               入れない（後段 Stripe STEP で UPDATE policy を絞る予定）。
+--               plan 列の client 書き換え禁止は §24 の trigger
+--               (enforce_profile_plan_protection) で強制する。RLS policy
+--               自体は列制限を持たない（trigger が SoT）。
 --     DELETE  : 未許可。退会フローは別 STEP で設計する。
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
@@ -648,3 +657,901 @@ CREATE POLICY "tutor_chat_messages owner delete"
   FOR DELETE
   TO authenticated
   USING (auth.uid() = user_id);
+
+
+-- ──────────────────────────────────────────────────────────────────────
+-- STEP-BILLING-01: 課金導線 DB 基盤
+--
+-- 目的:
+--   1. profiles.plan の課金回避リスクを解消する。
+--      既存 "profiles owner update" policy (§18) は列単位制限がなく、
+--      認証済み client が `update({ plan: 'premium' })` を直接呼べる状態
+--      だった。これを trigger で塞ぐ。
+--   2. Stripe サブスク状態の Single Source of Truth として
+--      subscriptions テーブルを導入する。書き込みは service_role
+--      (webhook) のみ。
+--   3. webhook 冪等化のため stripe_events を導入する。
+--   4. AI 利用量・原価分析の土台として usage_records を導入する（軽量版）。
+--
+-- 本 STEP は DB 基盤のみ。Stripe SDK / Checkout / Webhook 実装 / UI 変更は
+-- 別 STEP (STEP-BILLING-02 以降)。
+--
+--   §24  profiles.plan 書き込み保護 (function + trigger)
+--   §25  subscriptions table
+--   §26  subscriptions trigger (set_updated_at)
+--   §27  subscriptions RLS
+--   §28  stripe_events table
+--   §29  stripe_events RLS
+--   §30  usage_records table
+--   §31  usage_records RLS
+--
+-- 所有者契約:
+--   - subscriptions.user_id / usage_records.user_id は auth.users(id)。
+--   - stripe_events は user 紐付けを持たない（イベント単位の冪等化のみ）。
+-- ──────────────────────────────────────────────────────────────────────
+
+
+-- 24. profiles.plan 書き込み保護
+--
+--     §18 の "profiles owner update" は列単位制限がないため、認証済み
+--     client が `update({ plan: 'premium' })` を直接送れる状態だった。
+--     ここで以下を強制する:
+--       - INSERT 時: anon/authenticated は plan を常に 'free' に矯正する。
+--                    （client が plan='premium' を渡してきても無視する）
+--       - UPDATE 時: anon/authenticated が plan を変更しようとしたら例外。
+--       - service_role / postgres / supabase_admin はスルー。Stripe webhook
+--         は service_role 経由で plan を書き換える前提。
+--
+--     trigger を採用する理由: 列単位 GRANT (`REVOKE UPDATE (plan)`) では
+--     既存 lib/supabase/profile.ts:ensureProfile が `insert({ plan: 'free' })`
+--     を明示送信しているため、INSERT 経路も列禁止にすると ensureProfile が
+--     permission denied で落ちる。trigger なら "client は plan='free' しか
+--     書けない" を表現できる。
+CREATE OR REPLACE FUNCTION enforce_profile_plan_protection()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF current_user IN ('anon', 'authenticated') THEN
+    IF TG_OP = 'INSERT' THEN
+      -- client が何を渡してきても plan は 'free' / is_qa_user は false に矯正する。
+      NEW.plan := 'free';
+      NEW.is_qa_user := false;
+    ELSIF TG_OP = 'UPDATE' THEN
+      IF NEW.plan IS DISTINCT FROM OLD.plan THEN
+        RAISE EXCEPTION
+          'profiles.plan can only be modified by service_role (attempted by %)',
+          current_user
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+      IF NEW.is_qa_user IS DISTINCT FROM OLD.is_qa_user THEN
+        RAISE EXCEPTION
+          'profiles.is_qa_user can only be modified by service_role (attempted by %)',
+          current_user
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION enforce_profile_plan_protection IS
+  'STEP-BILLING-01. profiles.plan / is_qa_user を anon/authenticated から '
+  '書き換え不能にする。INSERT は plan=free / is_qa_user=false に矯正し、'
+  'UPDATE は両列の変更を拒否する。 '
+  'service_role / postgres / supabase_admin はスルー。 '
+  'plan は Stripe webhook、is_qa_user は運用 SQL が service_role 経由で書き換える前提。';
+
+CREATE TRIGGER profiles_enforce_plan_protection
+  BEFORE INSERT OR UPDATE ON profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION enforce_profile_plan_protection();
+
+
+-- 25. subscriptions — Stripe サブスク状態の Single Source of Truth
+--
+--     設計方針:
+--       - 1 user は時系列で複数 subscription を持ち得る（plan 変更 / 解約
+--         → 再契約）。user_id は UNIQUE にしない。
+--       - stripe_subscription_id を UNIQUE にして webhook 冪等化と
+--         upsert conflict target に使う。
+--       - "現在有効な plan" の判定は別 STEP のサーバヘルパで行う:
+--           status='active' OR
+--           (status='canceled' AND now() < current_period_end)
+--       - profiles.plan は本テーブル由来の denormalized cache（webhook
+--         で同時に更新する想定）。RLS 判定の高速パス用。
+--
+--     RLS:
+--       - 書き込み: policy なし → anon/authenticated 全 deny。
+--         service_role が BYPASSRLS で書く（webhook 経由）。
+--       - 読み取り: 自分の行のみ SELECT 可（UI で現プラン表示用）。
+CREATE TABLE subscriptions (
+  id                      uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                 uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  stripe_customer_id      text         NOT NULL,
+  stripe_subscription_id  text         NOT NULL UNIQUE,
+  plan                    text         NOT NULL,
+  status                  text         NOT NULL,
+  current_period_start    timestamptz,
+  current_period_end      timestamptz,
+  cancel_at_period_end    boolean      NOT NULL DEFAULT false,
+  created_at              timestamptz  NOT NULL DEFAULT timezone('utc', now()),
+  updated_at              timestamptz  NOT NULL DEFAULT timezone('utc', now()),
+  CONSTRAINT subscriptions_plan_check
+    CHECK (plan IN ('basic', 'premium')),
+  CONSTRAINT subscriptions_status_check
+    CHECK (status IN ('trialing', 'active', 'past_due', 'canceled',
+                      'incomplete', 'incomplete_expired', 'unpaid', 'paused'))
+);
+
+COMMENT ON TABLE subscriptions IS
+  'STEP-BILLING-01. Stripe サブスク状態の Single Source of Truth。 '
+  '書き込みは service_role (webhook) のみ。SELECT は自分の行のみ。 '
+  'profiles.plan は本テーブル由来の denormalized cache。 '
+  '1 user が複数の subscription 行を持ち得る（plan 変更や再契約時）。';
+
+COMMENT ON COLUMN subscriptions.user_id IS
+  'auth.users(id). Owner key. RLS は auth.uid() = user_id で閉じる。';
+
+COMMENT ON COLUMN subscriptions.stripe_customer_id IS
+  'Stripe Customer ID (cus_...). user に対し 1:1 で再利用される。 '
+  'Billing Portal セッション発行に必要。';
+
+COMMENT ON COLUMN subscriptions.stripe_subscription_id IS
+  'Stripe Subscription ID (sub_...). UNIQUE。webhook 冪等化と plan 切替時の '
+  '同一行更新に使う upsert conflict target。';
+
+COMMENT ON COLUMN subscriptions.plan IS
+  'basic | premium。Stripe Price ID から webhook 側で導出して書く。 '
+  '無料プランは存在しない（free は profiles.plan のデフォルト値で表現）。';
+
+COMMENT ON COLUMN subscriptions.status IS
+  'Stripe Subscription.status を sync。CHECK 制約で代表値を列挙。 '
+  'Stripe が将来 status を追加した場合は CHECK 緩和を別 migration で。';
+
+COMMENT ON COLUMN subscriptions.cancel_at_period_end IS
+  '解約予約フラグ。true なら current_period_end まで権利維持、その後 canceled。';
+
+CREATE INDEX subscriptions_user_id_idx ON subscriptions(user_id);
+CREATE INDEX subscriptions_customer_idx ON subscriptions(stripe_customer_id);
+
+
+-- 26. subscriptions trigger — keep updated_at fresh on every UPDATE
+--     (set_updated_at() は §3 で定義済み、複数テーブルで共有)。
+CREATE TRIGGER subscriptions_set_updated_at
+  BEFORE UPDATE ON subscriptions
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 27. subscriptions RLS
+--     INSERT / UPDATE / DELETE policy なし → anon/authenticated 書き込み禁止。
+--     service_role は BYPASSRLS。
+ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "subscriptions owner select"
+  ON subscriptions
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 28. stripe_events — webhook 冪等化ストア
+--
+--     Stripe は同じ event を retry で複数回送る前提。event_id を PK にし、
+--     INSERT ... ON CONFLICT DO NOTHING で再送を安全に弾く。
+--     payload は raw のまま保存（デバッグ・再処理用）。
+--
+--     RLS:
+--       - policy 一切なし → anon/authenticated は SELECT/INSERT 含め全 deny。
+--       - service_role のみが扱う（webhook handler）。
+CREATE TABLE stripe_events (
+  event_id      text         PRIMARY KEY,
+  type          text         NOT NULL,
+  payload       jsonb        NOT NULL,
+  received_at   timestamptz  NOT NULL DEFAULT timezone('utc', now()),
+  processed_at  timestamptz,
+  error         text
+);
+
+COMMENT ON TABLE stripe_events IS
+  'STEP-BILLING-01. Stripe webhook event の冪等化ストア。event_id PK で '
+  'INSERT ... ON CONFLICT DO NOTHING により再送イベントを安全に弾く。 '
+  '書き込み・読み取りともに service_role のみ。';
+
+COMMENT ON COLUMN stripe_events.event_id IS
+  'Stripe Event ID (evt_...). UNIQUE conflict target。';
+
+COMMENT ON COLUMN stripe_events.type IS
+  'Stripe event type (例: customer.subscription.created, '
+  'checkout.session.completed)。';
+
+COMMENT ON COLUMN stripe_events.payload IS
+  'Stripe event body をそのまま保存。デバッグ・再処理用。 '
+  'PII を含み得る（メール等）ので運用上の取扱注意。';
+
+COMMENT ON COLUMN stripe_events.processed_at IS
+  'NULL=受信したが未処理。値あり=処理成功。エラー時は error 列に詳細。';
+
+CREATE INDEX stripe_events_type_idx ON stripe_events(type);
+CREATE INDEX stripe_events_received_idx ON stripe_events(received_at DESC);
+
+
+-- 29. stripe_events RLS
+--     policy を一切作らない → anon/authenticated は SELECT 含め全アクセス不可。
+--     service_role は BYPASSRLS でアクセス。
+ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;
+
+
+-- 30. usage_records — AI 利用量・原価分析の土台（軽量版）
+--
+--     最低限のカラムのみ:
+--       user_id / route / model / status / occurred_at
+--     トークン数・原価カラムは将来 ALTER TABLE で後方互換に追加。
+--     route は app/api/<name>/route.ts の <name> 識別子を入れる想定
+--     （statement-review, tutor, essay-chat など）。
+--
+--     RLS:
+--       - 書き込み: policy なし → service_role (API route 内) のみが書く。
+--       - 読み取り: 自分の行のみ SELECT 可（マイページで「残り回数」を
+--         表示するため）。
+CREATE TABLE usage_records (
+  id           uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  route        text         NOT NULL,
+  model        text         NOT NULL,
+  status       text         NOT NULL,
+  occurred_at  timestamptz  NOT NULL DEFAULT timezone('utc', now()),
+  CONSTRAINT usage_records_status_check
+    CHECK (status IN ('ok', 'error', 'rate_limited'))
+);
+
+COMMENT ON TABLE usage_records IS
+  'STEP-BILLING-01. AI API 利用記録の最小版。route 別・user 別の利用回数 '
+  '集計と plan 別上限判定の基盤。トークン数 / 原価カラムは将来 ALTER TABLE '
+  'で後方互換に追加。書き込みは service_role のみ。SELECT は自分の行のみ。';
+
+COMMENT ON COLUMN usage_records.user_id IS
+  'auth.users(id). Owner key.';
+
+COMMENT ON COLUMN usage_records.route IS
+  'AI を呼び出した API route の識別子。例: "statement-review", "tutor"。 '
+  'app/api/<name>/route.ts の <name> 部分を使う。';
+
+COMMENT ON COLUMN usage_records.model IS
+  'Anthropic model ID。例: "claude-sonnet-4-6", "claude-opus-4-1"。';
+
+COMMENT ON COLUMN usage_records.status IS
+  'ok / error / rate_limited。CHECK 制約で固定。';
+
+COMMENT ON COLUMN usage_records.occurred_at IS
+  'AI call 実行時刻。INSERT 時のデフォルトで now() を入れる。 '
+  '日次集計はこの列で行う。';
+
+CREATE INDEX usage_records_user_occurred_idx
+  ON usage_records(user_id, occurred_at DESC);
+CREATE INDEX usage_records_route_occurred_idx
+  ON usage_records(route, occurred_at DESC);
+
+
+-- 31. usage_records RLS
+--     INSERT / UPDATE / DELETE policy なし → service_role のみが書く。
+ALTER TABLE usage_records ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "usage_records owner select"
+  ON usage_records
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- ──────────────────────────────────────────────────────────────────────
+-- STEP-SUPABASE-COMPLETE-04: self_analysis_logs（自己分析ログの Supabase mirror）
+--
+-- 位置づけ:
+--   tutor_chat_threads / tutor_chat_messages（§19〜§23）と同じ auth-scoped
+--   mirror 系統。localStorage の selfAnalysisLogs（key='selfAnalysisLogs',
+--   lib/selfAnalysisLogStorage.ts）を canonical とし、本 table はその "同期先 /
+--   mirror 的扱い" として best-effort で後追い同期する。
+--
+--   N=4 mirror（mirror_events / 共有 source_hash, §5）系統とは別レイヤー。
+--   こちらは user_id を持つ auth-scoped 永続層で、RLS は常に auth.uid()=user_id
+--   で閉じる。read 経路は本 STEP では切り替えず、引き続き localStorage canonical
+--   のまま（後続 STEP で hydrate / read-through を判断）。
+--
+--   §32  self_analysis_logs  table
+--   §33  self_analysis_logs  trigger (set_updated_at)
+--   §34  self_analysis_logs  RLS
+--
+-- 所有者契約:
+--   user_id は auth.users(id) を参照する owner key。
+--   display_user_id は本 table で扱わない（表示用の別 namespace）。
+-- ──────────────────────────────────────────────────────────────────────
+
+
+-- 32. self_analysis_logs
+CREATE TABLE self_analysis_logs (
+  id                   uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  local_log_id         text,
+  summary_input_hash   text         NOT NULL,
+  analysis             jsonb        NOT NULL,
+  displayed_questions  jsonb        NOT NULL DEFAULT '[]'::jsonb,
+  answers              jsonb        NOT NULL DEFAULT '[]'::jsonb,
+  deep_answers         jsonb        NOT NULL DEFAULT '[]'::jsonb,
+  free_memo            text         NOT NULL DEFAULT '',
+  summary              jsonb        NOT NULL,
+  created_at           timestamptz  NOT NULL DEFAULT now(),
+  updated_at           timestamptz  NOT NULL DEFAULT now(),
+  metadata             jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT self_analysis_logs_dedup_unique UNIQUE (user_id, summary_input_hash)
+);
+
+COMMENT ON TABLE self_analysis_logs IS
+  'STEP-SUPABASE-COMPLETE-04. localStorage selfAnalysisLogs (完了済み自己分析ログ) '
+  'の auth-scoped Supabase mirror。localStorage canonical は維持し、本 table は '
+  '同期先（best-effort）。user_id is the sole owner key (auth.users.id). '
+  'mirror_events 系統ではなく、tutor_chat_* と同じ auth-scoped 永続層。';
+
+COMMENT ON COLUMN self_analysis_logs.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id.';
+
+COMMENT ON COLUMN self_analysis_logs.local_log_id IS
+  'localStorage の SelfAnalysisLog.id（crypto.randomUUID 由来）をそのまま入れる。'
+  '将来の UI selectedLogId 復元のための traceability 用。NULL 許容。';
+
+COMMENT ON COLUMN self_analysis_logs.summary_input_hash IS
+  'localStorage 側の dedup natural key（lib/selfAnalysisLogStorage.ts: '
+  'persistSelfAnalysisLog が summaryInputHash 一致で in-place 上書きする）。'
+  'legacy 救済の固定値 "legacy:v1" も入りうる。';
+
+COMMENT ON CONSTRAINT self_analysis_logs_dedup_unique ON self_analysis_logs IS
+  'UNIQUE(user_id, summary_input_hash)。localStorage の "同一 summaryInputHash は '
+  '同一 entry を in-place update" という挙動を、onConflict 指定の upsert で再現する '
+  'ための natural key。';
+
+
+-- 33. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER self_analysis_logs_set_updated_at
+  BEFORE UPDATE ON self_analysis_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 34. RLS — self_analysis_logs
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は
+--     authenticated。すべての行操作は auth.uid() = user_id で閉じる
+--     （tutor_chat_threads §21 と同形）。
+ALTER TABLE self_analysis_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "self_analysis_logs owner select"
+  ON self_analysis_logs
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "self_analysis_logs owner insert"
+  ON self_analysis_logs
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "self_analysis_logs owner update"
+  ON self_analysis_logs
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "self_analysis_logs owner delete"
+  ON self_analysis_logs
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 35. self_prs
+--     STEP-SUPABASE-COMPLETE-05A. localStorage key='selfPRs'（自己PR カード群）の
+--     auth-scoped Supabase mirror。localStorage canonical は維持し、本 table は
+--     同期先（best-effort durable mirror）。self_analysis_logs §32 / tutor_chat_*
+--     と同じ auth-scoped 永続層であり、mirror_events 系統ではない。
+--
+--     natural key は (user_id, local_pr_id)。local_pr_id = SelfPR.id（UUID 文字列）
+--     をそのまま使い、content hash では dedup しない（後述 docs 参照）。
+--
+--     delete を伴う feature である点に注意。本 STEP では down-sync / restore は
+--     実装しない（delete resurrection リスクのため、tombstone 設計後の別 STEP）。
+CREATE TABLE self_prs (
+  id               uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  local_pr_id      text         NOT NULL,
+  pr_index         integer      NOT NULL DEFAULT 0,
+  title            text         NOT NULL DEFAULT '',
+  body             text         NOT NULL DEFAULT '',
+  latest_result    text         NOT NULL DEFAULT '',
+  seed_input_hash  text,
+  created_at       timestamptz  NOT NULL DEFAULT now(),
+  updated_at       timestamptz  NOT NULL DEFAULT now(),
+  metadata         jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT self_prs_local_unique UNIQUE (user_id, local_pr_id)
+);
+
+COMMENT ON TABLE self_prs IS
+  'STEP-SUPABASE-COMPLETE-05A. localStorage selfPRs（自己PR カード群）の auth-scoped '
+  'Supabase durable mirror。localStorage canonical は維持し、本 table は同期先。'
+  'natural key = (user_id, local_pr_id)。local_pr_id = SelfPR.id, body = SelfPR.text, '
+  'pr_index = SelfPR.index。seed_input_hash は dedup key ではなく補助情報のみ。'
+  'delete を伴う feature であり、restore は tombstone 設計後の別 STEP に分離する。';
+
+COMMENT ON COLUMN self_prs.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id.';
+
+COMMENT ON COLUMN self_prs.local_pr_id IS
+  'localStorage の SelfPR.id（UUID 文字列）をそのまま入れる。natural key の一部で、'
+  'upsert の onConflict 対象。content hash ではなく id を identity とする。';
+
+COMMENT ON COLUMN self_prs.pr_index IS
+  'SelfPR.index（カードの並び順）。表示順 traceability 用。';
+
+COMMENT ON COLUMN self_prs.body IS
+  'SelfPR.text（自己PR 本文）。';
+
+COMMENT ON COLUMN self_prs.latest_result IS
+  'SelfPR.latestResult（最新の生成結果）。';
+
+COMMENT ON COLUMN self_prs.seed_input_hash IS
+  'SelfPR.seedInputHash（buildSelfPRDraftSeed 由来 PR のみ持つ canonical 入力 hash）。'
+  '補助情報のみで dedup key ではない。手動作成 / legacy PR では NULL。';
+
+COMMENT ON CONSTRAINT self_prs_local_unique ON self_prs IS
+  'UNIQUE(user_id, local_pr_id)。SelfPR.id を natural key とし、onConflict 指定の '
+  'upsert を冪等化するための制約。content hash は使わない。';
+
+
+-- 36. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER self_prs_set_updated_at
+  BEFORE UPDATE ON self_prs
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 37. RLS — self_prs
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は
+--     authenticated。すべての行操作は auth.uid() = user_id で閉じる
+--     （self_analysis_logs §34 と同形）。delete policy も owner 限定。
+ALTER TABLE self_prs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "self_prs owner select"
+  ON self_prs
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "self_prs owner insert"
+  ON self_prs
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "self_prs owner update"
+  ON self_prs
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "self_prs owner delete"
+  ON self_prs
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 38. statement_review_history
+--     STEP-SUPABASE-COMPLETE-06A. localStorage key='statementReviewHistory'
+--     （志望理由書 添削履歴）の auth-scoped Supabase mirror。localStorage canonical
+--     は維持し、本 table は同期先（best-effort durable mirror）。self_prs §35 /
+--     self_analysis_logs §32 / tutor_chat_* §19 と同じ auth-scoped 永続層であり、
+--     mirror_events 系統ではない。
+--
+--     natural key は (user_id, local_review_id)。local_review_id = ReviewHistoryItem.id
+--     （crypto.randomUUID() 由来の UUID 文字列）をそのまま使う。inputHash / contentHash
+--     では dedup しない（同一 essay+大学の再添削も別個の正当な履歴であり、入力ハッシュ
+--     で潰してはならない。入力ハッシュは別 localStorage key の cache 専用）。
+--
+--     ReviewHistoryItem は作成後 不変（本文編集・in-place update なし）。よって upsert は
+--     冪等で、UPDATE 経路は同一内容の再書込（または将来の metadata 拡張）のみに使われ、
+--     アプリは content を更新しない。
+--
+--     delete を伴う feature である点に注意。localStorage 側には id 指定の削除
+--     （deleteReviewHistoryItem）と 10 件 cap による古い項目の自動 eviction がある。
+--     どちらも本 STEP では DB に伝播しない（上り mirror は upsert-only / propagateDelete=false）。
+--     down-sync / restore は delete resurrection リスクのため tombstone 設計後の別 STEP
+--     （06E）に分離する。10 件超を DB が durable に保持できるのはむしろ利点。
+CREATE TABLE statement_review_history (
+  id               uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  local_review_id  text         NOT NULL,
+  university       text         NOT NULL DEFAULT '',
+  faculty          text         NOT NULL DEFAULT '',
+  department       text         NOT NULL DEFAULT '',
+  essay            text         NOT NULL DEFAULT '',
+  result           jsonb        NOT NULL,
+  created_at       timestamptz  NOT NULL DEFAULT now(),
+  updated_at       timestamptz  NOT NULL DEFAULT now(),
+  CONSTRAINT statement_review_history_local_unique UNIQUE (user_id, local_review_id)
+);
+
+COMMENT ON TABLE statement_review_history IS
+  'STEP-SUPABASE-COMPLETE-06A. localStorage statementReviewHistory（志望理由書 添削履歴）の '
+  'auth-scoped Supabase durable mirror。localStorage canonical は維持し、本 table は同期先。'
+  'natural key = (user_id, local_review_id)。local_review_id = ReviewHistoryItem.id, '
+  'result = StatementResult 全体（jsonb）。ReviewHistoryItem は不変で、inputHash では dedup しない。'
+  'delete を伴う feature であり、restore は tombstone 設計後の別 STEP に分離する。';
+
+COMMENT ON COLUMN statement_review_history.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id.';
+
+COMMENT ON COLUMN statement_review_history.local_review_id IS
+  'localStorage の ReviewHistoryItem.id（crypto.randomUUID() 由来の UUID 文字列）をそのまま入れる。'
+  'natural key の一部で upsert の onConflict 対象。inputHash / contentHash ではなく id を identity とする。';
+
+COMMENT ON COLUMN statement_review_history.result IS
+  'ReviewHistoryItem.result（StatementResult 全体）を jsonb 丸ごと保存。'
+  'overallScore / evaluations / strengths / weaknesses / actions / partialRevision / checklist を含む。'
+  '表示時の score 正規化は read 側（normalizeStatementScore）が担保し、本 mirror は raw を忠実保存する。';
+
+COMMENT ON COLUMN statement_review_history.created_at IS
+  'ReviewHistoryItem.createdAt を backfill 時に原値保持する（LS の作成時刻）。';
+
+COMMENT ON CONSTRAINT statement_review_history_local_unique ON statement_review_history IS
+  'UNIQUE(user_id, local_review_id)。ReviewHistoryItem.id を natural key とし、onConflict 指定の '
+  'upsert を冪等化するための制約。inputHash / contentHash は使わない。';
+
+
+-- 39. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+--     ReviewHistoryItem は不変のためアプリ起点の UPDATE は基本起きないが、upsert の
+--     ON CONFLICT DO UPDATE 経路（同一内容の再書込）や将来の拡張に備えて自動更新を付与する。
+CREATE TRIGGER statement_review_history_set_updated_at
+  BEFORE UPDATE ON statement_review_history
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 40. RLS — statement_review_history
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は
+--     authenticated。すべての行操作は auth.uid() = user_id で閉じる
+--     （self_prs §37 と同形）。
+--
+--     UPDATE policy について: ReviewHistoryItem は不変でアプリは content を更新しないが、
+--     Supabase の .upsert(..., {onConflict}) は INSERT ... ON CONFLICT DO UPDATE を発行する。
+--     UPDATE policy が無いと、冪等な再 upsert（backfill 再実行など）が DO UPDATE 経路で
+--     RLS に弾かれ、mirror helper の devWarn に黙って失敗が出続ける。これを避けるため
+--     self_prs と同形に owner update policy を置く。アプリが content を能動更新することはない。
+ALTER TABLE statement_review_history ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "statement_review_history owner select"
+  ON statement_review_history
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "statement_review_history owner insert"
+  ON statement_review_history
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "statement_review_history owner update"
+  ON statement_review_history
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "statement_review_history owner delete"
+  ON statement_review_history
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- ──────────────────────────────────────────────────────────────────────
+-- STEP-TUTOR-CONTEXT-PHASE2-SCHEMA-01: basic_info / diagnosis / activity の
+-- auth-scoped durable table（Tutor context 読み取り用）
+--
+-- 目的:
+--   Tutor が basic_info / diagnosis / activity を userId scope で server-side read
+--   できるようにするための auth-scoped 永続層を新規追加する。これら 3 機能は
+--   STEP-SUPABASE-COMPLETE で auth-scoped 化されず、Phase1 の anonymous write-only
+--   mirror（basic_info_mirrors §7 / diagnosis_mirrors §10 / activity_mirrors §13）
+--   止まりだった。anonymous mirror は user_id も SELECT policy も持たず read 不能の
+--   ため、Tutor からは読めない（STEP-TUTOR-CONTEXT-PHASE2-DESIGN-01 案B）。
+--
+-- 位置づけ:
+--   self_analysis_logs（§32〜§34）/ self_prs（§35〜§37）/ statement_review_history
+--   （§38〜§40）/ tutor_chat_*（§19〜§23）と同じ auth-scoped 永続層。RLS は常に
+--   auth.uid()=user_id で閉じ、localStorage canonical の "同期先 / durable mirror" と
+--   して best-effort で後追い同期する想定（read 切替・hydrate は後続 STEP）。
+--
+--   既存 anonymous mirror（*_mirrors）とは別責務・別 table で、本 STEP では一切連動
+--   しない（DDL 純追加。*_mirrors は無変更）。
+--
+-- snapshot 型の採用（natural key = UNIQUE(user_id) / 1 ユーザー 1 行）:
+--   - basic_info_logs : basic_info は単一 snapshot のため 1 ユーザー 1 最新行。
+--   - diagnosis_logs  : 受験タイプ診断も単一 snapshot のため 1 ユーザー 1 最新行。
+--   - activity_logs   : Tutor 用途は件数集計のみ。活動配列を payload に丸ごと snapshot
+--                       する 1 ユーザー 1 行型とし、活動ごとの行正規化・履歴管理は
+--                       必要になった別 STEP に分離する。
+--   → 既存 durable table（self_analysis_logs 等の UNIQUE(user_id, local_*) 履歴型）
+--     とは異なり、本 3 table は UNIQUE(user_id) の latest-snapshot 型。upsert は
+--     onConflict='user_id' で冪等（後続 repository STEP の契約）。
+--
+-- 列方針（3 table 共通・既存 durable table に整合）:
+--   - source_hash は nullable な変更検知 / 冪等補助のヒントであり、conflict key では
+--     ない（conflict key は user_id）。anonymous mirror の source_hash（= 必須・conflict
+--     key）とは役割が異なる点に注意。
+--   - schema_version は payload 契約のバージョン（text。既存 *_mirrors と揃える）。
+--   - metadata は self_analysis_logs / self_prs に倣う前方互換用の補助 jsonb。
+--
+-- PII 観点:
+--   - owner RLS で本人しか自分の行を read できないため、anonymous mirror より露出は
+--     小さい。とはいえ Tutor 用途に直接 PII（basic_info の氏名等）は不要なので、
+--     payload を書く app 側 writer（後続 STEP）が不要 PII を除外して書く契約とする。
+--     本 table は jsonb の shape を強制しない（既存 durable table と同方針）。
+--
+--   §41  basic_info_logs  table
+--   §42  basic_info_logs  trigger (set_updated_at)
+--   §43  basic_info_logs  RLS
+--   §44  diagnosis_logs   table
+--   §45  diagnosis_logs   trigger (set_updated_at)
+--   §46  diagnosis_logs   RLS
+--   §47  activity_logs    table
+--   §48  activity_logs    trigger (set_updated_at)
+--   §49  activity_logs    RLS
+--
+-- 所有者契約:
+--   user_id は auth.users(id) を参照する owner key。RLS gate は auth.uid()=user_id。
+-- ──────────────────────────────────────────────────────────────────────
+
+
+-- 41. basic_info_logs
+--     localStorage basicInfo（key='basicInfo', lib/basicInfoStorage.ts）の auth-scoped
+--     durable mirror。1 ユーザー 1 最新 snapshot（UNIQUE(user_id)）。anonymous
+--     basic_info_mirrors（§7）とは別責務・別 table で連動しない。
+CREATE TABLE basic_info_logs (
+  id              uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  payload         jsonb        NOT NULL,
+  schema_version  text         NOT NULL DEFAULT '1',
+  source_hash     text,
+  created_at      timestamptz  NOT NULL DEFAULT now(),
+  updated_at      timestamptz  NOT NULL DEFAULT now(),
+  metadata        jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT basic_info_logs_user_unique UNIQUE (user_id)
+);
+
+COMMENT ON TABLE basic_info_logs IS
+  'STEP-TUTOR-CONTEXT-PHASE2-SCHEMA-01. localStorage basicInfo の auth-scoped durable '
+  'source（Tutor/context 用に owner RLS で read する）。1 ユーザー 1 最新 snapshot '
+  '(UNIQUE(user_id))。anonymous basic_info_mirrors (§7) とは別責務で連動しない。'
+  'payload は app 側 writer が不要 PII（氏名等）を除外して書く契約。';
+
+COMMENT ON COLUMN basic_info_logs.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id. natural key でもある。';
+
+COMMENT ON COLUMN basic_info_logs.payload IS
+  'BasicInfo の最新 snapshot（jsonb 丸ごと）。shape は DB では強制しない。'
+  'Tutor 用途に不要な直接 PII（氏名等）は app 側 writer が除外する契約。';
+
+COMMENT ON COLUMN basic_info_logs.schema_version IS
+  'payload 契約のバージョン（text）。既存 *_mirrors と揃える。';
+
+COMMENT ON COLUMN basic_info_logs.source_hash IS
+  'nullable な変更検知 / 冪等補助のヒント。conflict key ではない（conflict key は '
+  'user_id）。anonymous mirror の必須 source_hash とは役割が異なる。';
+
+COMMENT ON CONSTRAINT basic_info_logs_user_unique ON basic_info_logs IS
+  'UNIQUE(user_id)。1 ユーザー 1 最新 snapshot。upsert は onConflict=''user_id'' で冪等。';
+
+
+-- 42. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER basic_info_logs_set_updated_at
+  BEFORE UPDATE ON basic_info_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 43. RLS — basic_info_logs
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は
+--     authenticated。すべての行操作は auth.uid() = user_id で閉じる
+--     （self_analysis_logs §34 と同形）。
+ALTER TABLE basic_info_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "basic_info_logs owner select"
+  ON basic_info_logs
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "basic_info_logs owner insert"
+  ON basic_info_logs
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "basic_info_logs owner update"
+  ON basic_info_logs
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "basic_info_logs owner delete"
+  ON basic_info_logs
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 44. diagnosis_logs
+--     localStorage diagnosis（受験タイプ診断, lib/diagnosisStorage.ts）の auth-scoped
+--     durable mirror。1 ユーザー 1 最新 snapshot（UNIQUE(user_id)）。anonymous
+--     diagnosis_mirrors（§10）とは別責務・別 table で連動しない。payload は no-PII
+--     （answers は数値 index / resultType は固定 enum / title・description は app 製固定文）。
+CREATE TABLE diagnosis_logs (
+  id              uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  payload         jsonb        NOT NULL,
+  schema_version  text         NOT NULL DEFAULT '1',
+  source_hash     text,
+  created_at      timestamptz  NOT NULL DEFAULT now(),
+  updated_at      timestamptz  NOT NULL DEFAULT now(),
+  metadata        jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT diagnosis_logs_user_unique UNIQUE (user_id)
+);
+
+COMMENT ON TABLE diagnosis_logs IS
+  'STEP-TUTOR-CONTEXT-PHASE2-SCHEMA-01. localStorage diagnosis（受験タイプ診断）の '
+  'auth-scoped durable source（Tutor/context 用に owner RLS で read する）。'
+  '1 ユーザー 1 最新 snapshot (UNIQUE(user_id))。anonymous diagnosis_mirrors (§10) '
+  'とは別責務で連動しない。payload は no-PII（数値 index / 固定 enum / app 製固定文）。';
+
+COMMENT ON COLUMN diagnosis_logs.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id. natural key でもある。';
+
+COMMENT ON COLUMN diagnosis_logs.payload IS
+  'DiagnosisResult の最新 snapshot（jsonb 丸ごと）。shape は DB では強制しない。';
+
+COMMENT ON COLUMN diagnosis_logs.schema_version IS
+  'payload 契約のバージョン（text）。既存 *_mirrors と揃える。';
+
+COMMENT ON COLUMN diagnosis_logs.source_hash IS
+  'nullable な変更検知 / 冪等補助のヒント。conflict key ではない（conflict key は '
+  'user_id）。anonymous mirror の必須 source_hash とは役割が異なる。';
+
+COMMENT ON CONSTRAINT diagnosis_logs_user_unique ON diagnosis_logs IS
+  'UNIQUE(user_id)。1 ユーザー 1 最新 snapshot。upsert は onConflict=''user_id'' で冪等。';
+
+
+-- 45. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER diagnosis_logs_set_updated_at
+  BEFORE UPDATE ON diagnosis_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 46. RLS — diagnosis_logs
+--     authenticated 対象。全行操作を auth.uid() = user_id で閉じる（§43 と同形）。
+ALTER TABLE diagnosis_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "diagnosis_logs owner select"
+  ON diagnosis_logs
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "diagnosis_logs owner insert"
+  ON diagnosis_logs
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "diagnosis_logs owner update"
+  ON diagnosis_logs
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "diagnosis_logs owner delete"
+  ON diagnosis_logs
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+
+-- 47. activity_logs
+--     localStorage activityData（活動整理, lib/activityStorage.ts）の auth-scoped
+--     durable mirror。1 ユーザー 1 行に「活動配列を丸ごと snapshot」する型
+--     （UNIQUE(user_id)）。anonymous activity_mirrors（§13）とは別責務・別 table で
+--     連動しない。
+--
+--     正規化の判断:
+--       Tutor 用途は件数集計（カテゴリ別件数）だけを読むため、活動ごとの行分割は
+--       不要。まずは ActivityData 全体を payload に snapshot する 1 行型で十分。
+--       活動ごとの履歴管理 / 行正規化が必要になったら別 STEP で activity_items 等へ
+--       分離する（本 STEP では over-engineering を避ける）。
+CREATE TABLE activity_logs (
+  id              uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  payload         jsonb        NOT NULL,
+  schema_version  text         NOT NULL DEFAULT '1',
+  source_hash     text,
+  created_at      timestamptz  NOT NULL DEFAULT now(),
+  updated_at      timestamptz  NOT NULL DEFAULT now(),
+  metadata        jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT activity_logs_user_unique UNIQUE (user_id)
+);
+
+COMMENT ON TABLE activity_logs IS
+  'STEP-TUTOR-CONTEXT-PHASE2-SCHEMA-01. localStorage activityData（活動整理）の '
+  'auth-scoped durable source（Tutor/context 用に owner RLS で read する）。'
+  '1 ユーザー 1 行に ActivityData 全体を snapshot（UNIQUE(user_id)）。anonymous '
+  'activity_mirrors (§13) とは別責務で連動しない。活動ごとの行正規化は別 STEP。';
+
+COMMENT ON COLUMN activity_logs.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id. natural key でもある。';
+
+COMMENT ON COLUMN activity_logs.payload IS
+  'ActivityData 全体の最新 snapshot（9 カテゴリ配列を含む jsonb 丸ごと）。'
+  'shape は DB では強制しない。Tutor は主にカテゴリ別件数のみ参照する。';
+
+COMMENT ON COLUMN activity_logs.schema_version IS
+  'payload 契約のバージョン（text）。既存 *_mirrors と揃える。';
+
+COMMENT ON COLUMN activity_logs.source_hash IS
+  'nullable な変更検知 / 冪等補助のヒント。conflict key ではない（conflict key は '
+  'user_id）。anonymous mirror の必須 source_hash とは役割が異なる。';
+
+COMMENT ON CONSTRAINT activity_logs_user_unique ON activity_logs IS
+  'UNIQUE(user_id)。1 ユーザー 1 最新 snapshot。upsert は onConflict=''user_id'' で冪等。';
+
+
+-- 48. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+CREATE TRIGGER activity_logs_set_updated_at
+  BEFORE UPDATE ON activity_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 49. RLS — activity_logs
+--     authenticated 対象。全行操作を auth.uid() = user_id で閉じる（§43 と同形）。
+ALTER TABLE activity_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "activity_logs owner select"
+  ON activity_logs
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "activity_logs owner insert"
+  ON activity_logs
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "activity_logs owner update"
+  ON activity_logs
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "activity_logs owner delete"
+  ON activity_logs
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+  

@@ -1,9 +1,10 @@
 'use client';
 
-import { Suspense, useState, useEffect } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import type { SelfPR } from '@/types/selfPR';
 import type { StudentProfile } from '@/types/studentProfile';
 import type { SummaryResult } from '@/types/analysis';
@@ -13,7 +14,15 @@ import { selfAnalysisLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { saveAnalyzeState, loadAnalyzeState } from '@/lib/analyzeStorage';
 import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
+import { loadActivityData } from '@/lib/activityStorage';
+// STEP-DIVERGENCE-03B: ユーザーのテーマ偏り（activityData + StudentProfile から決定論派生）。
+import { buildThemeFrequency } from '@/lib/contextBuilders/divergence/buildThemeFrequency';
+// STEP-DIVERGENCE-04A: まだ活用できていない可能性のある経験（activityData × 使用面）。
+import { buildUnusedExperience } from '@/lib/contextBuilders/divergence/buildUnusedExperience';
+import { loadReviewHistory } from '@/lib/statement/review/statementStorage';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 import { buildSelfPRDraftSeed } from '@/lib/buildSelfPRDraftSeed';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -70,6 +79,10 @@ function computeSeedInputHash(
 // useSearchParams を本コンポーネントが使うため、default export 側で <Suspense> ラップする
 // （Next.js prerender bailout warning を抑える）。/statement/edit/page.tsx と同形パターン。
 function SelfPrPageInner() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ (/api/reason 用)。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const router = useRouter();
   // ?mode=direct と ?from=run を reactive に観測する。
   // useEffect の [] deps だと同一 route 内 navigation（/self-pr ↔ /self-pr?mode=direct 等）で
@@ -79,6 +92,13 @@ function SelfPrPageInner() {
   const searchParams = useSearchParams();
   const modeParam = searchParams?.get('mode') ?? null;
   const [selfPRs, setSelfPRs] = useState<SelfPR[]>([]);
+  // STEP-SUPABASE-COMPLETE-05D: selfPRs を Supabase self_prs に即時 mirror するための auth。
+  // 未ログイン / userId 未確定では mirror を skip する（read 経路は不変）。
+  const currentUserId = useCurrentUserId();
+  // 直前の selfPRs スナップショット。delta effect が prev→next を比較するために保持する。
+  // 初回は null で、最初の effect 実行時に baseline を入れるだけで mirror しない
+  //（初回同期は 05C backfill の責務）。
+  const prevSelfPRsRef = useRef<SelfPR[] | null>(null);
   const [usage, setUsage] = useState<DailyUsage>({ date: '', count: 0 });
   // 「まだ自己分析が作成されていません」を出すかの判定材料。
   // analyzeState.summary（/api/summarize の結果）が存在すれば自己分析は完了済み。
@@ -350,6 +370,44 @@ function SelfPrPageInner() {
   }, [modeParam]);
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
+  // ── STEP-SUPABASE-COMPLETE-05D: selfPRs state delta → Supabase self_prs mirror ──
+  //
+  // canonical（localStorage key='selfPRs'）は既存の saveSelfPRs(updated) が先に確定済み。
+  // 本 effect は state の prev→next 差分を検知し、durable mirror へ best-effort に流す。
+  //
+  // 契約:
+  //   - 初回 effect 実行（prevRef が null）は baseline 設定のみで mirror しない。
+  //     初回同期は 05C の backfillSelfPRsOnce が担う。
+  //   - userId 未確定 / 未ログインなら prevRef だけ更新して mirror skip。
+  //   - 参照同一（prev === selfPRs）なら何もしない。
+  //   - dualWriteSelfPRsDelta は new/changed のみ upsert。removed は
+  //     propagateDelete=false のため Supabase delete を発火しない（delete 伝播は無効）。
+  //     理由: restore / down-sync / tombstone が未実装で、delete 伝播は
+  //     delete resurrection / multi-device conflict を招くため。delete safety は
+  //     05E-DESIGN で設計する。
+  //   - await しない / catch で握り潰す。mirror 失敗は UI / canonical を壊さない。
+  //   - dynamic import で browser-only repository を server bundle に引き込まない。
+  useEffect(() => {
+    const prev = prevSelfPRsRef.current;
+    prevSelfPRsRef.current = selfPRs;
+
+    if (!prev) return; // 初回 baseline（mirror は backfill 責務）
+    if (!currentUserId) return; // 未ログイン → mirror skip
+    if (prev === selfPRs) return; // 参照同一 → 差分なし
+
+    const userId = currentUserId;
+    void import('@/lib/repository/selfPRRepository')
+      .then(({ dualWriteSelfPRsDelta }) =>
+        dualWriteSelfPRsDelta({
+          userId,
+          prev,
+          next: selfPRs,
+          propagateDelete: false,
+        }),
+      )
+      .catch(() => {});
+  }, [selfPRs, currentUserId]);
+
   const selectedPR = selfPRs.find((pr) => pr.id === selectedId) ?? null;
 
   function updateCurrentPR(patch: Partial<SelfPR>) {
@@ -450,12 +508,51 @@ function SelfPrPageInner() {
   async function sendToApi(bodyText: string, prText: string) {
     setLoading(true);
     setError('');
+    // STEP-DIVERGENCE-03B/04A: 探索 context を activityData + 使用面から決定論派生し、自己PR添削に渡す。
+    // - builder は pure（client 実行）。生 activityData / 履歴本文は wire に送らず、圧縮 struct のみ送る。
+    // - 入力は activityData（ユーザー記述）と StudentProfile（canonical persona）のみ。AI 出力は使わない。
+    const activityData = loadActivityData();
+    const studentProfile = getStudentProfileForFeature({
+      wallHittingResult: loadWallHittingResult(),
+    });
+
+    // STEP-DIVERGENCE-03B: テーマ偏り（どの抽象テーマに偏っているか）。
+    const themeFrequency = buildThemeFrequency({ activityData, studentProfile });
+
+    // STEP-DIVERGENCE-04A: まだ活用できていない可能性のある「経験」。
+    // 使用判定 source(usedText) は cross-feature のユーザー記述 + canonical persona を連結する。
+    // AI 出力（latestResult / review / betterAnswer / feedback / score）は一切含めない。
+    // 現在編集中の本文（bodyText / prText）も含め、今書いている経験を未使用提案しないようにする。
+    // 無制限ストア（selfPRs / interview_records）は読込件数を cap する。
+    const SELFPR_CAP = 20;
+    const INTERVIEW_CAP = 20;
+    const usedTextParts: string[] = [
+      bodyText,
+      prText,
+      ...loadSelfPRs().slice(0, SELFPR_CAP).map((pr) => pr.text ?? ''),
+      ...loadReviewHistory().map((h) => h.essay ?? ''),
+      ...getInterviewRecords()
+        .slice(0, INTERVIEW_CAP)
+        .flatMap((r) => [r.myAnswers ?? '', r.questionsAsked ?? '']),
+    ];
+    if (studentProfile) {
+      usedTextParts.push(studentProfile.summary ?? '');
+      usedTextParts.push(...(studentProfile.strengths ?? []));
+      usedTextParts.push(...(studentProfile.signatureEpisodes ?? []).map((e) => e.title ?? ''));
+    }
+    const usedText = usedTextParts.filter((s) => s !== '').join('\n');
+    const unusedExperience = buildUnusedExperience({ activityData, usedText });
     try {
       const res = await fetch('/api/reason', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: bodyText }),
+        // text に加え、探索 context struct のみ送る（route が optional に section 化）。
+        body: JSON.stringify({ text: bodyText, themeFrequency, unusedExperience }),
       });
+      // STEP-GATE-COMPLETE: 402 はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setError('AIの処理に失敗しました。時間をおいてもう一度お試しください。');
@@ -774,6 +871,9 @@ function SelfPrPageInner() {
         onConfirm={confirmDeletePR}
         onCancel={cancelDeletePR}
       />
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

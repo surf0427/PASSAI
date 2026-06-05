@@ -26,7 +26,21 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             ADDITIONAL_QUESTIONS_SYSTEM_PROMPT に追加。1 質問に複数の問いを詰め込まない
 //             ことと 60〜110 字目安を明文化。具体言及・generic 禁止ルールは不変。
 //             prompt の指示が増えるため v3 cache の意味的妥当性が変わり bump 必須。
-export const ADDITIONAL_QUESTIONS_PROMPT_VERSION = 4;
+//   v4 → v5 : STEP-DIVERGENCE-03C で ThemeFrequency Layer を追加質問生成に導入。activityData から
+//             決定論派生したテーマ偏り（よく出ている / まだ薄いテーマ）を user prompt に
+//             【テーマ探索の参考】section として注入し、同じテーマばかり語ることによる探索範囲の
+//             縮小を防ぐ。SYSTEM_PROMPT 側に ADDITIONAL_QUESTIONS_THEME_FREQUENCY_QUALIFIER を追加
+//             （探索型のみ / 強み断定せず / 存在しない経験を前提にせず / StudentProfile に反映しない /
+//             活動データに接続できる場合のみ / generic 禁止・v3/v4 品質要件を維持）。
+//             ThemeFrequency は activityData からの deterministic 派生で、activityData は既に
+//             HashAdditionalQuestionsInput に含まれている（DET 系と同型）。よって hash 入力構造
+//             （signature）は不変・新規 field を追加しない（同 activityData → 同 ThemeFrequency →
+//             同 prompt body の関係で cache identity を保つ）。route 側で buildThemeFrequency() を
+//             生成するため body 追加も caller 変更も不要。質問生成のみに作用し、profile 生成
+//             （analysisPrompt / summarizePrompt / toStudentProfile）には一切影響しない。
+//             prompt 本文が変わり出力が変わるため bump 必須。bump により旧 v4 cache は一律 miss
+//             （intentional 1 回損失）。questions=2 ルール / JSON schema / response shape は不変。
+export const ADDITIONAL_QUESTIONS_PROMPT_VERSION = 5;
 export const ADDITIONAL_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashAdditionalQuestionsInput = {

@@ -79,6 +79,43 @@ const LEVEL_EVALUATION_HEURISTIC_QUALIFIER = `【既知の levelEvaluation 候�
 
 ・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
 
+// STEP-DIVERGENCE-02C: user prompt に【過去に提示済みのフィードバック】section が来た時の
+// 解釈ルール。同じ改善点・同じ nextPractice・同じ指摘の毎回反復（収束）を抑えつつ、正しい助言の
+// 握り潰しを防ぐ（探索型 + 安全弁）。statement 02A / essay 02B と同形・同思想に、面接固有の
+// 禁止事項（今回回答最優先 / 過去の機械適用禁止 / 暗記禁止 / levelEvaluation・採点 不反映）を加える。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const INTERVIEW_FEEDBACK_PREVIOUS_OUTPUT_QUALIFIER = `【過去に提示済みのフィードバックについて】
+・user prompt に【過去に提示済みのフィードバック】section が含まれている場合、それはこの受験生が過去の模擬面接で既に受け取った改善点・nextPractice です。
+
+・目的は「新しい角度の探索」であり、正しい助言を禁止することではありません。同じ指摘の単純な繰り返しに留めず、達成度を確認したうえで、まだ触れていない論点・別の角度・次の段階の改善を improvements / nextPractice に優先してください。
+
+・ただし未解決の重要課題は、過去に提示済みであっても繰り返し指摘して構いません。今回の回答にまだ残っている弱点を、既出だからという理由で省かないでください。
+
+・今回の【質問と回答】を最優先に評価してください。過去のフィードバックは別の大学・別の質問に対するものを含み得ます。過去の改善点を今回の回答に機械的に当てはめないでください。
+
+・過去のフィードバックや回答を betterAnswer の暗記材料にしないでください。betterAnswer は今回の回答を踏まえて作成します。
+
+・levelEvaluation の各軸（logical / concrete / consistency / originality / interviewReadiness）と採点には【過去に提示済みのフィードバック】を一切反映しないでください。過去に指摘済みだからといって評価を上下させないでください。評価は今回の回答の質のみで行います。
+
+・section が含まれていない場合（PreviousOutputSummary が空の場合を含む）は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
+// STEP-DIVERGENCE-04D: user prompt に【まだ活用できていない可能性のある経験】section が来た時の
+// 解釈ルール。同じ経験ばかりで答える収束を抑え、次回練習に向けた variety suggestion として扱う。
+// 面接回答は言い換えが多く literal 判定の false-unused が起きやすいため「未使用」と断定しない。
+// 今回の回答評価・levelEvaluation・採点には反映しない。section 未提示なら本 qualifier を適用しない。
+const INTERVIEW_FEEDBACK_UNUSED_EXPERIENCE_QUALIFIER = `【まだ活用できていない可能性のある経験について】
+・user prompt に【まだ活用できていない可能性のある経験】section が含まれている場合、それは活動データに登録されているが、これまでの面接回答・志望理由書・自己PR などでまだ明示的に触れられていない可能性のある経験です。AI の過去出力ではありません。
+
+・これは「次回の練習に向けた参考情報」です。今回の回答に無理に当てはめるのではなく、nextPractice（次回の練習方針）の中で「別の経験も使えるかもしれない」という variety の示唆として扱ってください。
+
+・「使っていない」と断定しないでください。言い換えや要約で既に回答に含まれている場合があります。本人に当てはまる場合のみ提案し、活動データに無い経験や事実を捏造させてはいけません。
+
+・受験生の回答の主軸（中心となる経験・強み）を否定しないでください。未活用の経験は variety の候補であって、今の回答の差し替えを強制するものではありません。
+
+・今回の回答評価・improvements・levelEvaluation（logical / concrete / consistency / originality / interviewReadiness）・採点には【まだ活用できていない可能性のある経験】を一切反映しないでください。未活用を理由に評価を上下させないでください。
+
+・section が含まれていない場合は、本ルールを適用せず従来通り判断してください。`;
+
 // 本 const は scripts/step15-qa.ts から再利用するため export する。
 // 非 export だとテストハーネスから本番経路を完全再現できず QA 価値が落ちる。
 export const INTERVIEW_FEEDBACK_SYSTEM_PROMPT = `あなたは大学の総合型選抜・学校推薦型選抜に詳しい面接指導者です。
@@ -91,6 +128,10 @@ ${SUBJECT_GRADES_ASYMMETRY_RULE}
 ${INTERVIEW_FEEDBACK_SUBJECT_GRADES_QUALIFIER}
 
 ${LEVEL_EVALUATION_HEURISTIC_QUALIFIER}
+
+${INTERVIEW_FEEDBACK_PREVIOUS_OUTPUT_QUALIFIER}
+
+${INTERVIEW_FEEDBACK_UNUSED_EXPERIENCE_QUALIFIER}
 
 {
   "overallEvaluation": "面接全体の評価（2〜3文）",

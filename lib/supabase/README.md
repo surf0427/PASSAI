@@ -15,9 +15,10 @@ anywhere else, stop and route through this boundary instead.
 
 | File | Role |
 | --- | --- |
-| `env.ts` | Lazy, cached access to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The only module allowed to read `process.env.SUPABASE_*` / `process.env.NEXT_PUBLIC_SUPABASE_*`. |
-| `browserClient.ts` | Browser-side Supabase client. Module-level singleton via `getBrowserSupabaseClient()`. |
-| `serverClient.ts` | Server-side Supabase client (SSR-safe). Per-request scope via `getServerSupabaseClient()` (uses `next/headers` cookies). |
+| `env.ts` | Lazy, cached access to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`. The only module allowed to read `process.env.SUPABASE_*` / `process.env.NEXT_PUBLIC_SUPABASE_*`. `getSupabaseServiceRoleKey()` is server-only by virtue of `NEXT_PUBLIC_` absence (browser bundle always sees `undefined`); the actual consumer is `serviceRoleClient.ts`. |
+| `browserClient.ts` | Browser-side Supabase client (anon, RLS-scoped). Module-level singleton via `getBrowserSupabaseClient()`. |
+| `serverClient.ts` | Server-side Supabase client (SSR-safe, anon, RLS-scoped). Per-request scope via `getServerSupabaseClient()` (uses `next/headers` cookies). |
+| `serviceRoleClient.ts` | **STEP-BILLING-02.** Server-only admin-scope Supabase client. `getServiceRoleSupabaseClient()` bypasses RLS — used by Stripe webhook to write `subscriptions` / `stripe_events` / `usage_records` / `profiles.plan`. Guards: `import 'server-only'` (build-time), `typeof window !== 'undefined'` throw (runtime), reads service-role key only via `env.ts:getSupabaseServiceRoleKey`. Never import from client modules; never use for user-scoped reads — use `browserClient` / `serverClient` instead. |
 | `mirrorTypes.ts` | Type-only contract for mirror helpers: `MirrorResult` = `success` \| `skipped` \| `failed`, plus the `MirrorSkipReason` / `MirrorFailureReason` enums aligned with [`mirror_observability.md`](../../docs/supabase/mirror_observability.md) §8 / §9. No runtime, no Supabase imports. |
 | `mirrorResult.ts` | Tiny constructors (`mirrorSuccess()` / `mirrorSkipped(reason)` / `mirrorFailed(reason, message?)`) wrapping the `mirrorTypes.ts` unions. Pure, no Supabase imports. Consumed by every feature mirror. |
 | `mirrorGuard.ts` | Pure decision helpers (`isMirrorEnabled` / `shouldSkipMirror`). All inputs are passed in — no `process.env`, no Supabase, no localStorage, no feature knowledge. Each feature mirror calls `shouldSkipMirror` for the kill-switch → skip-reason mapping (window check stays inline to preserve priority). |

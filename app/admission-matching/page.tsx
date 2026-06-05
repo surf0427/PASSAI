@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import type { AiMatchAdvice, EligibilityResult } from '@/types/matching';
 import type { AdmissionMatchingInput } from '@/types/admissionMatchingInput';
 import { buildMatchingResults } from '@/lib/matching/suggestUniversities';
@@ -52,6 +53,10 @@ const MATCHING_SUB_MESSAGES: readonly string[] = [
 // ── ページ本体 ───────────────────────────────────────────────────
 
 export default function AdmissionMatchingPage() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ (/api/matching 用)。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const [hasRunMatching, setHasRunMatching] = useState(false);
   // STEP6.3: matchingLevel / aiAdvices を live 専用へ寄せた（live*）。cache snapshot 経路は
   //   cachedSnapshot に統合済み。handleShowCached からは live state を書かない。
@@ -259,8 +264,9 @@ export default function AdmissionMatchingPage() {
   //   - apiPayload を組み立てて /api/matching に送信
   //   - 成功時: advices を liveAiAdvices state へ格納し戻り値として返す
   //   - 失敗時: throw（cache 保存 / loading toggle / alert は呼び出し元 handleStartMatching の責務）
+  //   - 402 quota-exceeded 時: null を返す (caller はダイアログ任せで silent skip)。
   // STEP6.2: 送信対象は live derive の liveResults。cached snapshot を再送しないようにした。
-  async function handleAiEnhance(signal?: AbortSignal): Promise<AiMatchAdvice[]> {
+  async function handleAiEnhance(signal?: AbortSignal): Promise<AiMatchAdvice[] | null> {
     if (!wallHitting || liveResults.length === 0) return [];
 
     // ── MatchingInput を組み立てる ───────────────────────────────
@@ -318,6 +324,11 @@ export default function AdmissionMatchingPage() {
         universityContexts: apiPayload.universityContexts,
       }),
     });
+    // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログに委譲し null を返す。
+    // caller (handleStartMatching) は null を見て saveCache / markCompleted をスキップする。
+    if (await handleQuotaResponse(res)) {
+      return null;
+    }
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.detail ?? 'AI強化に失敗しました');
@@ -365,6 +376,11 @@ export default function AdmissionMatchingPage() {
 
     try {
       const advices = await handleAiEnhance(controller.signal);
+      // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログが既に開いているため
+      // banner / cache / completion フラグはすべて触らず silent skip。
+      if (advices === null) {
+        return;
+      }
       // キャッシュ保存（API成功時のみ）。live derive を canonical として保存する。
       // 保存形式（AiMatchAdviceCache）は STEP6.2 以前と同一。
       const cache: AiMatchAdviceCache = { results: liveResults, aiAdvices: advices, matchingLevel: level };
@@ -539,6 +555,8 @@ export default function AdmissionMatchingPage() {
         onReset={handleReset}
         onStartMatching={handleStartMatching}
       />
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ (結果表示中の再診断にも対応)。 */}
+      {quotaDialog}
     </>
   ) : (
     <>
@@ -569,6 +587,8 @@ export default function AdmissionMatchingPage() {
         onStartMatching={handleStartMatching}
         onShowCached={handleShowCached}
       />
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </>
   );
 }

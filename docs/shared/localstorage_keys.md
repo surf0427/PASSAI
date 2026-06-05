@@ -56,6 +56,10 @@ essay Phase 1 リリース時点では、以下を **削除せず維持** する
 
 理由: rollback safety。Phase 1 の workspace 経路にいずれかの bug が見つかった場合、旧 code に戻すだけで legacy のみで運用復帰できる経路を残す。判断見直しは Phase 2 完了後とする。
 
+## STEP-SUPABASE-COMPLETE-03B で追加された key
+
+- `supabaseBackfill`（[`lib/repository/backfillFlag.ts`](../../lib/repository/backfillFlag.ts), JSON）— Supabase backfill 完了 flag。形式は `{ [userId]: { [feature]: { version, at } } }`。`lib/repository/tutorRepository.ts:backfillTutorOnce` が「初回 1 回だけ LS 全履歴を Supabase へ一括同期する」起動制御に使う（feature=`tutor`）。userId 単位で記録し、匿名→メール昇格では user_id 不変のため再実行されない。flag は correctness ではなく**最適化**で、消えても backfill 本体は冪等 upsert（natural key + ignoreDuplicates）なので再実行は無害。`version`（`BACKFILL_VERSION`）を上げると再 backfill を強制できる。書き込みは `AuthProvider` の `profileReady` 後の fire-and-forget 起動経由のみ（STEP-SUPABASE-COMPLETE-03B）。
+
 ## storage 配置ルール
 
 - すべての `*Storage.ts` は `lib/` 直下に配置する（flat な命名規則）。

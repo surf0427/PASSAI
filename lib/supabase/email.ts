@@ -16,6 +16,7 @@
  */
 
 import { devWarn } from "@/lib/devLog";
+import { authCallbackUrl } from "./auth";
 import { getBrowserSupabaseClient } from "./browserClient";
 
 export type RequestEmailChangeResult =
@@ -51,7 +52,15 @@ export async function requestEmailChange(input: {
       return { kind: "not-authenticated" };
     }
 
-    const { error } = await supabase.auth.updateUser({ email: input.email });
+    // STEP-SUPABASE-IDENTITY-02: emailRedirectTo を付与し、確認リンクの着地を
+    // /auth/callback（exchangeCodeForSession）に向ける。これにより email-change
+    // 確認が完了したユーザーが、後で別端末から OTP ログインで同一 user_id に
+    // 復帰できる（permanent + email 確定がクロスデバイスの前提）。
+    // emailRedirectTo は第 2 引数 options。SSR では undefined（Site URL fallback）。
+    const { error } = await supabase.auth.updateUser(
+      { email: input.email },
+      { emailRedirectTo: authCallbackUrl() },
+    );
     if (error) {
       devWarn("[email] requestEmailChange updateUser error", error);
       return {

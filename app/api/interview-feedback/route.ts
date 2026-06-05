@@ -10,6 +10,9 @@ import { getAdmissionFocusContextForUser } from '@/lib/admissionFocus/getAdmissi
 import { parseFacultyName } from '@/lib/parseFacultyName';
 import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 import { buildInterviewStudentProfileContext } from '@/lib/contextBuilders/interviewContext';
+import { buildPreviousOutputSummarySection } from '@/lib/contextBuilders/divergence/previousOutputSummarySection';
+import { buildUnusedExperienceSection } from '@/lib/contextBuilders/divergence/unusedExperienceSection';
+import type { PreviousOutputSummary, UnusedExperience } from '@/types/divergence';
 import { feedbackToText } from '@/lib/interview/feedbackToText';
 import { fillEchoBackFromInput } from '@/lib/interview/normalizeInterviewFeedback';
 import {
@@ -23,11 +26,15 @@ import { createTimeoutSignal } from '@/lib/aiTimeout';
 // interview-feedback は localStorage cache に PROMPT_VERSION 概念を持たない（cache 自体なし）
 // ため bump 対象外。文言改修は PR description で明示する。
 import { INTERVIEW_FEEDBACK_SYSTEM_PROMPT } from '@/lib/prompts/interviewFeedbackPrompt';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。本 route は Opus を使う（他 5 route の Sonnet と異なる）。
 const MODEL = 'claude-opus-4-7';
 const ROUTE = 'api/interview-feedback';
+// STEP-BILLING-06: usage_records.route 識別子。
+const USAGE_ROUTE = 'interview-feedback';
 
 export type { InterviewFeedback };
 
@@ -121,8 +128,15 @@ function calculateInterviewMaxTokens(questionCount: number): number {
 // 切り出した。戻り値 InterviewFeedback shape および defensive guard 挙動は完全に同一。
 
 export async function POST(request: Request) {
+  // userId は gate 通過後にセット。outer catch から参照可能にするため try の外で宣言する。
+  let userId: string | null = null;
   try {
     const body = await request.json();
+
+    // STEP-BILLING-06: Plan Gate (auth + 月次 quota 確認)。AI call / prompt build 前に実施。
+    const gate = await ensurePlanQuota('interview');
+    if (gate.kind === 'reject') return gate.response;
+    userId = gate.userId;
     const {
       universityName,
       facultyName,
@@ -144,6 +158,16 @@ export async function POST(request: Request) {
 
     // basicInfo は任意。未送信や形が不正でも null として扱い、プロンプト側でフォールバックする。
     const basicInfo: BasicInfo | null = body.basicInfo ?? null;
+    // STEP-DIVERGENCE-02C: client が過去模擬面接（feedbackJson）の compact projection を
+    // buildPreviousOutputSummary() に通して送ってきた divergence context。
+    // 未送信なら null（完全後方互換 = section を出さない）。route 内で localStorage /
+    // Supabase は一切読まない（client が build 済みの struct をそのまま section へ流す）。
+    const previousOutputSummary: PreviousOutputSummary | null = body.previousOutputSummary ?? null;
+    // STEP-DIVERGENCE-04D: client(InterviewRecordForm) が activityData × 使用面から決定論派生した
+    // 「まだ活用できていない可能性のある経験」struct。未送信なら null（完全後方互換 = section なし）。
+    // route 内で localStorage / Supabase は読まない。interview-feedback は cache/hash/version 無しのため
+    // hash 対応不要（毎回 Opus 実行・cache mask 問題なし）。
+    const unusedExperience: UnusedExperience | null = body.unusedExperience ?? null;
 
     // 自己分析の壁打ち結果（任意）。直接 prompt に埋め込まないのが重要：
     // WallHittingResult は questions / answers などのフロー内部の作業状態を含み得るため、
@@ -251,6 +275,16 @@ export async function POST(request: Request) {
     const heuristicSection = buildLevelEvaluationHeuristicSection(
       levelEvaluationHeuristics,
     );
+    // STEP-DIVERGENCE-02C: 過去に提示済みフィードバック section。空なら空文字（履歴 0/1 件・
+    // 未送信＝旧挙動と等価）。SYSTEM_PROMPT 側の INTERVIEW_FEEDBACK_PREVIOUS_OUTPUT_QUALIFIER と
+    // 組で動く。実データは user prompt にだけ載せ、system（cache 対象）には入れない（prompt cache 維持）。
+    // 「今回の回答を最優先」にするため、過去 context は studentProfileSection の後・今回の
+    // 【質問と回答】の前に置く。
+    const previousOutputSection = buildPreviousOutputSummarySection(previousOutputSummary);
+    // STEP-DIVERGENCE-04D: まだ活用できていない可能性のある経験 section（次回練習向け variety 提案）。
+    // 空なら空文字（totalExperiences < 3 / unused 空 / 未送信＝旧挙動）。SYSTEM_PROMPT 側の
+    // INTERVIEW_FEEDBACK_UNUSED_EXPERIENCE_QUALIFIER と組で動く。実データは user prompt のみ。
+    const unusedExperienceSection = buildUnusedExperienceSection(unusedExperience);
 
     const userPrompt = `${basicInfoSection}
 
@@ -259,7 +293,7 @@ export async function POST(request: Request) {
 学部・学科：${facultyName}
 志望理由：${motivation || '（未入力）'}
 ${examTypeGuidance ? `\n${examTypeGuidance}\n` : ''}
-${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}${admissionFocusContext ? `${admissionFocusContext}\n\n` : ''}${studentProfileSection ? `${studentProfileSection}\n\n` : ''}【質問と回答】
+${interviewUniversityContext ? `${interviewUniversityContext}\n\n` : ''}${admissionFocusContext ? `${admissionFocusContext}\n\n` : ''}${studentProfileSection ? `${studentProfileSection}\n\n` : ''}${previousOutputSection ? `${previousOutputSection}\n\n` : ''}${unusedExperienceSection ? `${unusedExperienceSection}\n\n` : ''}【質問と回答】
 ${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
 
     // STEP2.1: max_tokens を質問数ベースで動的化する。
@@ -303,6 +337,7 @@ ${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
         rawTextTail: rawText.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return NextResponse.json(
         {
           error: 'AI_FEEDBACK_TRUNCATED',
@@ -321,6 +356,7 @@ ${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
       const feedback = fillEchoBackFromInput(rawFeedback, questionsAndAnswers);
       const improvementSummary = feedbackToText(feedback, previousFeedback);
       logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
       return NextResponse.json({ feedback, improvementSummary });
     } catch {
       console.error('interview-feedback parse failed', {
@@ -328,6 +364,7 @@ ${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
         rawTextTail: rawText.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return NextResponse.json(
         {
           error: 'AI_FEEDBACK_PARSE_FAILED',
@@ -341,6 +378,10 @@ ${qaText}${heuristicSection ? `\n\n${heuristicSection}` : ''}`;
     // 例外経路: messages.create() / request.json() が throw した時点で response が無いため
     // usage は取れない。status のみログして「失敗回数」を集計できる状態にする。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    // gate 通過前 (body parse 失敗等) は userId が null。その場合は record しない。
+    if (userId) {
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    }
     return NextResponse.json(
       { error: 'AIフィードバックの生成に失敗しました。' },
       { status: 500 }

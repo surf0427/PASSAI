@@ -25,6 +25,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   loadEssayWorkspace,
   upsertEssayWorkspace,
@@ -67,6 +68,10 @@ function isWorkAnswered(work: ImprovementWork | undefined): boolean {
 }
 
 export default function EssayImproveHubPage() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const params = useParams<{ wid: string }>();
   const router = useRouter();
   const wid = params?.wid ?? '';
@@ -240,6 +245,11 @@ export default function EssayImproveHubPage() {
           basicInfo: basicInfoForAi,
         }),
       });
+
+      // STEP-GATE-COMPLETE: 402 quota-exceeded はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       const data = await res.json();
 
@@ -425,6 +435,9 @@ export default function EssayImproveHubPage() {
           </div>
         )}
       </section>
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

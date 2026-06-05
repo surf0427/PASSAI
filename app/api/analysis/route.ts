@@ -33,11 +33,14 @@ import {
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model を constant 化（messages.create() と usage log で同じ値を共有するため）。
 // model を切り替えるときはここを変えれば log も追従する。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/analysis';
+const USAGE_ROUTE = 'analysis';
 
 // 責務分離ヘルパは lib/analysis/extractWallHittingParts.ts に集約。
 // - extractProfileMaterial : (A) profile 素材を取り出す
@@ -70,6 +73,11 @@ export async function POST(req: Request) {
     });
     return Response.json({ error: validation.message }, { status: 400 });
   }
+
+  // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。validation 後 / AI 前。
+  const gate = await ensurePlanQuota('self-pr');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   const activityText = formatActivityData(activityData);
 
@@ -122,6 +130,7 @@ export async function POST(req: Request) {
         rawTextTail: raw.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_ANALYSIS_TRUNCATED',
@@ -146,6 +155,7 @@ export async function POST(req: Request) {
         outputTokens: message.usage?.output_tokens,
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_ANALYSIS_PARSE_FAILED',
@@ -174,6 +184,7 @@ export async function POST(req: Request) {
     };
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ result });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -181,6 +192,7 @@ export async function POST(req: Request) {
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」が集計できる状態にする（無理に複雑化しない）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'AI analysis failed', detail: msg }, { status: 500 });
   }
 }

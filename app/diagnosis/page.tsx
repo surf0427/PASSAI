@@ -8,6 +8,7 @@ import {
   type DiagnosisResult,
 } from '@/lib/diagnosisStorage';
 import type { DiagnosisType } from '@/types/diagnosis';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadDiagnosisResult() は localStorage 依存のため SSR では null を返したい。
@@ -135,6 +136,11 @@ export default function DiagnosisPage() {
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<number[]>([]);
 
+  // STEP-TUTOR-CONTEXT-PHASE2-REPOSITORY-01: 診断結果 dualWrite に使う owner key。
+  // null（auth 未確定 / LP 段階で匿名 auth 未完了）なら dualWrite は呼ばず、
+  // AuthProvider の backfill が後で拾う。
+  const currentUserId = useCurrentUserId();
+
   // step / result は (1) 再訪時にマウント snapshot として loadDiagnosisResult() から復元され、
   // (2) フロー中（startDiagnosis / 5 問完了 / restart）に setState で更新される。
   // useEffect 内で setState すると react-hooks/set-state-in-effect になるため、
@@ -180,6 +186,18 @@ export default function DiagnosisPage() {
       createdAt: new Date().toISOString(),
     };
     saveDiagnosisResult(r);
+
+    // auth-scoped durable（diagnosis_logs）へ best-effort dualWrite（fire-and-forget）。
+    //   - userId 未確定なら no-op（AuthProvider の backfill が後で拾う）。
+    //   - await しない / 例外握り潰し / dynamic import で boundary 安全。
+    //   - 既存 anonymous mirror（saveDiagnosisResult 内）には触らない（別経路）。
+    if (currentUserId) {
+      const userId = currentUserId;
+      void import('@/lib/repository/diagnosisRepository')
+        .then((mod) => mod.dualWriteDiagnosisLog({ userId, diagnosis: r }))
+        .catch(() => {});
+    }
+
     setResult(r);
     setStep('result');
   }

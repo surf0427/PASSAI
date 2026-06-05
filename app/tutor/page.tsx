@@ -1,5 +1,7 @@
 'use client';
 
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
+
 // PASSAI 受験チューターAI のチャットページ。
 //
 // 役割:
@@ -27,6 +29,12 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { tutorLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
+import { loadReviewHistory } from '@/lib/statement/review/statementStorage';
+import { loadActivityData } from '@/lib/activityStorage';
+import { loadReviewResult } from '@/lib/essayPracticeStorage';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
+import { isInterviewFeedback } from '@/lib/interview/isInterviewFeedback';
+import { loadMypageData, type MypageData } from '@/lib/mypage/loadMypageData';
 import { detectTutorIntent } from '@/lib/tutor/detectTutorIntent';
 import { detectTutorStabilization } from '@/lib/tutor/detectTutorStabilization';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -88,6 +96,57 @@ function deriveLocalThreadIdFromRemote(remote: SupabaseTutorThread): string {
   return remote.localThreadId ?? `remote-${remote.id}`;
 }
 
+// ── STEP-TUTOR-CONTEXT-MYPAGE-01 / GROWTH-01: マイページ compact projection ──
+//
+// loadMypageData() の結果から Tutor 向けに「本文・日付・生スコア・chart series を
+// 含まない」compact projection を作る純関数。growth は delta（差分）のみで total は
+// 載せない（server builder が定性ラベルへ変換する）。
+//
+// 呼び出し側は必ず try/catch で包むこと（loadMypageData は localStorage 由来の
+// malformed データで throw し得るため）。本関数自体は MypageData の正規 shape を前提に
+// 単純 projection するだけで、失敗時のフォールバックは呼び出し側責務。
+type TutorMypageProjection = {
+  counts: {
+    statement: number;
+    essay: number;
+    interview: number;
+    selfAnalysis: number;
+    selfPR: number;
+  };
+  recentFeatures: string[];
+  monthlyTopFeatures: string[];
+  growth: { statement: number | null; essay: number | null };
+};
+
+function buildCompactMypageProjection(mp: MypageData): TutorMypageProjection {
+  return {
+    counts: {
+      statement: mp.summary.statementCount,
+      essay: mp.summary.essayReviewCount,
+      interview: mp.summary.interviewCount,
+      selfAnalysis: mp.summary.selfAnalysisCount,
+      selfPR: mp.summary.selfPRCount,
+    },
+    recentFeatures: mp.recentActivities.map((a) => a.feature),
+    monthlyTopFeatures: mp.monthlyRanking.map((m) => m.feature),
+    // 成長傾向は delta（最新 − 最古 の差分）のみ。絶対スコア(total)は送らない。
+    growth: {
+      statement: mp.summary.statementLatest?.delta ?? null,
+      essay: mp.summary.essayLatest?.delta ?? null,
+    },
+  };
+}
+
+// 単一 source の取得を独立して try/catch する小 helper。
+// どの source が throw しても他の source / API 送信を巻き込まないようにする。
+function safeSource<T>(load: () => T): T | null {
+  try {
+    return load();
+  } catch {
+    return null;
+  }
+}
+
 function remoteMessageToLocal(
   m: SupabaseTutorMessage,
 ): TutorMessage | null {
@@ -132,6 +191,10 @@ const getMountedServerSnapshot = () => false;
 // ── page ────────────────────────────────────────────────────────
 
 export default function TutorPage() {
+  // STEP-BILLING-07A: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const isMounted = useSyncExternalStore(
     subscribeMount,
     getMountedSnapshot,
@@ -274,6 +337,112 @@ export default function TutorPage() {
     }
   }, [isMounted]);
 
+  // ── studentContext 用 横断データ（STEP-TUTOR-STUDENT-CONTEXT） ──
+  // PASSAI 内の各機能の保存データを localStorage から集め、/api/tutor に送る。
+  // server は localStorage を読めないため、横断要約の素材は client が body で渡す。
+  //   - statementReviewLatest: 志望理由書レビュー履歴の直近 1 件の result（StatementResult）。
+  //     essay 本文など重い field は載せず result のみ送る。
+  //   - activityData: 活動データ全体（builder 側で件数のみ要約）。
+  //   - essayReviewLatest: 小論文添削の直近結果（SavedReview）。
+  //   - interviewRecordLatest: 面接練習履歴の直近 1 件（StoredInterviewRecord）。
+  //   - interviewFeedbackLatest: 直近記録の feedbackJson を parse + guard した InterviewFeedback。
+  //     parse 失敗・guard 不通過・未保存はすべて null（builder 側は record の自己記録に fallback）。
+  //   - mypageSummary: マイページ集約状況の compact projection（STEP-TUTOR-CONTEXT-MYPAGE-01）。
+  //     本文・日付・生スコア・chart series は載せず、機能別件数と feature enum 配列のみ送る。
+  //     定性圧縮（件数→状態 / 推奨 / ラベル）は server 側 builder に集約する。
+  // いずれも失敗時は null に倒す（送信失敗で chat を壊さない）。
+  const studentContextSources = useMemo<{
+    statementReviewLatest: unknown | null;
+    activityData: unknown | null;
+    essayReviewLatest: unknown | null;
+    interviewRecordLatest: unknown | null;
+    interviewFeedbackLatest: unknown | null;
+    mypageSummary: unknown | null;
+  } | null>(() => {
+    if (!isMounted) return null;
+
+    // STEP-TUTOR-API-FAIL-DEBUG-01: 各 source を独立して try/catch する。
+    // どの source（loadMypageData / growth 含む）が throw しても、null に倒すだけで
+    // 他の source・/api/tutor の送信を絶対に巻き込まない（送信は常に継続する）。
+    //
+    // STEP（payload スリム化）: builder が実際に読む field だけを compact projection で送る。
+    // feedbackJson 全文・面接 Q&A 本文・betterAnswer・essayBodySnapshot・志望理由書の
+    // strengths/actions/評価・活動本文は一切載せない（本文除外 + 重複送信除去）。
+
+    // 志望理由書レビュー: builder は weaknesses のみ参照。
+    const statementReviewLatest = safeSource(() => {
+      const result = loadReviewHistory()[0]?.result;
+      if (!result) return null;
+      return {
+        weaknesses: Array.isArray(result.weaknesses) ? result.weaknesses : [],
+      };
+    });
+
+    // 活動: builder はカテゴリ別件数のみ参照。本文を載せず counts だけ送る。
+    const activityData = safeSource(() => {
+      const a = loadActivityData();
+      if (!a) return null;
+      return {
+        counts: {
+          clubActivities: a.clubActivities.length,
+          volunteerActivities: a.volunteerActivities.length,
+          studyAbroadActivities: a.studyAbroadActivities.length,
+          researchActivities: a.researchActivities.length,
+          partTimeJobActivities: a.partTimeJobActivities.length,
+          certificationActivities: a.certificationActivities.length,
+          contestActivities: a.contestActivities.length,
+          readingActivities: a.readingActivities.length,
+          hobbyActivities: a.hobbyActivities.length,
+          otherActivities: a.otherActivities.length,
+        },
+      };
+    });
+
+    // 小論文添削: builder は weakPoints のみ参照（essayBodySnapshot 等は送らない）。
+    const essayReviewLatest = safeSource(() => {
+      const review = loadReviewResult();
+      if (!review) return null;
+      return {
+        weakPoints: Array.isArray(review.weakPoints) ? review.weakPoints : [],
+      };
+    });
+
+    // 面接: record は improvementSummary / whatWentWrong のみ、feedback は improvements のみ。
+    // feedbackJson 全文・Q&A 本文・betterAnswer は載せない（重複・本文を除去）。
+    const interviewRecord = safeSource(() => getInterviewRecords()[0] ?? null);
+    let interviewRecordLatest: unknown | null = null;
+    let interviewFeedbackLatest: unknown | null = null;
+    if (interviewRecord) {
+      interviewRecordLatest = {
+        improvementSummary: interviewRecord.improvementSummary ?? '',
+        whatWentWrong: interviewRecord.whatWentWrong ?? '',
+      };
+      if (interviewRecord.feedbackJson) {
+        const parsed = safeSource<unknown>(() =>
+          JSON.parse(interviewRecord.feedbackJson as string),
+        );
+        if (isInterviewFeedback(parsed)) {
+          interviewFeedbackLatest = { improvements: parsed.improvements };
+        }
+      }
+    }
+
+    // マイページ集約 → Tutor 向け compact projection。
+    // loadMypageData / projection いずれの失敗も null に倒す（推奨修正パターン）。
+    const mypageSummary = safeSource(() =>
+      buildCompactMypageProjection(loadMypageData()),
+    );
+
+    return {
+      statementReviewLatest,
+      activityData,
+      essayReviewLatest,
+      interviewRecordLatest,
+      interviewFeedbackLatest,
+      mypageSummary,
+    };
+  }, [isMounted]);
+
   // ── thread 操作 ──
   function handleCreateThread() {
     setStore((prev) => createNewThread(prev));
@@ -395,18 +564,35 @@ export default function TutorPage() {
       text: m.content,
     }));
 
+    const requestBody = {
+      message,
+      intent,
+      history: historyForApi,
+      basicInfo,
+      studentProfile: studentProfileCompact,
+      // STEP-TUTOR-STUDENT-CONTEXT: 横断要約 studentContext の素材。
+      statementReviewLatest: studentContextSources?.statementReviewLatest ?? null,
+      activityData: studentContextSources?.activityData ?? null,
+      essayReviewLatest: studentContextSources?.essayReviewLatest ?? null,
+      // STEP-TUTOR-CONTEXT-INTERVIEW-01: 面接練習の横断課題素材。
+      interviewRecordLatest: studentContextSources?.interviewRecordLatest ?? null,
+      interviewFeedbackLatest: studentContextSources?.interviewFeedbackLatest ?? null,
+      // STEP-TUTOR-CONTEXT-MYPAGE-01: マイページ集約状況の compact projection。
+      mypageSummary: studentContextSources?.mypageSummary ?? null,
+    };
+
     try {
       const res = await fetch('/api/tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          intent,
-          history: historyForApi,
-          basicInfo,
-          studentProfile: studentProfileCompact,
-        }),
+        body: JSON.stringify(requestBody),
       });
+
+      // STEP-BILLING-07A: 402 quota-exceeded はダイアログに委譲して早期 return。
+      // user message は thread に残るので、解約 / アップグレード後に再送できる。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
 
       let data: unknown = null;
       try {
@@ -419,10 +605,16 @@ export default function TutorPage() {
         typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
 
       if (!res.ok) {
-        const errorMessage =
-          typeof dataObj.message === 'string'
-            ? dataObj.message
-            : 'AIの呼び出しに失敗しました。時間をおいてお試しください。';
+        // status 別にユーザー向けメッセージを分岐。
+        //   401（unauthenticated）は route が message を返さないため、ここで明示分岐する。
+        let errorMessage: string;
+        if (res.status === 401) {
+          errorMessage = 'ログインが必要です。ログインしてから、もう一度お試しください。';
+        } else if (typeof dataObj.message === 'string') {
+          errorMessage = dataObj.message;
+        } else {
+          errorMessage = 'AIの呼び出しに失敗しました。時間をおいてお試しください。';
+        }
         setError(errorMessage);
         return;
       }
@@ -509,6 +701,9 @@ export default function TutorPage() {
           loading={loading}
         />
       </main>
+
+      {/* STEP-BILLING-07A: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

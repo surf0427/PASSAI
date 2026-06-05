@@ -34,6 +34,8 @@ import { NextResponse } from 'next/server';
 import { anthropic } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { logAiUsage, type AiUsageTokens } from '@/lib/aiUsageLog';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 import { isStudentProfile } from '@/lib/studentProfileStorage';
 import { buildInterviewUniversityContext } from '@/lib/buildInterviewUniversityContext';
 import { buildInterviewQuestionMaterials } from '@/lib/interview/buildInterviewQuestionMaterials';
@@ -59,6 +61,7 @@ import type { TwoLayerInterviewQuestions } from '@/types/interviewQuestions';
 // 既存 statement-review / essay-review と同じモデル ID 文字列を使う。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/interview-questions';
+const USAGE_ROUTE = 'interview-questions';
 
 // 質問 10 問（general 5 / personalized 5）× answerTip 込みで ~2000-2500 tokens 程度。
 // 安全マージンを取って 2200 tokens を上限とする。max_tokens で切れた時は parse 失敗扱い。
@@ -106,6 +109,12 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const bodyObj = isPlainObject(body) ? body : {};
+
+  // STEP-GATE-COMPLETE: Plan Gate (interview feature)。本 route は最大 2 回 AI 呼び出し
+  // (生成 + retry) するが、ユーザー視点では「1 回の質問生成リクエスト」なので 1 quota 消費。
+  const gate = await ensurePlanQuota('interview');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   const basicInfo: BasicInfo | null = isPlainObject(bodyObj.basicInfo)
     ? (bodyObj.basicInfo as BasicInfo)
@@ -161,6 +170,7 @@ export async function POST(request: Request): Promise<Response> {
   const first = await runInterviewQuestionGeneration(userPrompt);
   if (first.kind === 'http_error') {
     // AI 失敗（network / truncation / parse）は従来通り 502 で返す。
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return first.response;
   }
 
@@ -168,6 +178,7 @@ export async function POST(request: Request): Promise<Response> {
   const v1 = validateInterviewQuestionSet(first.questions, materials);
   if (v1.ok) {
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: first.usage, cache_creation_input_tokens: first.usage?.cache_creation_input_tokens, cache_read_input_tokens: first.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return NextResponse.json({ questions: first.questions });
   }
 
@@ -190,6 +201,7 @@ export async function POST(request: Request): Promise<Response> {
     console.warn('interview-questions validation retry: AI call failed, falling back to first attempt', {
       route: ROUTE,
     });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return NextResponse.json({ questions: first.questions });
   }
 
@@ -203,6 +215,7 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
   logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: second.usage, cache_creation_input_tokens: second.usage?.cache_creation_input_tokens, cache_read_input_tokens: second.usage?.cache_read_input_tokens });
+  await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
   return NextResponse.json({ questions: second.questions });
 }
 

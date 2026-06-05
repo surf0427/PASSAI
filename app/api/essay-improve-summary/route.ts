@@ -34,6 +34,8 @@ import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseImproveSummary } from '@/lib/essay/parseImproveSummary';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 // STEP-LIB-06: SYSTEM_PROMPT を lib/prompts/essayImproveSummaryPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // 文言を変える場合は ESSAY_IMPROVE_SUMMARY_PROMPT_VERSION（lib/hash/essayImproveSummary.ts）を必ず bump すること。
@@ -42,6 +44,7 @@ import type { BasicInfo } from '@/types/basicInfo';
 
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/essay-improve-summary';
+const USAGE_ROUTE = 'essay-improve-summary';
 
 // SYSTEM_PROMPT（ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT）は lib/prompts/essayImproveSummaryPrompt.ts に lift 済み（STEP-LIB-06）。
 // 役割（不変）: 役割宣言 / 禁止 5 項目 / やること 4 種 / 出力ルール / 出力 schema / トーン / 自問チェック。
@@ -140,6 +143,11 @@ export async function POST(req: Request) {
     );
   }
 
+  // STEP-GATE-COMPLETE: Plan Gate (essay feature)。validation 後 / AI 前。
+  const gate = await ensurePlanQuota('essay');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
+
   const userMessage = buildUserMessage(body);
 
   try {
@@ -175,6 +183,7 @@ export async function POST(req: Request) {
         cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
         cache_read_input_tokens: message.usage?.cache_read_input_tokens,
       });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_SUMMARY_TRUNCATED',
@@ -205,12 +214,19 @@ export async function POST(req: Request) {
       cache_creation_input_tokens: message.usage?.cache_creation_input_tokens,
       cache_read_input_tokens: message.usage?.cache_read_input_tokens,
     });
+    await recordUsage({
+      userId,
+      route: USAGE_ROUTE,
+      model: MODEL,
+      status: parseOk ? 'ok' : 'error',
+    });
 
     return Response.json(safeParseImproveSummary(parsed));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('essay-improve-summary API error:', msg);
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json(
       { error: 'AIの処理に失敗しました。時間をおいてお試しください。' },
       { status: 500 },

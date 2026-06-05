@@ -12,30 +12,62 @@
 //
 // docs/principles/ai_cache_observability.md §6.1 / §6.3 を参照。
 import { buildReasonPrompt } from '@/lib/prompts';
+import { buildThemeFrequencySection } from '@/lib/contextBuilders/divergence/themeFrequencySection';
+import { buildUnusedExperienceSection } from '@/lib/contextBuilders/divergence/unusedExperienceSection';
+import type { ThemeFrequency, UnusedExperience } from '@/types/divergence';
 import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
+import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // 本 route は plain text 応答（JSON parse なし）のため parse_failed は発生しない。
 // truncation は stop_reason から検出して log するが、既存挙動どおりレスポンスはそのまま返す。
 const MODEL = 'claude-sonnet-4-6';
 const ROUTE = 'api/reason';
+const USAGE_ROUTE = 'reason';
 
 export async function POST(req: Request) {
   const body = await req.json();
   const text: string = body.text ?? '';
+  // STEP-DIVERGENCE-03B: client(self-pr page) が送ってきたテーマ偏り struct。
+  // 未送信なら null（完全後方互換 = section を出さない）。route 内で localStorage /
+  // Supabase は読まない（client が build 済みの struct をそのまま section formatter へ流す）。
+  // optional field gate のため、将来 /api/reason を別 feature が text のみで叩いても section は出ない。
+  const themeFrequency: ThemeFrequency | null = body.themeFrequency ?? null;
+  // STEP-DIVERGENCE-04A: client(self-pr page) が送ってきた「まだ活用できていない可能性のある経験」
+  // struct。未送信なら null（完全後方互換 = section を出さない）。route で localStorage / Supabase は
+  // 読まない（client が build 済みの struct をそのまま section formatter へ流す）。
+  const unusedExperience: UnusedExperience | null = body.unusedExperience ?? null;
 
   if (!text.trim()) {
     return Response.json({ error: 'text is required' }, { status: 400 });
   }
+
+  // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
+  const gate = await ensurePlanQuota('self-pr');
+  if (gate.kind === 'reject') return gate.response;
+  const userId = gate.userId;
 
   try {
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 1500,
       temperature: 0.5,
-      messages: [{ role: 'user', content: buildReasonPrompt(text) }],
+      messages: [
+        {
+          role: 'user',
+          content: buildReasonPrompt(text, {
+            // STEP-DIVERGENCE-03B: 探索型 section。未送信 / documentsConsidered<3 / underused 空なら
+            // formatter が空文字を返し、buildReasonPrompt 側で section ブロックごと省略される（旧挙動）。
+            themeFrequencySection: buildThemeFrequencySection(themeFrequency),
+            // STEP-DIVERGENCE-04A: 未使用経験の探索型 section。未送信 / totalExperiences<3 / unused 空なら
+            // formatter が空文字を返し section ブロックごと省略される（旧挙動）。
+            unusedExperienceSection: buildUnusedExperienceSection(unusedExperience),
+          }),
+        },
+      ],
     }, { signal: createTimeoutSignal() });
 
     const result = message.content[0].type === 'text' ? message.content[0].text : '';
@@ -49,6 +81,7 @@ export async function POST(req: Request) {
         rawTextTail: result.slice(-200),
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
         {
           error: 'AI_REPLY_TRUNCATED',
@@ -59,6 +92,7 @@ export async function POST(req: Request) {
     }
 
     logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ result });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -66,6 +100,7 @@ export async function POST(req: Request) {
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」を集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     return Response.json({ error: 'Claude API call failed', detail: msg }, { status: 500 });
   }
 }

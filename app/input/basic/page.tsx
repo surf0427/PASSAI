@@ -236,7 +236,21 @@ export default function BasicInfoPage() {
       setErrors(newErrors);
       return;
     }
-    saveBasicInfo(pruneSubjectGrades(formData));
+    const pruned = pruneSubjectGrades(formData);
+    saveBasicInfo(pruned);
+
+    // STEP-TUTOR-CONTEXT-PHASE2-REPOSITORY-01: auth-scoped durable（basic_info_logs）へ
+    // best-effort dualWrite（fire-and-forget）。canonical (localStorage) 保存後に発火。
+    //   - userId 未確定なら no-op（AuthProvider の backfill が後で拾う）。
+    //   - await しない / 例外握り潰し / dynamic import で boundary 安全。
+    //   - 既存 anonymous mirror（saveBasicInfo 内）には触らない（別経路）。
+    if (currentUserId) {
+      const userId = currentUserId;
+      void import('@/lib/repository/basicInfoRepository')
+        .then((mod) => mod.dualWriteBasicInfoLog({ userId, basicInfo: pruned }))
+        .catch(() => {});
+    }
+
     router.push('/home');
   }
 

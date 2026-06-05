@@ -16,6 +16,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   loadEssayWorkspace,
   upsertEssayWorkspace,
@@ -46,6 +47,10 @@ const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
 export default function EssayWriteBodyPage() {
+  // STEP-BILLING-07A: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const params = useParams<{ wid: string }>();
   const router = useRouter();
   const wid = params?.wid ?? '';
@@ -186,6 +191,11 @@ export default function EssayWriteBodyPage() {
         }),
       });
 
+      // STEP-BILLING-07A: 402 quota-exceeded はダイアログに委譲して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
+
       const data = await res.json();
 
       if (!res.ok) {
@@ -278,6 +288,9 @@ export default function EssayWriteBodyPage() {
           />
         </div>
       </div>
+
+      {/* STEP-BILLING-07A: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

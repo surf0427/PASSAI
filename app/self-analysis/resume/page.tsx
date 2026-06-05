@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import type { ActivityData } from '@/types/activity';
 import type { SelfAnalysisLog } from '@/types/selfAnalysisLog';
 import { Card } from '@/components/ui/Card';
@@ -43,6 +45,10 @@ function getActivityData(): ActivityData | null {
 }
 
 export default function ResumePage() {
+  // STEP-GATE-COMPLETE: 402 quota-exceeded ハンドラ。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
   const router = useRouter();
   // logs === null は「mount/backfill がまだ完了していない」。
   // 空配列 (logs.length === 0) の「ログ無し」状態と明確に区別する。
@@ -53,6 +59,15 @@ export default function ResumePage() {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // STEP-SUPABASE-COMPLETE-04D: legacy 救済 persist の dualWrite に使う owner key。
+  // mount-once effect（deps []）から参照するため ref で最新値を保持する
+  // （effect の deps を [] に保ち、auth 確定タイミングに依存しない）。
+  const currentUserId = useCurrentUserId();
+  const currentUserIdRef = useRef<string | null>(currentUserId);
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
 
   // mount 1 回限り。既存ユーザ救済のため、selfAnalysisLogs 空かつ analyzeState に
   // summary + analysis が揃っているケースだけ、persistSelfAnalysisLog で legacy
@@ -67,7 +82,7 @@ export default function ResumePage() {
     if (stored.length === 0) {
       const state = loadAnalyzeState();
       if (state?.summary && state.analysis) {
-        persistSelfAnalysisLog({
+        const legacyLog = persistSelfAnalysisLog({
           summaryInputHash: 'legacy:v1',
           analysis: state.analysis,
           displayedQuestions: state.displayedQuestions ?? [],
@@ -76,6 +91,18 @@ export default function ResumePage() {
           freeMemo: typeof state.freeMemo === 'string' ? state.freeMemo : '',
           summary: state.summary,
         });
+        // 即時 mirror（best-effort）。summaryInputHash='legacy:v1' でも
+        // UNIQUE(user_id, summary_input_hash) により冪等 upsert される。
+        // userId 未確定（mount 直後で auth 未確定なケースが多い）なら no-op とし、
+        // AuthProvider の backfill が後で拾う。
+        const userId = currentUserIdRef.current;
+        if (userId) {
+          void import('@/lib/repository/selfAnalysisLogRepository')
+            .then((mod) =>
+              mod.dualWriteSelfAnalysisLog({ log: legacyLog, userId }),
+            )
+            .catch(() => {});
+        }
         stored = loadSelfAnalysisLogs();
       }
     }
@@ -159,6 +186,10 @@ export default function ResumePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activityData, existingQuestions, basicInfo }),
       });
+      // STEP-GATE-COMPLETE: 402 はダイアログで吸収して早期 return。
+      if (await handleQuotaResponse(res)) {
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setError(data.detail ?? '深掘り質問の生成に失敗しました');
@@ -235,6 +266,9 @@ export default function ResumePage() {
           onResume={handleResume}
         />
       )}
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

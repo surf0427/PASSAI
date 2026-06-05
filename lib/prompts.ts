@@ -97,11 +97,32 @@ export {
   type BuildAdditionalQuestionsOptions,
 } from '@/lib/prompts/additionalQuestionsPrompt';
 
-export function buildReasonPrompt(text: string): string {
+// STEP-DIVERGENCE-03B/04A: ThemeFrequency / UnusedExperience section（探索 context）を optional に注入。
+// いずれも空文字 / 未指定なら従来どおり section なし（完全後方互換）。
+// /api/reason は cache を持たないため PROMPT_VERSION 管理対象外（本文変更で invalidation 不要）。
+// section の実データは route 側で buildThemeFrequencySection() / buildUnusedExperienceSection() で
+// 整形済みの string を受け取る。順序は「テーマ偏り（抽象）→ 未使用経験（具体）→【自己PR】（本体）」。
+export function buildReasonPrompt(
+  text: string,
+  opts: { themeFrequencySection?: string; unusedExperienceSection?: string } = {},
+): string {
+  const themeBlock = opts.themeFrequencySection
+    ? `${opts.themeFrequencySection}
+
+以下はこの受験生が活動・自己分析でよく使う／まだ薄いテーマの参考情報です。自己PRの主軸（本人の核となる強み）は変えないでください。よく出ているテーマを否定・抑制する必要はありません。まだ薄いテーマは、本人に実際に当てはまる場合のみ自然に活かしてください。無理に盛り込んだり、書かれていない事実を捏造したりしてはいけません。
+
+`
+    : '';
+  // STEP-DIVERGENCE-04A: 未使用経験 section。formatter 側に框組み文言を含むためそのまま連結する。
+  const unusedBlock = opts.unusedExperienceSection
+    ? `${opts.unusedExperienceSection}
+
+`
+    : '';
   return `あなたは総合型選抜・学校推薦型選抜の受験指導のプロです。
 以下の自己PRを、今ある材料だけで自然な仮版に整えてください。
 
-【自己PR】
+${themeBlock}${unusedBlock}【自己PR】
 ${text}
 
 【出力の構成】

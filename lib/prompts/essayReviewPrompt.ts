@@ -74,6 +74,21 @@ const ESSAY_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER = `【既存構造分析につ�
 
 ・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
 
+// STEP-DIVERGENCE-02B: user prompt に【過去に提示済みのフィードバック】section が来た時の
+// 解釈ルール。出力収束（毎回同じ weakPoints・同じ improvement・同じ改善指示）を抑えつつ、
+// 正しい助言の握り潰しを防ぐ。statement 02A / DET-3 STRUCTURE_ANALYSIS_QUALIFIER と同形・同思想。
+// section が未提示のときは本 qualifier を適用しない（後方互換）。
+const ESSAY_REVIEW_PREVIOUS_OUTPUT_QUALIFIER = `【過去に提示済みのフィードバックについて】
+・user prompt に【過去に提示済みのフィードバック】section が含まれている場合、それはこの生徒が過去の添削で既に受け取った weakPoints・improvement・改善指示です。
+
+・目的は「新しい角度の探索」であり、正しい助言を禁止することではありません。同じ指摘の単純な繰り返しに留めず、達成度を確認したうえで、まだ触れていない論点・別の角度・次の段階の改善を improvement / weakPoints に優先してください。
+
+・ただし未解決の重要課題は、過去に提示済みであっても繰り返し指摘して構いません。本文にまだ残っている弱点を、既出だからという理由で省かないでください。
+
+・採点（totalScore / breakdown の 5 軸: 論理構造 / 具体性 / 説得力 / テーマ理解 / 独自性 / verdict）には【過去に提示済みのフィードバック】を一切反映しません。過去に指摘済みだからといって減点も加点もしないでください。採点は今回の本文の質のみで行います。breakdown ラベルは固定。
+
+・section が含まれていない場合は、本ルールを適用せず従来通りすべて自前で判断してください。`;
+
 export const ESSAY_REVIEW_SYSTEM_PROMPT = `あなたは高校生・大学受験生向けの小論文添削者です。
 生徒の小論文を採点・添削し、自分で改善できるよう具体的なフィードバックを返します。
 
@@ -84,6 +99,8 @@ ${SUBJECT_GRADES_ASYMMETRY_RULE}
 ${ESSAY_REVIEW_SUBJECT_GRADES_QUALIFIER}
 
 ${ESSAY_REVIEW_STRUCTURE_ANALYSIS_QUALIFIER}
+
+${ESSAY_REVIEW_PREVIOUS_OUTPUT_QUALIFIER}
 
 【絶対にやってはいけないこと】
 - 小論文の本文・完成文・模範解答を書くこと
