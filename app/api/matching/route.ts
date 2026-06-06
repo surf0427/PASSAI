@@ -44,7 +44,11 @@ import type { UniversityContext } from '@/types/universityContext';
 import { anthropic } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseJson } from '@/lib/matching/safeParseJson';
+import { formatActivityData } from '@/lib/formatActivity';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 import {
@@ -71,6 +75,11 @@ import type { StudentProfile } from '@/types/studentProfile';
 // 本 route は候補 5 大学それぞれに対して generateUniversityDetail() で 1 回ずつ
 // anthropic.messages.create() を呼ぶため、log は per-call で発火する（1 request = 5 log line）。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。候補大学を Promise.allSettled で並列 AI 呼び出しするが
+// 各呼び出しは AI timeout（lib/aiTimeout.ts = 60s）で並列のため壁時計は ≈60s。それに余裕を加算。
+// Pro 前提（Hobby は 60s 上限で吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/matching';
 const USAGE_ROUTE = 'matching';
 
@@ -346,6 +355,18 @@ export async function POST(req: Request) {
     return Response.json({ error: 'selfAnalysis and results are required' }, { status: 400 });
   }
 
+  // B2: 各候補大学の prompt に埋め込む活動データ（整形後）全体の最大長ガード。
+  const lengthCheck = checkMaxLengths([
+    {
+      label: '活動内容',
+      value: activityData ? formatActivityData(activityData) : '',
+      max: INPUT_MAX_LENGTHS.ACTIVITY_TOTAL,
+    },
+  ]);
+  if (!lengthCheck.ok) {
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
+  }
+
   // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。本 route は最大 N 大学分
   // (RERANK_POOL_SIZE 分) AI 呼び出しするが、ユーザー視点では「1 回のマッチング
   // リクエスト」なので 1 quota 消費。USE_AI_MATCHING_REASON=false の deterministic
@@ -473,6 +494,7 @@ export async function POST(req: Request) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Matching AI error:', msg);
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'AI matching failed', detail: msg }, { status: 500 });
   }
 }

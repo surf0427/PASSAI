@@ -10,8 +10,11 @@ import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest
 // buildStatementReviewPrompt の admissionFocusContext は optional のため、
 // 渡さなければ prompt 側で section が出ない（旧 v2 と意味等価）。
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateStatementReviewInput } from '@/lib/validation/validateStatementReviewInput';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { detectNgWords } from '@/lib/detectNgWords';
 import { analyzeStructure } from '@/lib/structureAnalysis';
 import { buildThemeFrequency } from '@/lib/contextBuilders/divergence/buildThemeFrequency';
@@ -26,6 +29,10 @@ import type { PreviousOutputSummary, UnusedExperience } from '@/types/divergence
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/statement-review';
 // STEP-BILLING-06: usage_records.route に入れる識別子。
 // schema コメント (supabase/schema.sql §30) 規約: app/api/<name>/route.ts の <name>。
@@ -65,6 +72,17 @@ export async function POST(req: Request) {
       code: validation.code,
     });
     return Response.json({ error: validation.message }, { status: 400 });
+  }
+
+  // B2: 大学/学部/学科名（短い構造化テキスト）の最大長ガード。
+  const lengthCheck = checkMaxLengths([
+    { label: '大学名', value: university, max: INPUT_MAX_LENGTHS.LABEL },
+    { label: '学部名', value: faculty, max: INPUT_MAX_LENGTHS.LABEL },
+    { label: '学科名', value: department, max: INPUT_MAX_LENGTHS.LABEL },
+  ]);
+  if (!lengthCheck.ok) {
+    logAiValidation({ type: 'validation_reject', route: 'statement-review', code: lengthCheck.code });
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-BILLING-06: Plan Gate。バリデーション後 / AI call 前に実施。
@@ -170,6 +188,7 @@ export async function POST(req: Request) {
       console.error('statement-review parse failed', { rawTextTail: text.slice(-200) });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+      captureRouteException(new Error('AI_REVIEW_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_REVIEW_PARSE_FAILED' });
       return Response.json(
         {
           error: 'AI_REVIEW_PARSE_FAILED',
@@ -185,6 +204,7 @@ export async function POST(req: Request) {
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'AIの処理に失敗しました。時間をおいてお試しください。' }, { status: 500 });
   }
 }

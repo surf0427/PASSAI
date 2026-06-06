@@ -25,14 +25,21 @@ import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { buildThemeFrequency } from '@/lib/contextBuilders/divergence/buildThemeFrequency';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 側と同じパターン。model を切り替えるときはここを変えれば log も追従する。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/analysis/additional';
 const USAGE_ROUTE = 'analysis/additional';
 
@@ -59,6 +66,15 @@ export async function POST(req: Request) {
       code: validation.code,
     });
     return Response.json({ error: validation.message }, { status: 400 });
+  }
+
+  // B2: prompt に埋め込む既出質問リストの合計長を制限する。
+  const lengthCheck = checkMaxLengths([
+    { label: '既出の質問', value: existingQuestions, max: INPUT_MAX_LENGTHS.ANSWERS_TOTAL },
+  ]);
+  if (!lengthCheck.ok) {
+    logAiValidation({ type: 'validation_reject', route: 'additional-questions', code: lengthCheck.code });
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
@@ -149,6 +165,7 @@ export async function POST(req: Request) {
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+      captureRouteException(new Error('AI_ADDITIONAL_QUESTIONS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED' });
       return Response.json(
         {
           error: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED',
@@ -168,6 +185,7 @@ export async function POST(req: Request) {
     // status のみログして「失敗回数」が集計できる状態にする（/api/analysis と同じ方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json(
       { error: '質問の追加生成に失敗しました', detail: msg },
       { status: 500 },

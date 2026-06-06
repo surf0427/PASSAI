@@ -34,6 +34,9 @@ import { NextResponse } from 'next/server';
 import { anthropic } from '@/lib/ai';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { logAiUsage, type AiUsageTokens } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { isStudentProfile } from '@/lib/studentProfileStorage';
@@ -60,6 +63,10 @@ import type { TwoLayerInterviewQuestions } from '@/types/interviewQuestions';
 // /api/interview-feedback (Opus) と異なり、質問生成は軽量タスクのため Sonnet を採用。
 // 既存 statement-review / essay-review と同じモデル ID 文字列を使う。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/interview-questions';
 const USAGE_ROUTE = 'interview-questions';
 
@@ -127,6 +134,17 @@ export async function POST(request: Request): Promise<Response> {
     : null;
   const activitySummary: string | null =
     typeof bodyObj.activitySummary === 'string' ? bodyObj.activitySummary : null;
+
+  // B2: prompt に埋め込む活動サマリの最大長ガード。AI call 前に弾く。
+  const lengthCheck = checkMaxLengths([
+    { label: '活動サマリ', value: activitySummary, max: INPUT_MAX_LENGTHS.TEXT },
+  ]);
+  if (!lengthCheck.ok) {
+    return NextResponse.json(
+      { error: 'INPUT_TOO_LONG', message: lengthCheck.message },
+      { status: 400 },
+    );
+  }
 
   // 日次バリエーション seed（v4 で導入された seed 固定ロジック。現行 PROMPT_VERSION は
   // lib/hash/interviewQuestions.ts の INTERVIEW_QUESTIONS_PROMPT_VERSION を参照）。
@@ -258,6 +276,7 @@ async function runInterviewQuestionGeneration(
       name: error instanceof Error ? error.name : 'UnknownError',
     });
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_REQUEST_FAILED' });
     return {
       kind: 'http_error',
       response: NextResponse.json(
@@ -298,6 +317,7 @@ async function runInterviewQuestionGeneration(
       reason: error instanceof Error ? error.message : 'unknown',
     });
     logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: response.usage, cache_creation_input_tokens: response.usage?.cache_creation_input_tokens, cache_read_input_tokens: response.usage?.cache_read_input_tokens });
+    captureRouteException(new Error('AI_QUESTIONS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_QUESTIONS_PARSE_FAILED' });
     return {
       kind: 'http_error',
       response: NextResponse.json(

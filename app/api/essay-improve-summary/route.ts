@@ -34,6 +34,9 @@ import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { safeParseImproveSummary } from '@/lib/essay/parseImproveSummary';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 // STEP-LIB-06: SYSTEM_PROMPT を lib/prompts/essayImproveSummaryPrompt.ts に lift した。
@@ -43,6 +46,10 @@ import { ESSAY_IMPROVE_SUMMARY_SYSTEM_PROMPT } from '@/lib/prompts/essayImproveS
 import type { BasicInfo } from '@/types/basicInfo';
 
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/essay-improve-summary';
 const USAGE_ROUTE = 'essay-improve-summary';
 
@@ -143,6 +150,23 @@ export async function POST(req: Request) {
     );
   }
 
+  // B2: prompt に埋め込む自由記述（本文 / テーマ / ミニ思考 / 各 work の Q&A）の最大長ガード。
+  const lengthCheck = checkMaxLengths([
+    { label: '本文', value: body.currentEssayBody, max: INPUT_MAX_LENGTHS.ESSAY },
+    { label: 'テーマ', value: body.theme, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '結論', value: body.mini?.conclusion, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由1', value: body.mini?.reasonOne, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由2', value: body.mini?.reasonTwo, max: INPUT_MAX_LENGTHS.TEXT },
+    ...(body.works ?? []).flatMap((w, i) => [
+      { label: `改善点${i + 1}`, value: w.issueText, max: INPUT_MAX_LENGTHS.TEXT },
+      { label: `深掘り質問${i + 1}`, value: w.deepQuestions, max: INPUT_MAX_LENGTHS.ANSWERS_TOTAL },
+      { label: `回答${i + 1}`, value: w.answers, max: INPUT_MAX_LENGTHS.ANSWERS_TOTAL },
+    ]),
+  ]);
+  if (!lengthCheck.ok) {
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
+  }
+
   // STEP-GATE-COMPLETE: Plan Gate (essay feature)。validation 後 / AI 前。
   const gate = await ensurePlanQuota('essay');
   if (gate.kind === 'reject') return gate.response;
@@ -227,6 +251,7 @@ export async function POST(req: Request) {
     console.error('essay-improve-summary API error:', msg);
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json(
       { error: 'AIの処理に失敗しました。時間をおいてお試しください。' },
       { status: 500 },

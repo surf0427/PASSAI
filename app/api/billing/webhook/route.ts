@@ -37,6 +37,7 @@ import type Stripe from 'stripe';
 
 import { syncSubscriptionFromStripe } from '@/lib/billing/syncSubscription';
 import { devWarn } from '@/lib/devLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { getStripeClient } from '@/lib/stripe/server';
 import { getServiceRoleSupabaseClient } from '@/lib/supabase/serviceRoleClient';
 
@@ -95,6 +96,7 @@ export async function POST(req: Request) {
   if (selectErr) {
     devWarn('[billing/webhook] stripe_events select failed', selectErr);
     // transient と仮定して 500 → Stripe retry
+    captureRouteException(selectErr, { route: 'billing/webhook', feature: 'billing', status: 500 }, { status: 500, code: 'stripe_events-select-failed' });
     return NextResponse.json({ error: 'db error' }, { status: 500 });
   }
 
@@ -115,6 +117,7 @@ export async function POST(req: Request) {
     // 23505 (unique_violation) は concurrent webhook の race → 続行可
     if (insertErr && (insertErr as { code?: string }).code !== '23505') {
       devWarn('[billing/webhook] stripe_events insert failed', insertErr);
+      captureRouteException(insertErr, { route: 'billing/webhook', feature: 'billing', status: 500 }, { status: 500, code: 'stripe_events-insert-failed' });
       return NextResponse.json(
         { error: 'event log insert failed' },
         { status: 500 },
@@ -131,6 +134,7 @@ export async function POST(req: Request) {
       .from('stripe_events')
       .update({ error: result.message })
       .eq('event_id', event.id);
+    captureRouteException(new Error('webhook dispatch transient error'), { route: 'billing/webhook', feature: 'billing', status: 500 }, { status: 500, code: 'dispatch-transient-error' });
     return NextResponse.json({ error: result.message }, { status: 500 });
   }
 

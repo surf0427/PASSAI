@@ -3,7 +3,10 @@ import type { BasicInfo } from '@/types/basicInfo';
 import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 // STEP-LIB-05: SYSTEM_PROMPT を lib/prompts/essayChatPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
 // essay-chat は cache を持たないため PROMPT_VERSION bump 対象外。文言改修は PR description で明示する。
@@ -15,6 +18,10 @@ import { recordUsage } from '@/lib/billing/usageLog';
 // /api/analysis 系列と同じパターン。
 // 本 route は plain text 応答（JSON parse なし）のため parse_failed は発生しない。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/essay-chat';
 const USAGE_ROUTE = 'essay-chat';
 
@@ -36,6 +43,19 @@ export async function POST(req: Request) {
 
   if (!userQuestion.trim()) {
     return Response.json({ error: '質問を入力してください' }, { status: 400 });
+  }
+
+  // B2: prompt に埋め込む自由記述の最大長ガード。AI call / quota 前に弾く。
+  const lengthCheck = checkMaxLengths([
+    { label: '質問', value: userQuestion, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '本文', value: essayBody, max: INPUT_MAX_LENGTHS.ESSAY },
+    { label: 'テーマ', value: theme, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '結論', value: conclusion, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由1', value: reasonOne, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由2', value: reasonTwo, max: INPUT_MAX_LENGTHS.TEXT },
+  ]);
+  if (!lengthCheck.ok) {
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-GATE-COMPLETE: Plan Gate (essay feature)。validation 後 / AI 前。
@@ -115,6 +135,7 @@ ${userQuestion}`;
     // status のみログして「失敗回数」を集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'AIの処理に失敗しました。時間をおいてお試しください。' }, { status: 500 });
   }
 }

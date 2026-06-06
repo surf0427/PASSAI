@@ -2,18 +2,21 @@ import {
   containsPlaceholder,
   isEmpty,
   repeatedCharRatio,
+  tooLong,
   tooShort,
 } from './rules/text';
+import { INPUT_MAX_LENGTHS } from './inputLimits';
 
 export type ValidationResult =
   | { ok: true }
   | {
       ok: false;
-      code: 'EMPTY' | 'TOO_SHORT' | 'REPEATED_CHAR' | 'PLACEHOLDER';
+      code: 'EMPTY' | 'TOO_SHORT' | 'TOO_LONG' | 'REPEATED_CHAR' | 'PLACEHOLDER';
       message: string;
     };
 
 const MIN_LENGTH = 100;
+const MAX_LENGTH = INPUT_MAX_LENGTHS.ESSAY;
 const REPEATED_CHAR_GATE = 10;
 const REPEATED_CHAR_THRESHOLD = 0.8;
 const PLACEHOLDERS = ['未入力', 'あとで書く', '(仮)', '仮入力'] as const;
@@ -31,6 +34,13 @@ export function validateStatementReviewInput(essay: string): ValidationResult {
       ok: false,
       code: 'TOO_SHORT',
       message: '志望理由書本文をもう少し詳しく入力してください（100文字以上）',
+    };
+  }
+  if (tooLong(essay, MAX_LENGTH)) {
+    return {
+      ok: false,
+      code: 'TOO_LONG',
+      message: `志望理由書本文が長すぎます。${MAX_LENGTH}文字以内で入力してください`,
     };
   }
   if (

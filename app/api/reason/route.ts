@@ -17,7 +17,10 @@ import { buildUnusedExperienceSection } from '@/lib/contextBuilders/divergence/u
 import type { ThemeFrequency, UnusedExperience } from '@/types/divergence';
 import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 
@@ -25,6 +28,10 @@ import { recordUsage } from '@/lib/billing/usageLog';
 // 本 route は plain text 応答（JSON parse なし）のため parse_failed は発生しない。
 // truncation は stop_reason から検出して log するが、既存挙動どおりレスポンスはそのまま返す。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/reason';
 const USAGE_ROUTE = 'reason';
 
@@ -43,6 +50,14 @@ export async function POST(req: Request) {
 
   if (!text.trim()) {
     return Response.json({ error: 'text is required' }, { status: 400 });
+  }
+
+  // B2: prompt に埋め込む自由記述（自己PR 分析用テキスト）の最大長ガード。
+  const lengthCheck = checkMaxLengths([
+    { label: '入力テキスト', value: text, max: INPUT_MAX_LENGTHS.TEXT },
+  ]);
+  if (!lengthCheck.ok) {
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
@@ -101,6 +116,7 @@ export async function POST(req: Request) {
     // status のみログして「失敗回数」を集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'Claude API call failed', detail: msg }, { status: 500 });
   }
 }

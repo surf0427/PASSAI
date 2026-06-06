@@ -17,14 +17,21 @@ import {
   normalizeSummary,
 } from '@/lib/summarizeNormalize';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateSummarizeInput } from '@/lib/validation/validateSummarizeInput';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis / /api/analysis/additional と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/summarize';
 const USAGE_ROUTE = 'summarize';
 
@@ -58,6 +65,16 @@ export async function POST(req: Request) {
       code: validation.code,
     });
     return Response.json({ error: validation.message }, { status: 400 });
+  }
+
+  // B2: validator が見ない自由記述配列（回答メモ）の最大長ガード。AI call / quota 前に弾く。
+  const lengthCheck = checkMaxLengths([
+    { label: '回答', value: answers, max: INPUT_MAX_LENGTHS.ANSWERS_TOTAL },
+    { label: '追加メモ', value: body.deepAnswers, max: INPUT_MAX_LENGTHS.ANSWERS_TOTAL },
+  ]);
+  if (!lengthCheck.ok) {
+    logAiValidation({ type: 'validation_reject', route: 'summarize', code: lengthCheck.code });
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-GATE-COMPLETE: Plan Gate (self-pr feature)。
@@ -161,6 +178,7 @@ export async function POST(req: Request) {
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+      captureRouteException(new Error('AI_SUMMARY_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_SUMMARY_PARSE_FAILED' });
       return Response.json(
         {
           error: 'AI_SUMMARY_PARSE_FAILED',
@@ -180,6 +198,7 @@ export async function POST(req: Request) {
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系 3 route 共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'AI summarize failed', detail: msg }, { status: 500 });
   }
 }

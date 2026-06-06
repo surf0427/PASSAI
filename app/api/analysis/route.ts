@@ -31,6 +31,7 @@ import {
   extractInitialQuestions,
 } from '@/lib/analysis/extractWallHittingParts';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
@@ -39,6 +40,10 @@ import { recordUsage } from '@/lib/billing/usageLog';
 // 使用 model を constant 化（messages.create() と usage log で同じ値を共有するため）。
 // model を切り替えるときはここを変えれば log も追従する。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/analysis';
 const USAGE_ROUTE = 'analysis';
 
@@ -156,6 +161,7 @@ export async function POST(req: Request) {
       });
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+      captureRouteException(new Error('AI_ANALYSIS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ANALYSIS_PARSE_FAILED' });
       return Response.json(
         {
           error: 'AI_ANALYSIS_PARSE_FAILED',
@@ -193,6 +199,7 @@ export async function POST(req: Request) {
     // status のみログして「失敗回数」が集計できる状態にする（無理に複雑化しない）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json({ error: 'AI analysis failed', detail: msg }, { status: 500 });
   }
 }

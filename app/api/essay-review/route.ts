@@ -5,8 +5,11 @@ import { buildBasicInfoPromptSection } from '@/lib/buildBasicInfoPromptSection';
 import { buildEssayUniversityContext } from '@/lib/buildEssayUniversityContext';
 import { safeParseResult } from '@/lib/essay/parseEssayReview';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { validateEssayReviewInput } from '@/lib/validation/validateEssayReviewInput';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { analyzeStructure, type StructureAnalysis } from '@/lib/structureAnalysis';
 // STEP-LIB-04: SYSTEM_PROMPT を lib/prompts/essayReviewPrompt.ts に lift した。
 // 本 route はそれを import して anthropic.messages.create の system に渡すだけ。
@@ -20,6 +23,10 @@ import type { PreviousOutputSummary } from '@/types/divergence';
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // /api/analysis 系列と同じパターン。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/essay-review';
 // STEP-BILLING-06: usage_records.route に入れる識別子 (schema コメント規約に従う)。
 const USAGE_ROUTE = 'essay-review';
@@ -99,6 +106,18 @@ export async function POST(req: Request) {
       code: validation.code,
     });
     return Response.json({ error: validation.message }, { status: 400 });
+  }
+
+  // B2: 本文(essayBody)以外の構造要素も prompt に埋め込むため最大長を制限する。
+  const lengthCheck = checkMaxLengths([
+    { label: 'テーマ', value: theme, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '結論', value: conclusion, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由1', value: reasonOne, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '理由2', value: reasonTwo, max: INPUT_MAX_LENGTHS.TEXT },
+  ]);
+  if (!lengthCheck.ok) {
+    logAiValidation({ type: 'validation_reject', route: 'essay-review', code: lengthCheck.code });
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // STEP-BILLING-06: Plan Gate。バリデーション後 / AI call 前に実施。
@@ -221,6 +240,7 @@ ${essayBody}`;
     // status のみログして「失敗回数」が集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json(
       { error: 'AIの処理に失敗しました。時間をおいてお試しください。' },
       { status: 500 }

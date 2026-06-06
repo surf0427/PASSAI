@@ -4,16 +4,19 @@ import {
   containsPlaceholder,
   isEmpty,
   repeatedCharRatio,
+  tooLong,
 } from './rules/text';
+import { INPUT_MAX_LENGTHS } from './inputLimits';
 
 export type ValidationResult =
   | { ok: true }
   | {
       ok: false;
-      code: 'EMPTY' | 'REPEATED_CHAR' | 'PLACEHOLDER';
+      code: 'EMPTY' | 'TOO_LONG' | 'REPEATED_CHAR' | 'PLACEHOLDER';
       message: string;
     };
 
+const MAX_LENGTH = INPUT_MAX_LENGTHS.ACTIVITY_TOTAL;
 const REPEATED_CHAR_GATE = 10;
 const REPEATED_CHAR_THRESHOLD = 0.8;
 const PLACEHOLDERS = ['未入力', 'あとで書く', '(仮)', '仮入力'] as const;
@@ -26,6 +29,13 @@ export function validateSummarizeInput(activityData: ActivityData): ValidationRe
       ok: false,
       code: 'EMPTY',
       message: '活動内容を入力してください',
+    };
+  }
+  if (tooLong(text, MAX_LENGTH)) {
+    return {
+      ok: false,
+      code: 'TOO_LONG',
+      message: `活動内容が長すぎます。全体で${MAX_LENGTH}文字以内に収めてください`,
     };
   }
   if (

@@ -36,6 +36,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { devWarn } from '@/lib/devLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import {
   FEATURE_ROUTE_KEYS,
   QUOTAS,
@@ -111,6 +112,7 @@ export async function GET() {
       feature: anyError.feature,
       message: anyError.error?.message,
     });
+    captureRouteException(anyError.error, { route: 'billing/usage/me', feature: 'billing', status: 500 }, { status: 500, code: 'usage-fetch-failed' });
     return NextResponse.json(
       { error: 'usage-fetch-failed' },
       { status: 500 },

@@ -64,6 +64,10 @@ import type { TutorIntent, PreferredProfileField } from '@/lib/tutor/types';
 
 // ── 定数 ─────────────────────────────────────────────────────────
 
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/tutor';
 // STEP-BILLING-06: usage_records.route 識別子。
 const USAGE_ROUTE = 'tutor';

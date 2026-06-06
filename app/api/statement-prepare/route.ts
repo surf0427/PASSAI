@@ -11,6 +11,9 @@ import {
   isStatementPrepareApiResult,
 } from '@/lib/statement/prepare/statementPreparePrompt';
 import { logAiUsage } from '@/lib/aiUsageLog';
+import { captureRouteException } from '@/lib/sentry/capture';
+import { checkMaxLengths } from '@/lib/validation/checkMaxLengths';
+import { INPUT_MAX_LENGTHS } from '@/lib/validation/inputLimits';
 import { detectNgWords } from '@/lib/detectNgWords';
 import { buildStatementUniversityContext } from '@/lib/statement/review/buildStatementUniversityContext';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
@@ -19,6 +22,10 @@ import { recordUsage } from '@/lib/billing/usageLog';
 // 使用 model / route 識別子の constant 化（messages.create() と usage log で共有）。
 // 429（rate limit）は AI call 前の弾きなので usage log は出さない（AI を消費していない）。
 const MODEL = 'claude-sonnet-4-6';
+// M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
+// （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
+export const maxDuration = 80;
+
 const ROUTE = 'api/statement-prepare';
 // STEP-GATE-COMPLETE: usage_records.route 識別子 (schema コメント規約)。
 const USAGE_ROUTE = 'statement-prepare';
@@ -86,6 +93,19 @@ export async function POST(req: Request) {
       { error: 'まずは1つだけでも入力してください' },
       { status: 400 },
     );
+  }
+
+  // B2: prompt に埋め込む自由記述 / 大学情報の最大長ガード。
+  const lengthCheck = checkMaxLengths([
+    { label: '興味・関心', value: interestReason, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '印象的な経験', value: memorableExperience, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '将来の目標', value: futureGoal, max: INPUT_MAX_LENGTHS.TEXT },
+    { label: '大学名', value: university, max: INPUT_MAX_LENGTHS.LABEL },
+    { label: '学部名', value: faculty, max: INPUT_MAX_LENGTHS.LABEL },
+    { label: '学科名', value: department, max: INPUT_MAX_LENGTHS.LABEL },
+  ]);
+  if (!lengthCheck.ok) {
+    return Response.json({ error: lengthCheck.message }, { status: 400 });
   }
 
   // ── サーバ側 rate limit ──
@@ -208,6 +228,7 @@ export async function POST(req: Request) {
     console.error('statement-prepare API error:', msg);
     // inner で具体 status を log 済みのため、ここでは追加 log しない（double-log 回避）。
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+    captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
     return Response.json(
       { error: '整理に失敗しました。もう一度お試しください。' },
       { status: 500 },
