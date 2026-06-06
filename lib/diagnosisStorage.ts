@@ -6,10 +6,18 @@
 // 【ライフサイクル】診断完了時に save、/diagnosis 初回マウント時に load して結果画面へ復帰
 
 import type { DiagnosisType } from '@/types/diagnosis';
+import type { ExamType } from '@/types/examDiagnosis';
 import { safeGetStorage, safeSetStorage, safeRemoveStorage } from '@/lib/storage/safeStorage';
 
+// resultType は 2 系統を取り得る（恒久併存・STEP-DIAGNOSIS-MIGRATION）:
+//   - number（DiagnosisType 1-4）: legacy 4タイプ診断。
+//   - string（ExamType 9種）     : 9タイプ診断（feature flag ON 時）。
+// 読み手（home / mypage / tutorContext）は `typeof resultType` で系統を判別する。
+// answers が唯一の真実源。scoreVector は保存しない（必要時に再計算）。
+export type DiagnosisResultType = DiagnosisType | ExamType;
+
 export type DiagnosisResult = {
-  resultType: DiagnosisType;
+  resultType: DiagnosisResultType;
   resultTitle: string;
   resultDescription: string;
   answers: number[];

@@ -26,7 +26,14 @@ import { getBrowserSupabaseClient } from "./browserClient";
 import { sha256Hex } from "./mirrorSourceHash";
 
 const TABLE = "diagnosis_logs";
-const SCHEMA_VERSION = "1";
+// v1 → v2: Phase 2 で calcDiagnosisResultType の判定ロジックを raw count から
+// normalized scoring + 安定タイブレークへ変更したため bump（同一回答でも resultType が
+// 変わり得る）。payload 形状自体は不変。
+// v2 → v3: STEP-DIAGNOSIS-MIGRATION で 9タイプ診断（ExamType・文字列 resultType・15問 answers）を
+// 追加。payload の resultType が number(1-4) / string(9種) の両方を取り得るようになったため bump。
+// ⚠️ DRIFT 注意: 同名定数が lib/supabase/mirrorDiagnosis.ts にも別途存在する。
+// 判定ロジック / QUESTIONS / DiagnosisType / ExamType を変える時は両方を同時に bump すること。
+const SCHEMA_VERSION = "3";
 
 const ROW_COLUMNS =
   "id, user_id, payload, schema_version, source_hash, created_at, updated_at, metadata";

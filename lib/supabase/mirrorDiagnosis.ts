@@ -76,7 +76,14 @@ const MIRROR_TABLE = "diagnosis_mirrors";
 
 // Pin the current diagnosis canonical shape version. Bump on any change to
 // `QUESTIONS` array, `DiagnosisType` enum, or `calcResultType` logic.
-const SCHEMA_VERSION = "1";
+// v1 → v2: Phase 2 で判定ロジックを normalized scoring + 安定タイブレークへ変更
+// （lib/diagnosisScoring.ts:calcDiagnosisResultType）。同一 answers でも resultType が
+// 変わり得るため bump。payload 形状は不変（scoreVector 追加は Phase 3）。
+// v2 → v3: STEP-DIAGNOSIS-MIGRATION で 9タイプ診断（ExamType・文字列 resultType・15問 answers）を
+// 追加。resultType が number(1-4) / string(9種) を取り得るため bump（DiagnosisType enum extends 相当）。
+// ⚠️ DRIFT 注意: 同名定数が lib/supabase/diagnosisLogs.ts にも別途存在する。
+// 判定ロジック / QUESTIONS / DiagnosisType / ExamType を変える時は両方を同時に bump すること。
+const SCHEMA_VERSION = "3";
 
 /**
  * Narrow envelope accepted by `mirrorDiagnosisToSupabase`.

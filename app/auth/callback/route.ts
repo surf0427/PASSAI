@@ -23,6 +23,7 @@
 
 import { NextResponse } from 'next/server';
 
+import { captureRouteException } from '@/lib/sentry/capture';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 
 // verifyOtp に渡してよい email OTP type の allowlist。
@@ -46,6 +47,7 @@ function isAllowedOtpType(value: string | null): value is AllowedOtpType {
 }
 
 export async function GET(request: Request): Promise<Response> {
+  const t0 = Date.now();
   const requestUrl = new URL(request.url);
   const origin = requestUrl.origin;
   const code = requestUrl.searchParams.get('code');
@@ -65,6 +67,12 @@ export async function GET(request: Request): Promise<Response> {
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
+      // Sentry: code 交換失敗。code 値・token は送らず error code とメタのみ。
+      captureRouteException(
+        error,
+        { route: 'auth/callback', feature: 'auth', status: error.status ?? 'error' },
+        { status: error.status, code: error.code ?? 'exchange_code_failed', durationMs: Date.now() - t0 },
+      );
       return errorRedirect;
     }
     return NextResponse.redirect(`${origin}/mypage`);
@@ -78,6 +86,12 @@ export async function GET(request: Request): Promise<Response> {
       type,
     });
     if (error) {
+      // Sentry: OTP 検証失敗。token_hash・type 値は送らず error code とメタのみ。
+      captureRouteException(
+        error,
+        { route: 'auth/callback', feature: 'auth', status: error.status ?? 'error' },
+        { status: error.status, code: error.code ?? 'verify_otp_failed', durationMs: Date.now() - t0 },
+      );
       return errorRedirect;
     }
     return NextResponse.redirect(`${origin}/mypage`);

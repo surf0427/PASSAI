@@ -507,5 +507,12 @@
 //             （終端質問の省略可化のみ・他は不変）/ intent enum / max_tokens / route 経路 /
 //             parser / detectTutorIntent / Supabase studentContext 注入）。
 //             SYSTEM PROMPT 本文を改訂したため bump 規律として版を更新する。
-export const TUTOR_PROMPT_VERSION = 22;
+//   v22 → v23: STEP-DIAGNOSIS-MIGRATION 9タイプ診断（ExamType）対応。
+//             tutorContext.ts:loadDiagnosisContext が diagnosis_logs.resultType を number(legacy 1-4)
+//             だけでなく string(ExamType 9種) でも hint 化するよう拡張（新 EXAM_DIAGNOSIS_TYPE_HINTS）。
+//             SYSTEM PROMPT 本文は不変だが、9タイプ診断ユーザーでは studentContext の diagnosis
+//             hint 出力 string が変化し得る（従来は string resultType を無言 skip）。v18→v19（診断
+//             context 拡張で bump）と同じ規律で意味的版として bump。タイプ名 / score / 推薦大学 /
+//             NG 生文は引き続き渡さない（傾向 hint のみ）。
+export const TUTOR_PROMPT_VERSION = 23;
 export const TUTOR_MODEL = 'claude-sonnet-4-6';

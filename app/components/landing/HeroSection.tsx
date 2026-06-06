@@ -1,4 +1,6 @@
-import { LinkButton } from '@/components/ui/LinkButton';
+// FREEZE(legacy-diagnosis): ヒーローの主 CTA は 4 タイプ診断（/diagnosis）への
+// 導線だったため凍結中。CTA 非表示に伴い LinkButton は未使用となるため import も停止。
+// import { LinkButton } from '@/components/ui/LinkButton';
 
 // First View（ヒーロー：メインコピー / サブコピー / 補足）。
 // 淡い青→白のグラデ背景、中央寄せ、セカンダリ CTA は控えめ 1 本。
@@ -31,12 +33,8 @@ export function HeroSection() {
           質問に答えながら順番に進められます。
         </p>
 
-        {/* セカンダリ CTA：ヒーロー段階での離脱を抑えるため軽めに 1 本だけ。
-            Pricing / Free Diagnosis の主役 CTA より控えめに：
-              - size="hero"（主役は size="cta"）
-              - shadow-sm（主役は shadow-cta + hover lift）
-              - variant="primary"（主役は variant="accent"）
-            「無料・30秒・登録不要」を一瞬で伝えるトーン。 */}
+        {/* FREEZE(legacy-diagnosis): ヒーローの主 CTA は /diagnosis（4 タイプ診断）へ
+            の導線だったため凍結中。正式版（juken-shindan 9 タイプ）接続時に差し替える。
         <div className="mt-8 sm:mt-10">
           <LinkButton
             href="/diagnosis"
@@ -51,6 +49,7 @@ export function HeroSection() {
             30秒・無料・登録不要
           </p>
         </div>
+        */}
       </div>
     </section>
   );

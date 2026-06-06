@@ -17,18 +17,39 @@
  *   - keepAliveTimeout = 30000 : 接続を再利用し cold 接続そのものを減らす
  *
  * 制約:
- *   - server (nodejs) runtime のみで実行。Edge Runtime では undici を import せず何もしない。
+ *   - undici の dispatcher 設定は server (nodejs) runtime のみで実行。
+ *     Edge Runtime では undici を import せず何もしない。
+ *
+ * Sentry (STEP-OBSERVABILITY-SENTRY-01):
+ *   - 同じ register() フックで runtime 別の Sentry config を読み込む。
+ *     nodejs → sentry.server.config / edge → sentry.edge.config。
+ *   - undici 設定（既存挙動）は一切変更しない。Sentry 初期化を後段に追加するだけ。
+ *   - onRequestError は Next.js 16 の server instrumentation hook。Sentry が
+ *     server 側（RSC / route handler 等）の error を捕捉するために必要。
  */
-export async function register(): Promise<void> {
-  // Edge Runtime では undici を使えない / 不要。nodejs runtime のみ。
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+import * as Sentry from '@sentry/nextjs';
 
-  const { setGlobalDispatcher, Agent } = await import('undici');
-  setGlobalDispatcher(
-    new Agent({
-      connect: { timeout: 4000 },
-      autoSelectFamily: true,
-      keepAliveTimeout: 30_000,
-    }),
-  );
+export async function register(): Promise<void> {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // 既存挙動: undici global dispatcher の調整（nodejs runtime のみ）。
+    const { setGlobalDispatcher, Agent } = await import('undici');
+    setGlobalDispatcher(
+      new Agent({
+        connect: { timeout: 4000 },
+        autoSelectFamily: true,
+        keepAliveTimeout: 30_000,
+      }),
+    );
+
+    // Sentry server 初期化。
+    await import('./sentry.server.config');
+  }
+
+  if (process.env.NEXT_RUNTIME === 'edge') {
+    // Edge Runtime では undici を使えない / 不要。Sentry edge 初期化のみ。
+    await import('./sentry.edge.config');
+  }
 }
+
+// Next.js 16 server instrumentation: request 処理中の error を Sentry へ転送する。
+export const onRequestError = Sentry.captureRequestError;

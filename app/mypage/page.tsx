@@ -218,13 +218,12 @@ function ProfileBanner({ header }: { header: MypageData['header'] }) {
           </span>
         )}
         {header.applicantType !== null && (
-          <Link
-            href="/diagnosis"
-            className="inline-flex items-center gap-1 text-brand-700 hover:underline"
-          >
+          /* FREEZE(legacy-diagnosis): 受験タイプ値の表示は残すが、/diagnosis への
+             リンクは凍結中のため非ナビゲーション化（プレーン表示に変更）。 */
+          <span className="inline-flex items-center gap-1 text-slate-700">
             <span className="text-slate-500">受験タイプ:</span>
-            <span className="font-medium">タイプ {header.applicantType}</span>
-          </Link>
+            <span className="font-medium">{header.applicantTypeLabel}</span>
+          </span>
         )}
       </div>
     </Card>

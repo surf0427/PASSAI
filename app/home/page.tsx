@@ -14,6 +14,7 @@ import { loadEssayProgress } from '@/lib/essayPracticeStorage';
 import { loadDraft, loadReviewHistory } from '@/lib/statement/review/statementStorage';
 import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 import { DiagnosisTypeCard } from '@/app/home/DiagnosisTypeCard';
+import { DiagnosisCtaCard } from '@/app/home/DiagnosisCtaCard';
 import type { BasicInfo } from '@/types/basicInfo';
 
 // ── 進捗ステータスの型 ─────────────────────────────────────────────
@@ -238,6 +239,10 @@ export default function HomePage() {
 
       {/* 診断タイプ（ある場合）／無ければ診断への誘導 */}
       <DiagnosisTypeCard />
+
+      {/* /diagnosis への恒久 CTA。結果カード表示時のみ「もう一度/改めて受ける」導線を
+          補う（PromoCard 状態では二重 CTA を避けて自動的に非表示）。 */}
+      <DiagnosisCtaCard />
 
       {/* 今日やるべきこと
           active 時は <Card variant="soft"> で「やさしい案内」感を出す。

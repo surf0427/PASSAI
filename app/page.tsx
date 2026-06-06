@@ -33,6 +33,8 @@ export default function LandingPage() {
       <FeatureFlowSection />
       <PricingSection />
       <CompareSection />
+      {/* ⑥ 無料の受験タイプ診断（無料で試せる入口・有料 CTA とは別物）。
+          flag は /diagnosis 側で legacy / 9タイプを出し分ける。 */}
       <FreeDiagnosisCtaSection />
       <FaqSection />
       <ClosingCtaSection />

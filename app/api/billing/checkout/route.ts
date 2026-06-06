@@ -34,6 +34,7 @@ import type Stripe from 'stripe';
 
 import { isPlanId } from '@/lib/billing/plans';
 import { devWarn } from '@/lib/devLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { getStripeClient, getStripePriceId } from '@/lib/stripe/server';
 import { logAuthFail } from '@/lib/supabase/authFailLog';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
@@ -42,6 +43,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
+  const t0 = Date.now();
   // 1. body parse
   let body: unknown;
   try {
@@ -137,6 +139,12 @@ export async function POST(req: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'checkout failed';
     devWarn('[billing/checkout] stripe error', message);
+    // Sentry: Stripe Checkout 作成失敗。plan は判明、本文は送らない。
+    captureRouteException(
+      err,
+      { route: 'billing/checkout', feature: 'billing', plan, status: 500 },
+      { status: 500, code: 'stripe-error', durationMs: Date.now() - t0 },
+    );
     return NextResponse.json(
       { error: 'stripe-error', message },
       { status: 500 },

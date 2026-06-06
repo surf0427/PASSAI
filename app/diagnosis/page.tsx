@@ -8,7 +8,14 @@ import {
   type DiagnosisResult,
 } from '@/lib/diagnosisStorage';
 import type { DiagnosisType } from '@/types/diagnosis';
+import {
+  DIAGNOSIS_QUESTIONS,
+  calcDiagnosisResultType,
+  type DiagnosisQuestion,
+} from '@/lib/diagnosisScoring';
 import { useCurrentUserId } from '@/app/components/AuthProvider';
+import { isExamDiagnosisEnabled } from '@/lib/examDiagnosis/flag';
+import { ExamDiagnosisFlow } from './ExamDiagnosisFlow';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadDiagnosisResult() は localStorage 依存のため SSR では null を返したい。
@@ -21,64 +28,11 @@ const getMountedServerSnapshot = () => false;
 // ── 受験タイプ診断（MVP） ──────────────────────────────────────
 // 単一ファイル + クライアントコンポーネントで完結。
 // step 状態（'start' | 'answering' | 'result'）で 3 画面を切り替える。
-// 質問データ・結果データ・判定ロジックは MVP のため同ファイル内で持つ。
-// 将来 AI スコアリングや Supabase 連携を入れる場合は QUESTIONS / calcResultType /
-// saveDiagnosisResult を別ファイルに切り出す前提（今は不要な抽象化を避ける）。
+// 質問データ（DIAGNOSIS_QUESTIONS）と判定ロジック（calcDiagnosisResultType）は
+// テスト可能な純モジュール @/lib/diagnosisScoring に切り出した（Phase 1）。
+// このファイルは結果説明文（RESULT_TYPES）と画面遷移のみを持つ。
 
 type Step = 'start' | 'answering' | 'result';
-
-type Option = { label: string; type: DiagnosisType };
-type Question = { q: string; options: Option[] };
-
-// ── 質問データ（5 問固定） ─────────────────────────────────────
-const QUESTIONS: Question[] = [
-  {
-    q: '総合型選抜・学校推薦型選抜に対して、今どんな状態ですか？',
-    options: [
-      { label: '何から始めればいいか分からない', type: 1 },
-      { label: '活動や経験はあるが、まとめ方が分からない', type: 2 },
-      { label: '志望理由書を書いたが浅いと言われた', type: 3 },
-      { label: '面接や小論文まで不安がある', type: 3 },
-    ],
-  },
-  {
-    q: '自分の活動や経験についてどう感じていますか?',
-    options: [
-      { label: '特に目立つ活動はないと思う', type: 1 },
-      { label: 'あるけど、どう強みにすればいいか分からない', type: 2 },
-      { label: 'ある程度まとまっている', type: 3 },
-      { label: 'かなり自信がある', type: 3 },
-    ],
-  },
-  {
-    q: '志望理由書についてどの状態ですか？',
-    options: [
-      { label: '何を書けばいいか分からない', type: 1 },
-      { label: '書き始めたけどまとまらない', type: 2 },
-      { label: '一応書いたが自信がない', type: 3 },
-      { label: '添削しながら完成度を上げたい', type: 3 },
-    ],
-  },
-  {
-    q: '一般受験との並行についてどう考えていますか？',
-    options: [
-      { label: '一般受験がメインで、推薦は片手間で進めたい', type: 4 },
-      { label: 'どちらも同じくらい頑張りたい', type: 4 },
-      { label: '推薦をメインにしたい', type: 3 },
-      { label: 'まだ決めきれていない', type: 1 },
-    ],
-  },
-  {
-    q: '今一番サポートしてほしいことは？',
-    options: [
-      { label: '活動整理', type: 1 },
-      { label: '自己分析', type: 2 },
-      { label: '志望理由書', type: 3 },
-      { label: '小論文', type: 3 },
-      { label: '面接対策', type: 3 },
-    ],
-  },
-];
 
 // ── 結果タイプの説明文 ────────────────────────────────────────
 const RESULT_TYPES: Record<
@@ -107,32 +61,18 @@ const RESULT_TYPES: Record<
   },
 };
 
-// ── 判定ロジック ──────────────────────────────────────────────
-// MVP のためシンプル：
-//   1) Q4（一般受験との並行）の選択肢が type 4 なら最優先で「一般受験並行タイプ」
-//   2) それ以外は Q1/Q2/Q3/Q5 の type を集計し、最頻 type を返す
-// タイブレークは番号の小さい type を優先（より「初学者寄り」を上に出す）
-
-function calcResultType(answers: number[]): DiagnosisType {
-  const q4 = QUESTIONS[3].options[answers[3]];
-  if (q4.type === 4) return 4;
-
-  const scores: Record<DiagnosisType, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
-  answers.forEach((ansIdx, qIdx) => {
-    if (qIdx === 3) return; // Q4 は判定済み
-    const t = QUESTIONS[qIdx].options[ansIdx].type;
-    scores[t]++;
-  });
-
-  let best: DiagnosisType = 1;
-  if (scores[2] > scores[best]) best = 2;
-  if (scores[3] > scores[best]) best = 3;
-  return best;
-}
-
-// ── ページ本体 ────────────────────────────────────────────────
+// ── ページ本体（flag で legacy 4タイプ / 新 9タイプ を切替）──────────
+// NEXT_PUBLIC_EXAM_DIAGNOSIS_ENABLED が ON → 9タイプ版（ExamDiagnosisFlow）。
+// 既定（未設定 / OFF）→ legacy 4タイプ版（LegacyDiagnosisFlow）。legacy は削除しない。
+// flag は build-time inline 定数なので SSR/CSR で同値 → hydration mismatch は起きない。
 
 export default function DiagnosisPage() {
+  if (isExamDiagnosisEnabled()) return <ExamDiagnosisFlow />;
+  return <LegacyDiagnosisFlow />;
+}
+
+// ── legacy 4タイプ診断フロー（凍結併存。一切変更しない）──────────────
+function LegacyDiagnosisFlow() {
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<number[]>([]);
 
@@ -154,10 +94,15 @@ export default function DiagnosisPage() {
     getMountedSnapshot,
     getMountedServerSnapshot,
   );
-  const mountedSaved = useMemo<DiagnosisResult | null>(
-    () => (isMounted ? loadDiagnosisResult() : null),
-    [isMounted],
-  );
+  // 復元ガード（STEP-DIAGNOSIS-MIGRATION 回帰対策）: legacy（数値 resultType）の結果だけ復元する。
+  // flag を 9タイプ→legacy に戻した後、共有 LS キーに残った 9タイプ（文字列 resultType・15問）の
+  // 値を legacy UI が誤って結果画面へ流し込み、数値バッジに文字列が出る崩れを防ぐ。
+  // legacy の不変条件（legacy UI は legacy 結果のみ表示）を復元するだけで、判定ロジックは不変。
+  const mountedSaved = useMemo<DiagnosisResult | null>(() => {
+    if (!isMounted) return null;
+    const saved = loadDiagnosisResult();
+    return saved && typeof saved.resultType === 'number' ? saved : null;
+  }, [isMounted]);
 
   // 公開する step / result: post-mount 値があればそれを、なければ snapshot ベースの初期値。
   const step: Step = postMountStep ?? (mountedSaved ? 'result' : 'start');
@@ -172,12 +117,12 @@ export default function DiagnosisPage() {
   function selectOption(optionIdx: number) {
     const next = [...answers, optionIdx];
     setAnswers(next);
-    if (currentQ + 1 < QUESTIONS.length) {
+    if (currentQ + 1 < DIAGNOSIS_QUESTIONS.length) {
       setCurrentQ(currentQ + 1);
       return;
     }
     // 5 問目を回答 → 集計 + 保存 + 結果画面へ
-    const t = calcResultType(next);
+    const t = calcDiagnosisResultType(next);
     const r: DiagnosisResult = {
       resultType: t,
       resultTitle: RESULT_TYPES[t].title,
@@ -221,8 +166,8 @@ export default function DiagnosisPage() {
         {step === 'answering' && (
           <AnsweringScreen
             questionIdx={currentQ}
-            total={QUESTIONS.length}
-            question={QUESTIONS[currentQ]}
+            total={DIAGNOSIS_QUESTIONS.length}
+            question={DIAGNOSIS_QUESTIONS[currentQ]}
             onSelect={selectOption}
             onBack={goBackOneQuestion}
           />
@@ -264,7 +209,7 @@ function StartScreen({ onStart }: { onStart: () => void }) {
         <span aria-hidden="true" className="ml-2">→</span>
       </button>
       <p className="mt-6 text-xs text-slate-500">
-        全{QUESTIONS.length}問・選択式
+        全{DIAGNOSIS_QUESTIONS.length}問・選択式
       </p>
     </div>
   );
@@ -281,7 +226,7 @@ function AnsweringScreen({
 }: {
   questionIdx: number;
   total: number;
-  question: Question;
+  question: DiagnosisQuestion;
   onSelect: (optionIdx: number) => void;
   onBack: () => void;
 }) {

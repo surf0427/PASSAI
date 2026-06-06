@@ -12,10 +12,15 @@
     "qa:applicantType": "npx tsx scripts/step-applicant-type-qa.ts",
     "qa:applicantType:dry": "npx tsx scripts/step-applicant-type-qa.ts --dry",
     "qa:interviewApplicantType": "npx tsx scripts/step-interview-applicant-type-qa.ts",
-    "qa:interviewApplicantType:dry": "npx tsx scripts/step-interview-applicant-type-qa.ts --dry"
+    "qa:interviewApplicantType:dry": "npx tsx scripts/step-interview-applicant-type-qa.ts --dry",
+    "qa:diagnosisTaxonomy": "npx tsx scripts/diagnosis-taxonomy-qa.ts",
+    "qa:diagnosisScoring": "npx tsx scripts/diagnosis-scoring-qa.ts",
+    "qa:examDiagnosis": "npx tsx scripts/exam-diagnosis-scoring-qa.ts",
+    "qa:diagnosis": "npm run qa:diagnosisScoring && npm run qa:diagnosisTaxonomy && npm run qa:examDiagnosis"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
+    "@sentry/nextjs": "^10.56.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
     "next": "16.2.4",

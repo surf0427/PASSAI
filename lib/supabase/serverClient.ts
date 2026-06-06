@@ -29,6 +29,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 import { getSupabaseAnonKey, getSupabaseUrl } from "./env";
+import { retryingFetch } from "./retryingFetch";
 
 export async function getServerSupabaseClient(): Promise<SupabaseClient | null> {
   const url = getSupabaseUrl();
@@ -38,6 +39,9 @@ export async function getServerSupabaseClient(): Promise<SupabaseClient | null> 
   const cookieStore = await cookies();
 
   return createServerClient(url, anonKey, {
+    // Phase 2: cold start / intermittent network failure 吸収用の
+    // timeout + 1回 retry。cookies / 既存挙動は変更しない。
+    global: { fetch: retryingFetch },
     cookies: {
       getAll() {
         return cookieStore.getAll();

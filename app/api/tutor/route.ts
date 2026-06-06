@@ -59,6 +59,7 @@ import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest
 import { authenticateRequest, checkPlanQuota } from '@/lib/billing/planGate';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import type { TutorIntent, PreferredProfileField } from '@/lib/tutor/types';
 
 // ── 定数 ─────────────────────────────────────────────────────────
@@ -514,6 +515,12 @@ export async function POST(req: Request): Promise<Response> {
       model: TUTOR_MODEL,
       name: error instanceof Error ? error.name : 'UnknownError',
     });
+    // Sentry: AI 呼び出し失敗。本文・prompt は送らず route/feature/status とメタのみ。
+    captureRouteException(
+      error,
+      { route: ROUTE, feature: 'tutor', status: 502 },
+      { status: 502, code: 'AI_REQUEST_FAILED', durationMs: lat.sinceStart() },
+    );
     logAiUsage({ route: ROUTE, model: TUTOR_MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: TUTOR_MODEL, status: 'error' });
     lat.flush({
@@ -634,6 +641,12 @@ export async function POST(req: Request): Promise<Response> {
       route: ROUTE,
       name: error instanceof Error ? error.name : 'UnknownError',
     });
+    // Sentry: 内部 try で握れなかった uncaught 例外（最終安全網）。
+    captureRouteException(
+      error,
+      { route: ROUTE, feature: 'tutor', status: 500 },
+      { status: 500, code: 'internal_error', durationMs: lat.sinceStart() },
+    );
     lat.flush({ phase: 'unhandled_error' });
     return NextResponse.json(
       {

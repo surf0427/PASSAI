@@ -29,6 +29,7 @@ import 'server-only';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import { getSupabaseServiceRoleKey, getSupabaseUrl } from './env';
+import { retryingFetch } from './retryingFetch';
 
 let cached: SupabaseClient | null = null;
 
@@ -52,6 +53,9 @@ export function getServiceRoleSupabaseClient(): SupabaseClient {
   }
 
   cached = createClient(url, serviceRoleKey, {
+    // Phase 2: cold start / intermittent network failure 吸収用の
+    // timeout + 1回 retry。auth 設定は変更しない。
+    global: { fetch: retryingFetch },
     auth: {
       autoRefreshToken: false,
       persistSession: false,

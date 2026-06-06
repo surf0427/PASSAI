@@ -10,6 +10,13 @@ import {
 import { loadAnalyzeState } from '@/lib/analyzeStorage';
 import { inferAnalysisType } from '@/lib/analysis/inferAnalysisType';
 import type { DiagnosisType } from '@/types/diagnosis';
+import { isExamType, type ExamType } from '@/types/examDiagnosis';
+import {
+  TYPE_FEEDBACK,
+  DIAGNOSIS_FEEDBACK,
+  EXAM_DIAGNOSIS_FEEDBACK,
+  SELF_REFERENCE_NEXT_STEP,
+} from '@/app/home/diagnosisFeedback';
 
 // マウント前 false / マウント後 true を返す flag。
 // loadDiagnosisResult() は localStorage 依存のため SSR では null を返したい。
@@ -37,9 +44,19 @@ const getMountedServerSnapshot = () => false;
 // 一致した場合：CTA リンク非表示 + 締めの一文を「このページで進めましょう」系に
 // 差し替え。本文（強み・注意点）はそのまま残す。
 //
-// NOTE: TYPE_FEEDBACK の本文は新 4 タイプ名（活動アピール/探究・研究/将来
-// ビジョン/成長ポテンシャル）を直接埋め込む。旧 diagnosis_result の
-// resultTitle（「何から始めるか整理タイプ」等の旧名称）は表示に使わない。
+// タクソノミー分離（R12 対策・重要）:
+//   DiagnosisType（1|2|3|4）という同じ番号が、来歴によって別の意味を持つ。
+//     - self-analysis 由来（inferAnalysisType）: 1 活動アピール / 2 探究・研究 /
+//       3 将来ビジョン / 4 成長ポテンシャル  → TYPE_FEEDBACK を参照。
+//     - /diagnosis 由来（passai_diagnosis_result の resultType）: 1 整理 /
+//       2 言語化 / 3 書類完成度 / 4 一般受験並行  → DIAGNOSIS_FEEDBACK を参照。
+//   番号が同じでも意味が違うため、番号変換ではなく「表示定義そのものを来歴で
+//   出し分ける」（Option B）。resolved.source で feedback テーブルを切り替える。
+//   どちらの経路でも保存形式（resultType の数値）には触れない。
+//
+// NOTE: 本文は各 4 タイプの説明文を直接埋め込む。diagnosis_result の
+// resultTitle（「何から始めるか整理タイプ」等）は表示に使わず、DIAGNOSIS_FEEDBACK
+// 側の文言を正とする（resultTitle は保存値の互換のため残すが描画はしない）。
 
 type DiagnosisTypeCardProps = {
   // 現在表示中のページ pathname。TYPE_FEEDBACK の ctaHref がこれと一致する
@@ -53,73 +70,22 @@ type DiagnosisTypeCardProps = {
   variant?: 'card' | 'inline';
 };
 
-type Feedback = {
-  summary: string;
-  strengths: string;
-  caution: string;
-  nextStep: string;
-  ctaHref: string;
-  ctaLabel: string;
-};
+// 表示文言（TYPE_FEEDBACK / DIAGNOSIS_FEEDBACK / SELF_REFERENCE_NEXT_STEP）は
+// @/app/home/diagnosisFeedback に集約。番号→意味の対応はそちらが正本。
 
-const TYPE_FEEDBACK: Record<DiagnosisType, Feedback> = {
-  1: {
-    summary: '今回の内容からは、「活動アピール型」に近い特徴が見えます。',
-    strengths:
-      '経験や行動を材料にしやすく、面接や志望理由書でも具体例を出しやすい点が強みとして見えます。',
-    caution:
-      '一方で、活動の説明だけで終わらず、そこから何を学んだか・大学での学びにどうつなげるかまで整理できると、さらに説得力が増していきます。',
-    nextStep: '次は「活動整理」で材料を深めていくのがおすすめです。',
-    ctaHref: '/input/activity',
-    ctaLabel: '活動整理を進める',
-  },
-  2: {
-    summary: '今回の内容からは、「探究・研究型」に近い特徴が見えます。',
-    strengths:
-      '問題意識や興味関心を軸にしやすく、学部・学科との相性を示しやすい点が強みとして見えます。',
-    caution:
-      '一方で、興味が抽象的なままだと弱く見えやすいので、調べたこと・考えたことを具体化していくと、より深さが伝わります。',
-    nextStep:
-      '次は「自己分析」で「なぜ学びたいか」を言語化していくのがおすすめです。',
-    ctaHref: '/self-analysis',
-    ctaLabel: '自己分析を進める',
-  },
-  3: {
-    summary: '今回の内容からは、「将来ビジョン型」に近い特徴が見えます。',
-    strengths:
-      '志望理由に一貫性を出しやすく、将来像から逆算して話を組み立てられる点が強みとして見えます。',
-    caution:
-      '一方で、将来の夢だけで終わらせず、きっかけや根拠を具体化し、大学での学びとの接続を明確にしていくと、さらに説得力が増します。',
-    nextStep:
-      '次は「志望理由書」で将来像と大学での学びをつなげていくのがおすすめです。',
-    ctaHref: '/statement',
-    ctaLabel: '志望理由書に進む',
-  },
-  4: {
-    summary: '今回の内容からは、「成長ポテンシャル型」に近い特徴が見えます。',
-    strengths:
-      '変化や努力の過程を材料にしやすく、これから伸びる理由を伝えやすい点が強みとして見えます。',
-    caution:
-      '一方で、「頑張ります」だけで終わらせず、過去の変化や行動を具体化し、今後の挑戦を大学での学びにつなげていくと、より説得力が増します。',
-    nextStep:
-      '次は「自己分析」で変化や伸びしろを言葉にしていくのがおすすめです。',
-    ctaHref: '/self-analysis',
-    ctaLabel: '自己分析を進める',
-  },
-};
-
-// currentHref が ctaHref と一致するときに nextStep を差し替える汎用文。
-// /self-analysis 以外で再利用される可能性もあるため、ページ名を含めない言い回し。
-const SELF_REFERENCE_NEXT_STEP =
-  '今このページで進めている内容を、引き続き丁寧に深めていくのがおすすめです。';
-
-// 保存データが壊れていてもクラッシュしないよう、必要 field を最低限ガード
-function isResultUsable(r: DiagnosisResult): boolean {
-  const t = r.resultType;
-  if (t !== 1 && t !== 2 && t !== 3 && t !== 4) return false;
+// 保存データが壊れていてもクラッシュしないよう、必要 field を最低限ガード。
+// resultType は legacy（number 1-4）/ 9タイプ（ExamType 文字列）の 2 系統を取り得る。
+function hasUsableShape(r: DiagnosisResult): boolean {
   if (typeof r.resultTitle !== 'string' || !r.resultTitle.trim()) return false;
   if (typeof r.resultDescription !== 'string') return false;
   return true;
+}
+function isLegacyResult(r: DiagnosisResult): boolean {
+  const t = r.resultType;
+  return (t === 1 || t === 2 || t === 3 || t === 4) && hasUsableShape(r);
+}
+function isExamResult(r: DiagnosisResult): boolean {
+  return isExamType(r.resultType) && hasUsableShape(r);
 }
 
 function formatDate(iso: string): string {
@@ -148,12 +114,13 @@ export function DiagnosisTypeCard({
   // source を分けて createdAt を持たせる。
   const resolved = useMemo<
     | { type: DiagnosisType; source: 'self-analysis' }
-    | { type: DiagnosisType; source: 'diagnosis'; createdAt: string }
+    | { type: DiagnosisType; source: 'diagnosis-legacy'; createdAt: string }
+    | { type: ExamType; source: 'diagnosis-exam'; createdAt: string }
     | null
   >(() => {
     if (!isMounted) return null;
 
-    // 1) self-analysis summary から推定（最優先）
+    // 1) self-analysis summary から推定（最優先・常に番号系 1-4）
     const analyzeState = loadAnalyzeState();
     const summary = analyzeState?.summary;
     if (summary) {
@@ -161,28 +128,49 @@ export function DiagnosisTypeCard({
       if (inferred) return { type: inferred.type, source: 'self-analysis' };
     }
 
-    // 2) 旧 diagnosis_result を fallback
+    // 2) diagnosis_result を fallback（系統を resultType の型で判別）
     const diag: DiagnosisResult | null = loadDiagnosisResult();
-    if (diag && isResultUsable(diag)) {
+    if (diag && isExamResult(diag)) {
       return {
-        type: diag.resultType,
-        source: 'diagnosis',
+        type: diag.resultType as ExamType,
+        source: 'diagnosis-exam',
+        createdAt: diag.createdAt,
+      };
+    }
+    if (diag && isLegacyResult(diag)) {
+      return {
+        type: diag.resultType as DiagnosisType,
+        source: 'diagnosis-legacy',
         createdAt: diag.createdAt,
       };
     }
 
-    // 3) どちらも無い → PromoCard
+    // 3) どれも無い → PromoCard
     return null;
   }, [isMounted]);
 
   if (!isMounted) return null;
   if (!resolved) return <PromoCard />;
 
-  const feedback = TYPE_FEEDBACK[resolved.type];
-  // 「診断日」は /diagnosis 経由のときだけ表示する。summary 推定経由では
+  // R12 対策: 来歴ごとに別タクソノミーなので feedback テーブルを source で出し分ける。
+  //   - self-analysis 由来（番号 1-4）        → TYPE_FEEDBACK
+  //   - /diagnosis legacy 由来（番号 1-4）     → DIAGNOSIS_FEEDBACK
+  //   - /diagnosis 9タイプ由来（ExamType 文字列）→ EXAM_DIAGNOSIS_FEEDBACK
+  // 番号⇔文字列の変換はしない（保存形式に触れない）。
+  let feedback;
+  if (resolved.source === 'diagnosis-exam') {
+    feedback = EXAM_DIAGNOSIS_FEEDBACK[resolved.type];
+  } else if (resolved.source === 'diagnosis-legacy') {
+    feedback = DIAGNOSIS_FEEDBACK[resolved.type];
+  } else {
+    feedback = TYPE_FEEDBACK[resolved.type];
+  }
+  // 「診断日」は /diagnosis 経由（legacy / exam）のときだけ表示する。summary 推定経由では
   // 「診断」という言葉が文脈にそぐわないため非表示。
   const dateStr =
-    resolved.source === 'diagnosis' ? formatDate(resolved.createdAt) : '';
+    resolved.source === 'diagnosis-exam' || resolved.source === 'diagnosis-legacy'
+      ? formatDate(resolved.createdAt)
+      : '';
   const isSelfReference = feedback.ctaHref === currentHref;
   const closingText = isSelfReference
     ? SELF_REFERENCE_NEXT_STEP

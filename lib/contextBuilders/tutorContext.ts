@@ -31,6 +31,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
+import { isExamType } from '@/types/examDiagnosis';
+import { EXAM_DIAGNOSIS_TYPE_HINTS } from '@/lib/examDiagnosis/tutorHints';
 
 // ── 型 ───────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ const MAX_ITEM_LENGTH = 40;
 const MAX_SUMMARY_LENGTH = 120;
 const MAX_TOTAL_LENGTH = 1200;
 
-// 受験タイプ診断 resultType(1-4) → 会話補助 hint（ラベル名そのものは出さない）。
+// 受験タイプ診断 resultType(legacy 1-4) → 会話補助 hint（ラベル名そのものは出さない）。
 // app/diagnosis/page.tsx:RESULT_TYPES の 4 タイプの趣旨を、断定しない支援方針へ言い換える。
 const DIAGNOSIS_TYPE_HINTS: Record<number, string> = {
   1: '何から手をつけるかを一緒に整理していくと進みやすそうです',
@@ -86,6 +88,9 @@ const DIAGNOSIS_TYPE_HINTS: Record<number, string> = {
   3: '書類の完成度を一段上げる方向で整理すると進みやすそうです',
   4: '一般受験と並行しやすいよう、優先順位をつけて整理すると進みやすそうです',
 };
+
+// 受験タイプ診断 9タイプ（ExamType）の hint は lib/examDiagnosis/tutorHints.ts に集約
+// （Tutor へ渡してよい傾向 hint のみ。タイプ名 / score / 推薦大学 / NG生文は渡さない）。
 
 // activity カテゴリ key → 表示ラベル（lib/contextBuilders/tutorStudentContext.ts と一致）。
 const ACTIVITY_CATEGORY_LABELS: Record<string, string> = {
@@ -262,7 +267,10 @@ async function loadBasicInfoContext(
 }
 
 // ── source loader: diagnosis_logs（snapshot）────────────────────────
-// resultType(1-4) を会話補助 hint へ言い換える。スコア配列 / index / 固定タイプ名は読まない。
+// resultType を会話補助 hint へ言い換える。2 系統を typeof で判別:
+//   - number（legacy 1-4）→ DIAGNOSIS_TYPE_HINTS。
+//   - string（ExamType 9種）→ EXAM_DIAGNOSIS_TYPE_HINTS（isExamType でガード）。
+// どちらの系統でも、固定タイプ名 / catchphrase / score / answers / 推薦大学 / NG生文は読まない・渡さない。
 async function loadDiagnosisContext(
   client: SupabaseClient,
   userId: string,
@@ -271,8 +279,12 @@ async function loadDiagnosisContext(
   if (!payload) return {};
 
   const resultType = payload.resultType;
-  const hint =
-    typeof resultType === 'number' ? DIAGNOSIS_TYPE_HINTS[resultType] : undefined;
+  let hint: string | undefined;
+  if (typeof resultType === 'number') {
+    hint = DIAGNOSIS_TYPE_HINTS[resultType];
+  } else if (isExamType(resultType)) {
+    hint = EXAM_DIAGNOSIS_TYPE_HINTS[resultType];
+  }
   if (!hint) return {};
 
   return { diagnosis: { typeHint: truncate(hint, MAX_SUMMARY_LENGTH) } };

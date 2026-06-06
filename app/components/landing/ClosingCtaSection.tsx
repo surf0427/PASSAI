@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { LinkButton } from '@/components/ui/LinkButton';
+// FREEZE(legacy-diagnosis): 締めの主 CTA（/diagnosis）は凍結中。CTA 非表示に伴い
+// LinkButton は未使用となるため import も停止。サブ CTA（/home）は Link のまま残す。
+// import { LinkButton } from '@/components/ui/LinkButton';
 
 // LP の締め。FAQ で不安を解消した直後の「感情に残る最後の一押し」。
 // 上から indigo→blue→white にフェードする縦グラデで「光が差す」雰囲気を作り、
@@ -50,8 +52,9 @@ export function ClosingCtaSection() {
           </p>
         </div>
 
-        {/* CTA：メインは内部 /diagnosis、サブは内部 /home */}
+        {/* CTA：メイン（/diagnosis）は凍結中のため非表示。サブ（/home）のみ残す。 */}
         <div className="flex flex-col gap-3 max-w-md mx-auto">
+          {/* FREEZE(legacy-diagnosis): メイン CTA は /diagnosis への導線だったため凍結。
           <LinkButton
             href="/diagnosis"
             variant="accent"
@@ -61,6 +64,7 @@ export function ClosingCtaSection() {
             無料で受験タイプ診断をする
             <span aria-hidden="true" className="ml-2">→</span>
           </LinkButton>
+          */}
           {/* サブ CTA：cta size の主役と並ぶ控えめ 1 本。LinkButton size 体系に
               完全一致しないため（text-sm sm:text-base）、ここは Link のまま残し、
               次の PR で「subtle」size を追加するときに揃える。 */}

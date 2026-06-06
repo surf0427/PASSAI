@@ -39,6 +39,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { devWarn } from '@/lib/devLog';
+import { captureRouteException } from '@/lib/sentry/capture';
 import { getStripeClient } from '@/lib/stripe/server';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 
@@ -46,6 +47,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
+  const t0 = Date.now();
   const supabase = await getServerSupabaseClient();
   if (!supabase) {
     return NextResponse.json(
@@ -99,6 +101,12 @@ export async function POST(req: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'portal failed';
     devWarn('[billing/portal] stripe error', message);
+    // Sentry: Stripe Billing Portal 作成失敗。本文は送らない。
+    captureRouteException(
+      err,
+      { route: 'billing/portal', feature: 'billing', status: 500 },
+      { status: 500, code: 'stripe-error', durationMs: Date.now() - t0 },
+    );
     return NextResponse.json(
       { error: 'stripe-error', message },
       { status: 500 },

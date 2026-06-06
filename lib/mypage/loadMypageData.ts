@@ -18,12 +18,14 @@
 // 関連監査: マイページ MVP 棚卸し監査（A〜I）
 
 import type { DiagnosisType } from '@/types/diagnosis';
+import { isExamType, type ExamType } from '@/types/examDiagnosis';
+import { getExamResult } from '@/lib/examDiagnosis/results';
 import type { EssayWorkspace } from '@/types/essay';
 import type { SelfAnalysisLog } from '@/types/selfAnalysisLog';
 import type { SelfPR } from '@/types/selfPR';
 
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
-import { loadDiagnosisResult } from '@/lib/diagnosisStorage';
+import { loadDiagnosisResult, type DiagnosisResultType } from '@/lib/diagnosisStorage';
 import {
   loadReviewHistory,
   type ReviewHistoryItem,
@@ -109,7 +111,10 @@ export type MypageData = {
   header: {
     name?: string;
     grade?: string;
-    applicantType: DiagnosisType | null;
+    // legacy 4タイプ（number）/ 9タイプ（ExamType 文字列）/ 未診断（null）。
+    applicantType: DiagnosisType | ExamType | null;
+    // 表示用ラベル: number → "タイプ N"、ExamType → 日本語タイプ名、未診断 → null。
+    applicantTypeLabel: string | null;
   };
   summary: {
     // ① 総活動回数（志望理由書 + 小論文 reviews + 自己分析 + 面接）
@@ -156,9 +161,19 @@ export type MypageData = {
   };
 };
 
+// 受験タイプの表示ラベル。
+//   - number（legacy DiagnosisType 1-4）→ "タイプ N"（従来表示を維持）。
+//   - string（ExamType 9種）→ 日本語タイプ名（"タイプ riaju" のような raw 表示を防ぐ）。
+//   - null / 未診断 → null。
+function formatApplicantType(resultType: DiagnosisResultType | null): string | null {
+  if (resultType === null || resultType === undefined) return null;
+  if (isExamType(resultType)) return getExamResult(resultType).name;
+  return `タイプ ${resultType}`;
+}
+
 // SSR や mount 前の安全フォールバック。UI 側が分岐なしで render できる shape。
 export const EMPTY_MYPAGE_DATA: MypageData = {
-  header: { applicantType: null },
+  header: { applicantType: null, applicantTypeLabel: null },
   summary: {
     totalActivityCount: 0,
     statementLatest: null,
@@ -272,6 +287,7 @@ export function loadMypageData(): MypageData {
       name: basicInfo?.name?.trim() ? basicInfo.name : undefined,
       grade: basicInfo?.grade?.trim() ? basicInfo.grade : undefined,
       applicantType: diagnosis?.resultType ?? null,
+      applicantTypeLabel: formatApplicantType(diagnosis?.resultType ?? null),
     },
     summary: {
       totalActivityCount,
@@ -489,7 +505,7 @@ function recentActivitiesAll(
       date: src.diagnosisCreatedAt,
       feature: 'diagnosis',
       label: '受験タイプ診断',
-      detail: `タイプ ${diagnosis.resultType}`,
+      detail: formatApplicantType(diagnosis.resultType) ?? undefined,
     });
   }
 

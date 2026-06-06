@@ -35,6 +35,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# 環境変数サンプル（プレースホルダのみ・実値なし）は追跡する。
+!.env.example
 
 # vercel
 .vercel
