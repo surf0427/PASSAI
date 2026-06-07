@@ -68,26 +68,24 @@
    ──────────────────────────────────────────────────────────── */
 
 :root {
+  /* ライトテーマ固定。OS のダークモード設定には依存しない。
+     かつて prefers-color-scheme: dark で body を黒く反転していたが、
+     iPhone / Safari で白カード・フォームと混在して視認性が崩れるため、
+     リリース前の安全対応としてダークモード対応を廃止しライト固定にした。 */
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #111827;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ページ全体をライトとして描画するよう UA に宣言する。
+   これによりスクロールバー・フォーム・autofill・日付ピッカー等の
+   ネイティブ UI が OS のダークモード設定に関わらず明色で描画され、
+   iOS Safari がフォーム文字色を自動でダーク化するのも防ぐ。 */
+html {
+  color-scheme: light;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
-}
-
-/* フォーム要素はダークモードでもライトテーマで描画する。
-   iOS Safari がシステムのダークモード設定をフォーム要素の文字色に
-   自動適用するのを防ぎ、Tailwind の text-slate-900 を確実に効かせる。 */
-input, textarea, select {
-  color-scheme: light;
 }
