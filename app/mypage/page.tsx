@@ -27,6 +27,7 @@ import { ScoreLineChart } from './ScoreLineChart';
 import { EmptyState } from './EmptyState';
 import { BillingCard } from './BillingCard';
 import { UsageStatusCard } from './UsageStatusCard';
+import { LoginNudge } from './LoginNudge';
 
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
@@ -75,6 +76,10 @@ export default function MyPage() {
             : '学習の積み重ねとスコアの推移をひと目で。'
         }
       />
+
+      {/* ── ログイン誘導（STEP-AUTH-P0） ───────────────────
+          匿名 / メール未連携のときだけ表示。永続ユーザーには出さない。 */}
+      <LoginNudge />
 
       {/* ── プロフィール小バナー ─────────────────────────── */}
       <ProfileBanner header={header} />

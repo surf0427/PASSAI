@@ -38,6 +38,13 @@ type AuthContextValue = {
   profileError: string | null;
   setProfile: (profile: Profile) => void;
   retryProfile: () => Promise<void>;
+  // STEP-AUTH-P0: メール連携済み（= 別端末でも復帰できる永続ユーザー）か。
+  //   判定基準: auth.users.email が存在する、または匿名でない。
+  //   匿名のまま / 未確定（auth pending）は false。認証キーではなく、
+  //   UI のログイン誘導出し分けにのみ使う（identity は currentUserId のまま）。
+  isPermanentUser: boolean;
+  /** STEP-AUTH-P0: 確定済みメール。匿名 / 未確定は null。表示・誘導用。 */
+  userEmail: string | null;
 };
 
 const AuthContext = createContext<AuthContextValue>({
@@ -49,6 +56,8 @@ const AuthContext = createContext<AuthContextValue>({
   profileError: null,
   setProfile: () => {},
   retryProfile: async () => {},
+  isPermanentUser: false,
+  userEmail: null,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -58,6 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profileReady, setProfileReady] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  // STEP-AUTH-P0: 永続ユーザー判定（メール連携済み or 非匿名）。
+  const [isPermanentUser, setIsPermanentUser] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   // retryProfile が常に最新の userId を参照できるよう ref に保持。
   const currentUserIdRef = useRef<string | null>(null);
@@ -70,6 +82,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       if (authResult.kind === 'ok') {
         setCurrentUserId(authResult.userId);
+        // STEP-AUTH-P0: email があれば永続、無くても is_anonymous=false なら永続。
+        setIsPermanentUser(
+          authResult.email !== null || authResult.isAnonymous === false,
+        );
+        setUserEmail(authResult.email);
         setAuthError(null);
       } else if (authResult.kind === 'no-env') {
         setAuthError(
@@ -303,6 +320,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profileError,
         setProfile,
         retryProfile,
+        isPermanentUser,
+        userEmail,
       }}
     >
       {children}
@@ -316,6 +335,19 @@ export function useCurrentUserId(): string | null {
 
 export function useProfile(): Profile | null {
   return useContext(AuthContext).profile;
+}
+
+/**
+ * STEP-AUTH-P0: メール連携済み（別端末でも復帰できる永続ユーザー）か。
+ * 匿名 / 未確定は false。ログイン誘導の出し分けに使う。
+ */
+export function useIsPermanentUser(): boolean {
+  return useContext(AuthContext).isPermanentUser;
+}
+
+/** STEP-AUTH-P0: 確定済みメール（匿名 / 未確定は null）。表示・誘導用。 */
+export function useUserEmail(): string | null {
+  return useContext(AuthContext).userEmail;
 }
 
 export function useSetProfile(): (profile: Profile) => void {
