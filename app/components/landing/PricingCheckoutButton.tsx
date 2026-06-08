@@ -6,24 +6,31 @@
  *
  * 振る舞い:
  *   1. クリック
- *      - 永続ユーザーでない（匿名 / メール未連携）なら checkout せず
- *        `/login?next=/?plan=<plan>#pricing` へ誘導（STEP-AUTH-P0）。
+ *      - 永続ユーザーでない（匿名 / メール未連携）なら checkout せず /login へ誘導。
+ *        戻り先（next）は **現在ページに応じて出し分ける**:
+ *          - LP（/）上     : `/?plan=<plan>#pricing`（従来どおり #pricing にスクロール）
+ *          - /pricing 上   : `/pricing?plan=<plan>`（LP に戻さず /pricing に留める。
+ *                            #pricing hash を付けないため smooth scroll も起きない）
  *        → 課金前にメール OTP ログインを通し、別端末でも同一 user_id に復帰可能にする。
  *      - 永続ユーザーなら POST /api/billing/checkout { plan }。
  *   2. 200 { url } → window.location.href = url で Stripe Checkout に遷移
- *   3. 400 email-required（保険） → /login へ誘導（旧: /account/email）
+ *   3. 400 email-required → /account/email へ誘導（メール登録ページ）。
+ *      ※ /login へ戻すと「ログイン済み→next 自動遷移」で checkout に戻り再び
+ *        email-required となり、/login ↔ #pricing 間で無限ループ（画面が上下に
+ *        往復する症状）になるため、ここはメール登録ページへ送る。
  *   4. その他のエラー → button 下にエラーメッセージを出す
  *   5. auth 未確定 / loading 中は disabled
  *
  * ログイン後の自動再開:
- *   /login が `next=/?plan=<plan>#pricing` に戻すと、本コンポーネントが mount 時に
- *   URL の `plan` を読み、永続ユーザーになっていれば checkout を 1 回だけ自動発火する。
+ *   /login が `next` に `?plan=<plan>` を含めて戻すと（LP / pricing いずれの形でも）、
+ *   本コンポーネントが mount 時に URL の `plan` を読み、永続ユーザーになっていれば
+ *   checkout を 1 回だけ自動発火する。
  *
  * 親 (PricingSection) のスタイルを維持するため、ボタンの className は
  * 旧 <Link> と同等にする (bg-{brand|accent}-600 / rounded-xl / shadow-sm)。
  */
 
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import {
@@ -48,6 +55,7 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   const userId = useCurrentUserId();
   const isPermanentUser = useIsPermanentUser();
   const router = useRouter();
+  const pathname = usePathname();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // ログイン後の自動再開を 1 回に限定するガード。
@@ -56,8 +64,13 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   const disabled = loading || userId === null;
 
   // STEP-AUTH-P0: 未ログイン時はログインへ誘導してから checkout に戻す。
+  // 戻り先は現在ページで出し分ける。/pricing 上では LP（/?plan=...#pricing）に
+  // 戻さず /pricing に留め、#pricing への smooth scroll（画面の上下往復）を避ける。
   function redirectToLogin() {
-    const next = `/?plan=${plan}#pricing`;
+    const next =
+      pathname === '/pricing'
+        ? `/pricing?plan=${plan}`
+        : `/?plan=${plan}#pricing`;
     router.push(`/login?next=${encodeURIComponent(next)}`);
   }
 
@@ -72,9 +85,11 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
       });
       const data: CheckoutResponse = await res.json().catch(() => ({}));
 
-      // 保険: 永続判定をすり抜けても email 未設定なら checkout が弾く → /login へ。
+      // 永続ユーザーだが email 未登録（isAnonymous=false でも email=null はあり得る）。
+      // /login へ戻すと「ログイン済み→next 自動遷移」で checkout に戻り再び
+      // email-required となり無限ループ（画面が上下に往復）するため、メール登録ページへ。
       if (res.status === 400 && data.error === 'email-required') {
-        redirectToLogin();
+        router.push('/account/email');
         return;
       }
 
