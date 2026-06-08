@@ -3,10 +3,10 @@
  *
  * - `STRIPE_SECRET_KEY` は server-only secret。`import 'server-only'` で
  *   client bundle に紛れ込んだら build error にする。
- * - **テストモード強制ガード**:
- *     - `sk_live_*` を検出したら起動時に throw（本番決済はまだ行わない方針）。
- *     - `sk_test_*` 以外も throw（誤設定の早期検出）。
- *   開業届・銀行口座・Stripe 本番登録が完了するまで本番 key を絶対に受け付けない。
+ * - **環境ごとの key モードガード**:
+ *     - `NODE_ENV=production` では `sk_live_*` を要求（それ以外は起動時 throw）。
+ *     - development / test / 未定義では `sk_test_*` を要求（誤設定の早期検出）。
+ *   本番に test key、開発に live key が紛れ込む取り違えを起動時に弾く。
  * - Singleton。re-init コストを避けるため module-scope cache。
  * - apiVersion は SDK 同梱版を明示 pin（2026-05-27.dahlia / stripe v22）。SDK
  *   upgrade 時はここを変更して挙動差分を意識的にレビューする。
@@ -32,15 +32,16 @@ function readStripeSecretKey(): string {
   if (!key) {
     throw new Error('STRIPE_SECRET_KEY is not set');
   }
-  if (key.startsWith('sk_live_')) {
+
+  // 本番は live、それ以外（development / test / 未定義）は test を要求する。
+  const isProd = process.env.NODE_ENV === 'production';
+  const expectedPrefix = isProd ? 'sk_live_' : 'sk_test_';
+
+  if (!key.startsWith(expectedPrefix)) {
+    const mode = isProd ? 'production' : (process.env.NODE_ENV ?? 'development');
     throw new Error(
-      'STRIPE_SECRET_KEY is a live-mode key. This app is locked to test mode ' +
-        '(sk_test_*) until production billing is approved.',
-    );
-  }
-  if (!key.startsWith('sk_test_')) {
-    throw new Error(
-      'STRIPE_SECRET_KEY must start with sk_test_ (test mode only).',
+      `STRIPE_SECRET_KEY must start with "${expectedPrefix}" in ${mode} ` +
+        `(NODE_ENV=${process.env.NODE_ENV ?? 'undefined'}).`,
     );
   }
   return key;
