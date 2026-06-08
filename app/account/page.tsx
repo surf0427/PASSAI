@@ -2,8 +2,7 @@
 
 // STEP-AUTH-02 / AUTH DEBUG FIX 01 / STEP-AUTH-ACCOUNT-REDIRECT-01 /
 // STEP-AUTH-EMAIL-OPTIN-01:
-//   display_user_id 設定 UI + 観察可能性 + 保存成功時の次画面遷移 +
-//   任意メール登録 (/account/email) への導線。
+//   display_user_id 設定 UI + 観察可能性 + 保存成功時の次画面遷移。
 //
 // Auth Debug panel は通常画面から削除。auth 不整合の観察可能性は
 // `lib/devLog.ts` の console 出力で代替する。
@@ -15,7 +14,6 @@ import { Button } from '@/components/ui/Button';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { LinkButton } from '@/components/ui/LinkButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AlertBox } from '@/components/ui/AlertBox';
 import {
@@ -246,25 +244,6 @@ export default function AccountPage() {
           </div>
 
           {statusBanner}
-        </div>
-      </Card>
-
-      <Card padding="md" className="mt-6">
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-slate-800">
-            メールアドレス（任意）
-          </h2>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            端末変更時の復元や重要なお知らせ用に、任意でメールを登録できます。
-          </p>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            登録しなくても基本機能はそのまま使えます。
-          </p>
-          <div>
-            <LinkButton href="/account/email" variant="outline" size="md">
-              任意でメールアドレスを登録する
-            </LinkButton>
-          </div>
         </div>
       </Card>
     </div>

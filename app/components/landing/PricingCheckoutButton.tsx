@@ -14,10 +14,8 @@
  *        → 課金前にメール OTP ログインを通し、別端末でも同一 user_id に復帰可能にする。
  *      - 永続ユーザーなら POST /api/billing/checkout { plan }。
  *   2. 200 { url } → window.location.href = url で Stripe Checkout に遷移
- *   3. 400 email-required → /account/email へ誘導（メール登録ページ）。
- *      ※ /login へ戻すと「ログイン済み→next 自動遷移」で checkout に戻り再び
- *        email-required となり、/login ↔ #pricing 間で無限ループ（画面が上下に
- *        往復する症状）になるため、ここはメール登録ページへ送る。
+ *   3. 400 email-required → /login へ誘導（メールOTPログインで email を確定させる）。
+ *      ※ OTP 導線では login で必ず email が付くため、この退避ケースは実質発生しない。
  *   4. その他のエラー → button 下にエラーメッセージを出す
  *   5. auth 未確定 / loading 中は disabled
  *
@@ -86,10 +84,10 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
       const data: CheckoutResponse = await res.json().catch(() => ({}));
 
       // 永続ユーザーだが email 未登録（isAnonymous=false でも email=null はあり得る）。
-      // /login へ戻すと「ログイン済み→next 自動遷移」で checkout に戻り再び
-      // email-required となり無限ループ（画面が上下に往復）するため、メール登録ページへ。
+      // メールOTPログインで email を確定させるため /login へ誘導する。
+      // OTP 導線では login で必ず email が付くため、この退避ケースは実質発生しない。
       if (res.status === 400 && data.error === 'email-required') {
-        router.push('/account/email');
+        router.push('/login');
         return;
       }
 

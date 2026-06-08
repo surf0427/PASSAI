@@ -17,7 +17,7 @@
 //   - cookie 書き込みは既存 getServerSupabaseClient（@supabase/ssr の setAll）
 //     に委譲。route handler 文脈では cookie 変更が応答に反映される。
 //   - never throw。失敗・欠落・不正 type はすべて
-//     /account/email?error=auth_callback へ redirect。
+//     /login?error=auth_callback へ redirect。
 //   - 成功は /home へ redirect（未課金は client 側 PlanGate が /pricing へ送る）。
 //   - 匿名認証フロー・AuthProvider には非干渉（明示リンク click 経由のみ）。
 
@@ -55,7 +55,7 @@ export async function GET(request: Request): Promise<Response> {
   const type = requestUrl.searchParams.get('type');
 
   const errorRedirect = NextResponse.redirect(
-    `${origin}/account/email?error=auth_callback`,
+    `${origin}/login?error=auth_callback`,
   );
 
   const supabase = await getServerSupabaseClient();
