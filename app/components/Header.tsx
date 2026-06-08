@@ -29,6 +29,9 @@ const LP_NAV_LINKS = [
 export function Header() {
   const pathname = usePathname();
   const isLanding = pathname === '/';
+  // 認証ページ（/login）では Home / 基本情報 のナビを出さず、ロゴのみ表示する。
+  // ログイン完了までユーザーを導くのが目的で、他ページへの導線は不要なため。
+  const isAuthPage = pathname === '/login';
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm">
@@ -58,7 +61,7 @@ export function Header() {
               有料サイトへ
             </Link>
           </>
-        ) : (
+        ) : isAuthPage ? null : (
           <nav className="flex items-center gap-1">
             <NavLink href="/home" pathname={pathname}>Home</NavLink>
             <NavLink href="/input/basic" pathname={pathname}>基本情報</NavLink>
