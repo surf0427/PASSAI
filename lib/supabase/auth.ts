@@ -134,9 +134,13 @@ export type SignInWithEmailOtpResult =
  *     ように「初回購入者の新規登録」と「既存ユーザーの別端末ログイン」を
  *     同一入口で扱う用途のためのフラグ。display_user_id は認証キーにしない原則は
  *     不変（identity は常に auth.users.id / email）。
- *   - 本関数は **OTP を送るだけ**。現在のセッション（匿名 / 既存）は変更しない
- *     ＝ 呼んだだけで勝手にログアウトしない。セッション切替は (a) リンク click 後の
- *     `/auth/callback`、または (b) `verifyEmailOtp()` でコード検証したときに起きる。
+ *   - 送信前に **ローカルセッションを破棄** する。匿名セッションが残ったまま
+ *     `signInWithOtp` を呼ぶと、Supabase がこれを「現在の(匿名)ユーザーへの
+ *     email 追加＝メール変更」と解釈し、ログイン用 OTP ではなく
+ *     「Confirm your new email address」確認メールを送ってしまうため
+ *     （未認証状態で叩くと正しい sign-in OTP / マジックリンクが届く）。
+ *     セッション確立は (a) リンク click 後の `/auth/callback`、または
+ *     (b) `verifyEmailOtp()` でコード検証したときに起きる。
  *   - never throw。discriminated result を返す。
  *   - 未登録メールの扱い（Supabase が error を返すか success を返すか）は
  *     設定依存のため、UI 側は一般化した文言で表示する責務を持つ
@@ -150,6 +154,17 @@ export async function signInWithEmailOtp(
   if (!supabase) {
     devWarn("[auth] signInWithEmailOtp: no env");
     return { kind: "no-env" };
+  }
+
+  // 匿名セッションが残っていると signInWithOtp が「メール変更」と解釈され、
+  // 「Confirm your new email address」が送られてしまう。ログイン用 OTP を
+  // 送るため、送信前にローカルセッションだけ破棄して未認証状態にする。
+  // （匿名ユーザーのデータは localStorage が正本で AuthProvider が再 backfill するため、
+  //   ここでローカルセッションを切っても利用者視点のデータ欠落は起きない）
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch (err) {
+    devWarn("[auth] signInWithEmailOtp: local signOut before OTP failed (continuing)", err);
   }
 
   try {
