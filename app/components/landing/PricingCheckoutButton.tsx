@@ -83,11 +83,14 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
       });
       const data: CheckoutResponse = await res.json().catch(() => ({}));
 
-      // 永続ユーザーだが email 未登録（isAnonymous=false でも email=null はあり得る）。
-      // メールOTPログインで email を確定させるため /login へ誘導する。
-      // OTP 導線では login で必ず email が付くため、この退避ケースは実質発生しない。
+      // email 未登録（匿名 / is_anonymous 取得失敗で permanent 扱いだが email=null）。
+      // 課金にはメールOTPログインが必須。希望プランを next に保持して /login へ誘導する
+      // （redirectToLogin が /login?next=/pricing?plan=<plan> を組み立てる）。
+      // setLoading(false) を必ず呼び、ボタンが「読み込み中…」で固まるのを防ぐ。
       if (res.status === 400 && data.error === 'email-required') {
-        router.push('/login');
+        setError('課金にはメールログインが必要です。ログインページへ移動します。');
+        setLoading(false);
+        redirectToLogin();
         return;
       }
 

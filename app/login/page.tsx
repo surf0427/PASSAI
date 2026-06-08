@@ -31,7 +31,11 @@ import { Card } from '@/components/ui/Card';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { useAuthDebug, useIsPermanentUser } from '@/app/components/AuthProvider';
+import {
+  useAuthDebug,
+  useIsPermanentUser,
+  useUserEmail,
+} from '@/app/components/AuthProvider';
 import { signInWithEmailOtp, verifyEmailOtp } from '@/lib/supabase/auth';
 import { isValidEmailFormat } from '@/lib/supabase/email';
 
@@ -62,13 +66,19 @@ function LoginForm() {
     [searchParams],
   );
 
-  // 既ログイン（永続セッションあり）なら OTP を要求せず safeNext へ。
+  // 既ログイン（永続セッション かつ email 確定済み）なら OTP を要求せず safeNext へ。
   // 匿名セッションは isPermanentUser=false のため対象外。認可（課金）判定は
   // 遷移先で PlanGate に委ねる（ここでは plan に触れない）。
+  //
+  // email 未確定の「permanent 扱い」ユーザー（is_anonymous 取得失敗等で
+  // isPermanentUser=true だが email=null）は OTP を通させる必要があるため除外する。
+  // これがないと checkout の email-required で /login に送っても即 safeNext へ弾かれ、
+  // /pricing に戻って「押しても無反応」に見える。
   const router = useRouter();
   const isPermanentUser = useIsPermanentUser();
+  const userEmail = useUserEmail();
   const { authReady } = useAuthDebug();
-  const alreadyLoggedIn = authReady && isPermanentUser;
+  const alreadyLoggedIn = authReady && isPermanentUser && userEmail !== null;
 
   useEffect(() => {
     if (alreadyLoggedIn) {
