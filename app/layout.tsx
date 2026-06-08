@@ -4,6 +4,7 @@ import "./globals.css";
 import { Header } from "@/app/components/Header";
 import { DevValidationStatsHook } from "@/app/components/DevValidationStatsHook";
 import { AuthProvider } from "@/app/components/AuthProvider";
+import { PlanGate } from "@/app/components/PlanGate";
 import { BRAND_NAME } from "@/lib/brand";
 
 const geistSans = Geist({
@@ -36,7 +37,10 @@ export default function RootLayout({
           <Header />
           <DevValidationStatsHook />
           {/* pt-14 は fixed ヘッダー（h-14 = 56px）の高さ分の余白 */}
-          <main className="flex-1 pt-14">{children}</main>
+          {/* PlanGate: 未課金ユーザーを本体機能ページから /pricing へ送る認可ガード */}
+          <main className="flex-1 pt-14">
+            <PlanGate>{children}</PlanGate>
+          </main>
         </AuthProvider>
       </body>
     </html>

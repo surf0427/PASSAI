@@ -20,6 +20,7 @@ type ProfileRow = {
   id: string;
   display_user_id: string | null;
   plan: string;
+  is_qa_user: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -29,12 +30,14 @@ function toProfile(row: ProfileRow): Profile {
     id: row.id,
     displayUserId: row.display_user_id,
     plan: row.plan,
+    isQaUser: row.is_qa_user,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-const PROFILE_COLUMNS = "id, display_user_id, plan, created_at, updated_at";
+const PROFILE_COLUMNS =
+  "id, display_user_id, plan, is_qa_user, created_at, updated_at";
 
 export type LoadProfileResult =
   | { kind: "ok"; profile: Profile }

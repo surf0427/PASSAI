@@ -12,8 +12,8 @@ import { Logo } from '@/app/components/Logo';
 // 機能を増やしてもここは増やさない前提のため、配列＋map ではなく直書きにする。
 //
 // LP（pathname === '/'）だけは別仕様：
-//   - PC：Logo（左）/ アンカーナビ 5 本（中央）/「有料サイトへ」ボタン（右）
-//   - スマホ：アンカーナビは隠して、Logo +「有料サイトへ」だけ表示（圧迫回避）
+//   - PC：Logo（左）/ アンカーナビ 5 本（中央）/「PASSAIを始める」ボタン（右）
+//   - スマホ：アンカーナビは隠して、Logo +「PASSAIを始める」だけ表示（圧迫回避）
 // アンカーリンクは <a href="#..."> でページ内移動。スムーズスクロールと
 // 固定ヘッダ分のオフセットは layout.tsx の <html> に
 // `scroll-smooth scroll-pt-14` を付けて実現している。
@@ -53,7 +53,7 @@ export function Header() {
               ))}
             </nav>
 
-            {/* 「有料サイトへ」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
+            {/* 「PASSAIを始める」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
             <Link
               href="/login"
               className="ml-auto sm:ml-0 px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"

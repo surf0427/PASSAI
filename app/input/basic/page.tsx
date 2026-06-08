@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import type { BasicInfo, SchoolPreference, SubjectGrades } from '@/types/basicInfo';
 import { saveBasicInfo, loadBasicInfo } from '@/lib/basicInfoStorage';
@@ -9,17 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { FormField } from '@/components/ui/FormField';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Accordion } from '@/components/ui/Accordion';
-import {
-  useAuthDebug,
-  useCurrentUserId,
-  useProfile,
-} from '@/app/components/AuthProvider';
-
-// STEP-AUTH-GUARD-01: display_user_id 必須化。
-//   profile を読み込み終わったタイミングで display_user_id 未設定なら
-//   /account へ router.replace で誘導する。/account 側には guard を入れず、
-//   /account → /input/basic は保存成功時のみ遷移するため無限ループしない。
-const ACCOUNT_ROUTE = '/account';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 
 type FormErrors = {
   name?: string;
@@ -130,32 +120,10 @@ export default function BasicInfoPage() {
   );
   const [errors, setErrors] = useState<FormErrors>({});
 
-  // STEP-AUTH-GUARD-01: display_user_id guard。
-  //   - authReady=false:                認証決着待ち（preparation 表示）
-  //   - authReady=true, currentUserId=null: 認証取得失敗 → fail-open で form を表示
-  //                                       （/account から自力で再試行できる）
-  //   - currentUserId 取得済, profileReady=false: profile 取得待ち（preparation）
-  //   - profileReady=true, profile=null:  profile 取得失敗 → fail-open で form を表示
-  //   - profileReady=true, displayUserId 未設定:  /account へ router.replace
-  //   - profileReady=true, displayUserId 設定済:  通常表示
+  // display_user_id を廃止し、プロフィール名は本画面のユーザー名（ニックネーム）へ
+  // 一本化したため、display_user_id 未設定時の /account 強制リダイレクトは撤去。
+  // currentUserId は保存時の basic_info_logs dualWrite でのみ利用する。
   const currentUserId = useCurrentUserId();
-  const profile = useProfile();
-  const { authReady, profileReady } = useAuthDebug();
-
-  const guardResolved =
-    authReady && (currentUserId === null || profileReady);
-
-  const needsDisplayUserId =
-    guardResolved &&
-    currentUserId !== null &&
-    profile !== null &&
-    (profile.displayUserId === null || profile.displayUserId.trim() === '');
-
-  useEffect(() => {
-    if (needsDisplayUserId) {
-      router.replace(ACCOUNT_ROUTE);
-    }
-  }, [needsDisplayUserId, router]);
 
   function handleChange(
     event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -255,18 +223,6 @@ export default function BasicInfoPage() {
   }
 
   if (!isMounted) return null;
-
-  // guard 未決着（認証 / profile 取得中）または redirect 進行中は
-  // フォームを描画せず、最小の準備中表示にとどめる。フォームが一瞬出て
-  // 消えるフラッシュを避けつつ、既存 UI / レイアウトは温存する。
-  if (!guardResolved || needsDisplayUserId) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-12">
-        <PageHeader title="基本情報入力" className="mb-8" />
-        <p className="text-sm text-slate-500">確認中です…</p>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">

@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 // LP の締め。FAQ で不安を解消した直後の「感情に残る最後の一押し」。
 // 上から indigo→blue→white にフェードする縦グラデで「光が差す」雰囲気を作り、
-// 中央寄せの本文 → メイン CTA（外部・別タブ）→ サブ CTA（有料サイト）で締める。
+// 中央寄せの本文 → メイン CTA（凍結中）→ サブ CTA（PASSAIを始める / /login）で締める。
 // Free Diagnosis CTA とのカニバリ回避のため、本文を厚めに、CTA は同色だがコンテキストで差別化。
 
 export function ClosingCtaSection() {

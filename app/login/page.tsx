@@ -22,8 +22,8 @@
 //   - identity は auth.users.id（email は復帰のための鍵）。display_user_id は不使用。
 //   - profiles.plan / is_qa_user / planGate / webhook には一切触れない。
 
-import { Suspense, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { AlertBox } from '@/components/ui/AlertBox';
 import { Button } from '@/components/ui/Button';
@@ -31,10 +31,13 @@ import { Card } from '@/components/ui/Card';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { useAuthDebug, useIsPermanentUser } from '@/app/components/AuthProvider';
 import { signInWithEmailOtp, verifyEmailOtp } from '@/lib/supabase/auth';
 import { isValidEmailFormat } from '@/lib/supabase/email';
 
-const DEFAULT_NEXT = '/mypage';
+// next 未指定時の既定遷移先。本体ホーム。未課金なら PlanGate が /pricing へ送るため、
+// 「課金済み → /home」「未課金 → /pricing」が遷移先の出し分けなしで成立する。
+const DEFAULT_NEXT = '/home';
 
 /**
  * open-redirect 防止: `next` は **同一オリジンの相対パス** のみ許可する。
@@ -58,6 +61,20 @@ function LoginForm() {
     () => sanitizeNext(searchParams.get('next')),
     [searchParams],
   );
+
+  // 既ログイン（永続セッションあり）なら OTP を要求せず safeNext へ。
+  // 匿名セッションは isPermanentUser=false のため対象外。認可（課金）判定は
+  // 遷移先で PlanGate に委ねる（ここでは plan に触れない）。
+  const router = useRouter();
+  const isPermanentUser = useIsPermanentUser();
+  const { authReady } = useAuthDebug();
+  const alreadyLoggedIn = authReady && isPermanentUser;
+
+  useEffect(() => {
+    if (alreadyLoggedIn) {
+      router.replace(safeNext);
+    }
+  }, [alreadyLoggedIn, router, safeNext]);
 
   const [step, setStep] = useState<Step>({ kind: 'email' });
 
@@ -143,6 +160,14 @@ function LoginForm() {
       return;
     }
     setVerifyError('コードを再送できませんでした。少し待って再度お試しください。');
+  }
+
+  if (alreadyLoggedIn) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-10 text-sm text-slate-500">
+        ログイン済みです。移動しています…
+      </div>
+    );
   }
 
   return (

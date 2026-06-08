@@ -15,6 +15,8 @@ export type Profile = {
   displayUserId: string | null;
   /** 課金プラン。Phase1 では 'free' のみ。Stripe 連携は別 STEP。 */
   plan: string;
+  /** QA バイパスフラグ。true なら quota / 課金ゲートを素通しする（service_role のみ更新可）。 */
+  isQaUser: boolean;
   /** ISO8601 文字列。 */
   createdAt: string;
   /** ISO8601 文字列。 */

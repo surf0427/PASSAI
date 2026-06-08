@@ -18,7 +18,7 @@
 //     に委譲。route handler 文脈では cookie 変更が応答に反映される。
 //   - never throw。失敗・欠落・不正 type はすべて
 //     /account/email?error=auth_callback へ redirect。
-//   - 成功は /mypage へ redirect。
+//   - 成功は /home へ redirect（未課金は client 側 PlanGate が /pricing へ送る）。
 //   - 匿名認証フロー・AuthProvider には非干渉（明示リンク click 経由のみ）。
 
 import { NextResponse } from 'next/server';
@@ -75,7 +75,7 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
-    return NextResponse.redirect(`${origin}/mypage`);
+    return NextResponse.redirect(`${origin}/home`);
   }
 
   // (2) token_hash + 許可された type 形式（{{ .TokenHash }} テンプレ）。
@@ -94,7 +94,7 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
-    return NextResponse.redirect(`${origin}/mypage`);
+    return NextResponse.redirect(`${origin}/home`);
   }
 
   // code も (token_hash + 正当な type) も無い / 不明 type → error。
