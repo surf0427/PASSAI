@@ -69,10 +69,10 @@ export function ClosingCtaSection() {
               完全一致しないため（text-sm sm:text-base）、ここは Link のまま残し、
               次の PR で「subtle」size を追加するときに揃える。 */}
           <Link
-            href="/home"
+            href="/login"
             className="inline-flex justify-center items-center bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold text-sm sm:text-base px-6 py-3 rounded-xl transition-colors"
           >
-            有料サイトを見る
+            PASSAIを始める
           </Link>
         </div>
       </div>

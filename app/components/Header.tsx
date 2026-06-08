@@ -55,10 +55,10 @@ export function Header() {
 
             {/* 「有料サイトへ」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
             <Link
-              href="/home"
+              href="/login"
               className="ml-auto sm:ml-0 px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"
             >
-              有料サイトへ
+              PASSAIを始める
             </Link>
           </>
         ) : isAuthPage ? null : (

@@ -1,0 +1,68 @@
+<!--
+  PASSAI Email Template — Magic Link（既存ユーザーのログイン時に使用）
+  貼り付け先: Supabase Dashboard → Authentication → Emails → Templates → Magic Link
+  件名 (Subject heading): PASSAI 認証コード
+  - 主役は 6 桁コード {{ .Token }}
+  - リンク {{ .ConfirmationURL }} は補助として残す
+-->
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#f1f5f9;margin:0;padding:24px 0;">
+  <tr>
+    <td align="center">
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width:440px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif;">
+        <!-- header / logo -->
+        <tr>
+          <td style="padding:28px 32px 20px 32px;">
+            <span style="display:inline-block;width:24px;height:24px;background-color:#0f172a;border-radius:6px;color:#ffffff;text-align:center;line-height:24px;font-weight:800;font-size:14px;vertical-align:middle;">&rarr;</span>
+            <span style="font-size:18px;font-weight:800;letter-spacing:-0.02em;vertical-align:middle;margin-left:8px;color:#0f172a;">PASS<span style="color:#2563eb;">AI</span></span>
+          </td>
+        </tr>
+        <!-- body -->
+        <tr>
+          <td style="padding:0 32px 8px 32px;">
+            <h1 style="margin:0 0 12px 0;font-size:18px;font-weight:700;color:#0f172a;">ログイン用の認証コード</h1>
+            <p style="margin:0 0 24px 0;font-size:14px;line-height:1.7;color:#475569;">
+              下記の 6 桁コードをログイン画面のコード入力欄に入力してください。
+            </p>
+          </td>
+        </tr>
+        <!-- code -->
+        <tr>
+          <td style="padding:0 32px 24px 32px;">
+            <div style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px;text-align:center;">
+              <div style="font-size:32px;font-weight:800;letter-spacing:0.35em;color:#0f172a;font-family:'SF Mono',Menlo,Consolas,monospace;">{{ .Token }}</div>
+            </div>
+            <p style="margin:12px 0 0 0;font-size:12px;line-height:1.6;color:#94a3b8;text-align:center;">
+              コードの有効期限は約 1 時間です。
+            </p>
+          </td>
+        </tr>
+        <!-- divider -->
+        <tr>
+          <td style="padding:0 32px;">
+            <div style="border-top:1px solid #e2e8f0;"></div>
+          </td>
+        </tr>
+        <!-- magic link (補助) -->
+        <tr>
+          <td style="padding:20px 32px 8px 32px;">
+            <p style="margin:0 0 12px 0;font-size:13px;line-height:1.7;color:#64748b;">
+              コードを入力する代わりに、下のボタンからもログインできます。
+            </p>
+            <a href="{{ .ConfirmationURL }}" style="display:inline-block;background-color:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 20px;border-radius:10px;">
+              ボタンでログイン
+            </a>
+          </td>
+        </tr>
+        <!-- footer -->
+        <tr>
+          <td style="padding:24px 32px 28px 32px;">
+            <p style="margin:0;font-size:12px;line-height:1.7;color:#94a3b8;">
+              このメールに心当たりがない場合は、破棄していただいて問題ありません。
+            </p>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:16px 0 0 0;font-size:11px;color:#cbd5e1;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">PASSAI</p>
+    </td>
+  </tr>
+</table>
