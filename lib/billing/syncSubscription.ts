@@ -101,9 +101,17 @@ export async function syncSubscriptionFromStripe(
     };
   }
 
-  const effectivePlan = await syncProfilePlan({ supabase, userId });
+  const profileSync = await syncProfilePlan({ supabase, userId });
+  if (profileSync.error) {
+    // profiles.plan は planGate が読む権利の正本。書けなかった場合は
+    // 課金済みでも free 扱いになるため、transient 扱いで 500 → Stripe 再送に委ねる。
+    return {
+      kind: 'db-error',
+      message: `profiles plan update failed: ${profileSync.error}`,
+    };
+  }
 
-  return { kind: 'ok', userId, plan, effectivePlan };
+  return { kind: 'ok', userId, plan, effectivePlan: profileSync.effectivePlan };
 }
 
 function unixSecondsToIso(seconds: number | null | undefined): string | null {
@@ -134,7 +142,7 @@ async function resolveUserId(input: {
 async function syncProfilePlan(input: {
   supabase: SupabaseClient;
   userId: string;
-}): Promise<EffectivePlan> {
+}): Promise<{ effectivePlan: EffectivePlan; error: string | null }> {
   const { data: rows } = await input.supabase
     .from('subscriptions')
     .select('plan, status, current_period_end, cancel_at_period_end')
@@ -144,12 +152,12 @@ async function syncProfilePlan(input: {
 
   // profiles.plan は §24 trigger により anon/authenticated は書けない。
   // service_role はスルーなのでこの UPDATE は通る。
-  await input.supabase
+  const { error } = await input.supabase
     .from('profiles')
     .update({ plan: effectivePlan })
     .eq('id', input.userId);
 
-  return effectivePlan;
+  return { effectivePlan, error: error ? error.message : null };
 }
 
 type SubscriptionRow = {
