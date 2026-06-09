@@ -49,6 +49,13 @@ type CheckoutResponse = {
   message?: string;
 };
 
+// checkout の auto-resume を「セッション中 plan ごとに 1 回だけ」に制限する module
+// スコープのガード。useRef はマウント単位のため、checkout 失敗 → /login → 既ログイン
+// 判定で /pricing?plan=... へ戻る（soft-nav remount）たびにリセットされ、auto-resume
+// が再発火して /api/billing/checkout を連打する（コンソールに 400 が大量発生）。
+// module スコープなら soft-nav の remount をまたいで保持されるため連打を止められる。
+const autoResumeAttemptedPlans = new Set<string>();
+
 export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   const userId = useCurrentUserId();
   const isPermanentUser = useIsPermanentUser();
@@ -70,6 +77,16 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
         ? `/pricing?plan=${plan}`
         : `/?plan=${plan}#pricing`;
     router.push(`/login?next=${encodeURIComponent(next)}`);
+  }
+
+  // checkout 失敗後に URL から ?plan= を取り除く。?plan が残ると remount 時に
+  // auto-resume の発火条件（params.plan === plan）が成立し続けて連打になるため、
+  // 明示的に消す。同一 route の searchParam 変更なので page は再mountされない。
+  function clearPlanQuery() {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('plan')) return;
+    router.replace(pathname, { scroll: false });
   }
 
   async function startCheckout() {
@@ -97,12 +114,14 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
       if (res.status === 401) {
         setError('ログインが確認できませんでした。ページを再読み込みしてください。');
         setLoading(false);
+        clearPlanQuery();
         return;
       }
 
       if (!res.ok || !data.url) {
         setError(data.message ?? 'チェックアウトを開始できませんでした。');
         setLoading(false);
+        clearPlanQuery();
         return;
       }
 
@@ -111,6 +130,7 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
     } catch {
       setError('通信エラーが発生しました。時間をおいてお試しください。');
       setLoading(false);
+      clearPlanQuery();
     }
   }
 
@@ -132,6 +152,10 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('plan') !== plan) return;
+    // module スコープのガード: checkout 失敗 → /login → /pricing?plan=... 復帰の
+    // remount をまたいでも「plan ごと 1 回だけ」に制限し、400 連打を止める。
+    if (autoResumeAttemptedPlans.has(plan)) return;
+    autoResumeAttemptedPlans.add(plan);
     autoResumedRef.current = true;
     const id = window.setTimeout(() => {
       void startCheckout();

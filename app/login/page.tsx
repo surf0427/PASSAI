@@ -118,7 +118,10 @@ function LoginForm() {
     setSending(true);
     setSendError(null);
     // allowSignup: 初回購入者（未登録メール）も発行し、既存ユーザーはログイン。
-    const result = await signInWithEmailOtp(email, { allowSignup: true });
+    const result = await signInWithEmailOtp(email, {
+      allowSignup: true,
+      next: safeNext,
+    });
     setSending(false);
     if (result.kind === 'ok') {
       setStep({ kind: 'code', email });
@@ -164,7 +167,10 @@ function LoginForm() {
     if (step.kind !== 'code') return;
     setVerifying(false);
     setVerifyError(null);
-    const result = await signInWithEmailOtp(step.email, { allowSignup: true });
+    const result = await signInWithEmailOtp(step.email, {
+      allowSignup: true,
+      next: safeNext,
+    });
     if (result.kind === 'ok') {
       setResent(true);
       return;

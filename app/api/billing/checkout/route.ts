@@ -30,6 +30,7 @@
 import 'server-only';
 
 import { NextResponse } from 'next/server';
+import type { User } from '@supabase/supabase-js';
 import type Stripe from 'stripe';
 
 import { isPlanId } from '@/lib/billing/plans';
@@ -41,6 +42,55 @@ import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// 課金メール解決。Magic Link 経由などで top-level `user.email` が null でも、
+// `user_metadata.email` / `identities[].identity_data.email` に確定メールが入って
+// いるケースがあるため、複数ソースから最初の有効なメールを採用する。
+// （server-only route のため client 専用の isValidEmailFormat は import せず、
+//   同等の簡易バリデーションをここに inline する。認証方式は不変。）
+type CheckoutEmailSource =
+  | 'user.email'
+  | 'user_metadata.email'
+  | 'identity.identity_data.email'
+  | 'none';
+
+const CHECKOUT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isEmailLike(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 254 &&
+    CHECKOUT_EMAIL_RE.test(value)
+  );
+}
+
+function getCheckoutEmail(user: User): {
+  email: string | null;
+  source: CheckoutEmailSource;
+} {
+  if (isEmailLike(user.email)) {
+    return { email: user.email, source: 'user.email' };
+  }
+  const metaEmail = user.user_metadata?.email;
+  if (isEmailLike(metaEmail)) {
+    return { email: metaEmail, source: 'user_metadata.email' };
+  }
+  for (const identity of user.identities ?? []) {
+    const idEmail = identity.identity_data?.email;
+    if (isEmailLike(idEmail)) {
+      return { email: idEmail, source: 'identity.identity_data.email' };
+    }
+  }
+  return { email: null, source: 'none' };
+}
+
+// ログ用 masked email（生メールは出さない）。先頭1文字 + ドメインのみ残す。
+function maskEmail(email: string): string {
+  const at = email.indexOf('@');
+  if (at <= 0) return '***';
+  return `${email.slice(0, 1)}***@${email.slice(at + 1)}`;
+}
 
 export async function POST(req: Request) {
   const t0 = Date.now();
@@ -82,10 +132,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const userId = userData.user.id;
-  const email = userData.user.email;
+  // top-level user.email だけでなく user_metadata / identities も見て解決する。
+  const resolved = getCheckoutEmail(userData.user);
+  const email = resolved.email;
+
+  // 一時診断ログ（TODO: 根本原因確認後に削除）。生メールは出さず masked / boolean のみ。
+  // email が user.email・user_metadata・identities のどこに入っているかを確認する。
+  console.warn('[checkout][email-resolve]', {
+    user_id: userId,
+    has_user_email: Boolean(userData.user.email),
+    is_anonymous: userData.user.is_anonymous ?? null,
+    app_metadata_provider: userData.user.app_metadata?.provider ?? null,
+    user_metadata_keys: Object.keys(userData.user.user_metadata ?? {}),
+    identity_providers: (userData.user.identities ?? []).map((i) => i.provider),
+    has_identity_email: (userData.user.identities ?? []).some((i) =>
+      isEmailLike(i.identity_data?.email),
+    ),
+    resolved_source: resolved.source,
+    resolved_email_masked: email ? maskEmail(email) : null,
+  });
+
   if (!email) {
-    // 匿名のままだと Stripe Customer が email を持たない → receipt / Portal が
-    // 機能しない。/account/email での登録を強制する。
+    // 全ソースに有効な email が無い（真の匿名 / 未確定）。Stripe Customer が
+    // email を持てず receipt / Portal が機能しないため、メール OTP ログインを促す。
     return NextResponse.json({ error: 'email-required' }, { status: 400 });
   }
 

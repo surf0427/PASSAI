@@ -46,6 +46,16 @@ function isAllowedOtpType(value: string | null): value is AllowedOtpType {
   );
 }
 
+// 認証成功後の遷移先。login の sanitizeNext と同じ規則で、同一オリジンの
+// 相対パスのみ許可する（open-redirect 防止）。不正・欠落は /home にフォールバック。
+function sanitizeNextPath(raw: string | null): string {
+  if (!raw) return '/home';
+  if (!raw.startsWith('/')) return '/home';
+  if (raw.startsWith('//')) return '/home';
+  if (raw.startsWith('/\\')) return '/home';
+  return raw;
+}
+
 export async function GET(request: Request): Promise<Response> {
   const t0 = Date.now();
   const requestUrl = new URL(request.url);
@@ -53,6 +63,9 @@ export async function GET(request: Request): Promise<Response> {
   const code = requestUrl.searchParams.get('code');
   const tokenHash = requestUrl.searchParams.get('token_hash');
   const type = requestUrl.searchParams.get('type');
+  // ログイン前に選択したプラン等の意図を保持する遷移先（マジックリンク経路でも
+  // コード入力経路と同じく safeNext に着地させる）。
+  const safeNext = sanitizeNextPath(requestUrl.searchParams.get('next'));
 
   const errorRedirect = NextResponse.redirect(
     `${origin}/login?error=auth_callback`,
@@ -75,7 +88,7 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
-    return NextResponse.redirect(`${origin}/home`);
+    return NextResponse.redirect(`${origin}${safeNext}`);
   }
 
   // (2) token_hash + 許可された type 形式（{{ .TokenHash }} テンプレ）。
@@ -94,7 +107,7 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
-    return NextResponse.redirect(`${origin}/home`);
+    return NextResponse.redirect(`${origin}${safeNext}`);
   }
 
   // code も (token_hash + 正当な type) も無い / 不明 type → error。

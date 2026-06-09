@@ -37,9 +37,16 @@ export type EnsureAnonymousUserResult =
  *   フォールバックする）。本 helper を呼ぶのは browser-only な "use client"
  *   経路のみだが、防御的に SSR ガードする。
  */
-export function authCallbackUrl(): string | undefined {
+export function authCallbackUrl(next?: string | null): string | undefined {
   if (typeof window === "undefined") return undefined;
-  return `${window.location.origin}/auth/callback`;
+  const base = `${window.location.origin}/auth/callback`;
+  // next（同一オリジン相対パス、呼び出し側で sanitize 済み前提）を載せて、
+  // マジックリンク経由でもコード入力経路と同じ遷移先に着地させる。
+  // next 値自体が ?plan=... を含むため 1 段 encode して query 値に載せる。
+  if (next && next.startsWith("/")) {
+    return `${base}?next=${encodeURIComponent(next)}`;
+  }
+  return base;
 }
 
 let inflight: Promise<EnsureAnonymousUserResult> | null = null;
@@ -148,7 +155,7 @@ export type SignInWithEmailOtpResult =
  */
 export async function signInWithEmailOtp(
   email: string,
-  options?: { allowSignup?: boolean },
+  options?: { allowSignup?: boolean; next?: string | null },
 ): Promise<SignInWithEmailOtpResult> {
   const supabase = getBrowserSupabaseClient();
   if (!supabase) {
@@ -171,7 +178,7 @@ export async function signInWithEmailOtp(
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: authCallbackUrl(),
+        emailRedirectTo: authCallbackUrl(options?.next),
         shouldCreateUser: options?.allowSignup ?? false,
       },
     });
