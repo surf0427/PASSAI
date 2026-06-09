@@ -81,6 +81,27 @@ async function resolveAnonymousUserId(): Promise<EnsureAnonymousUserResult> {
     devWarn("[auth] getUser threw (will try signInAnonymously)", err);
   }
 
+  // 1.5. getSession() ガード。
+  //   getUser() は network 検証のため一過性失敗で error/null を返し得る。その直後に
+  //   signInAnonymously() すると、verifyEmailOtp 直後にフル遷移してきた permanent
+  //   session（cookie に存在）を、新規 anonymous user で上書きしてしまう。
+  //   そこで匿名発行の前に getSession()（storage 読み・network 不要）を確認し、
+  //   既存 session があればそれを採用して匿名の新規発行を行わない。
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData.session?.user;
+    if (sessionUser?.id) {
+      return {
+        kind: "ok",
+        userId: sessionUser.id,
+        email: sessionUser.email ?? null,
+        isAnonymous: sessionUser.is_anonymous ?? false,
+      };
+    }
+  } catch (err) {
+    devWarn("[auth] getSession threw (will try signInAnonymously)", err);
+  }
+
   // 2. signInAnonymously で新規 anonymous user を発行。
   try {
     const { data, error } = await supabase.auth.signInAnonymously();
