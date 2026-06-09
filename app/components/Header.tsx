@@ -53,13 +53,23 @@ export function Header() {
               ))}
             </nav>
 
-            {/* 「PASSAIを始める」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
-            <Link
-              href="/pricing"
-              className="ml-auto sm:ml-0 px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"
-            >
-              PASSAIを始める
-            </Link>
+            {/* 右上アクション：「ログイン」→「PASSAIを始める」の順。
+                スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す。
+                どちらも whitespace-nowrap で改行・崩れを防ぐ。 */}
+            <div className="ml-auto sm:ml-0 flex items-center gap-2">
+              <Link
+                href="/login"
+                className="px-2.5 sm:px-3 py-1.5 rounded-lg text-sm font-semibold text-slate-700 hover:text-brand-600 hover:bg-gray-100 transition-colors whitespace-nowrap"
+              >
+                ログイン
+              </Link>
+              <Link
+                href="/pricing"
+                className="px-2.5 sm:px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"
+              >
+                PASSAIを始める
+              </Link>
+            </div>
           </>
         ) : isAuthPage ? null : (
           <nav className="flex items-center gap-1">
