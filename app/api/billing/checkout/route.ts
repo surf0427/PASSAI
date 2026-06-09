@@ -118,6 +118,18 @@ export async function POST(req: Request) {
 
   const tAuth = Date.now();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
+  // 一時ログ（TODO: 確認後に削除）。生メール禁止・boolean / id のみ。
+  // checkout が見ているセッションが anonymous か permanent かを実測する。
+  // 401 判定より前に出すことで「セッション喪失(user=null)」も同時に捕捉する。
+  console.warn('[checkout-auth-debug]', {
+    userId: userData?.user?.id ?? null,
+    isAnonymous: userData?.user?.is_anonymous ?? null,
+    hasTopLevelEmail: Boolean(userData?.user?.email),
+    hasMetadataEmail: Boolean(userData?.user?.user_metadata?.email),
+    identitiesCount: userData?.user?.identities?.length ?? 0,
+    providers: userData?.user?.identities?.map((i) => i.provider) ?? [],
+    hasGetUserError: Boolean(userErr),
+  });
   if (userErr || !userData.user) {
     // Phase 0 instrumentation: 「401 + 10秒待ち」が ConnectTimeoutError 由来か
     // 本物の未認証かを切り分ける。既存挙動 (401 を返す) は変更しない。
@@ -153,6 +165,18 @@ export async function POST(req: Request) {
   });
 
   if (!email) {
+    // email-required 直前の確定診断ログ（TODO: 確認後に削除）。生メール禁止・boolean のみ。
+    // このログが Vercel Function Logs に出ていれば「最新ビルドがデプロイ済み」かつ
+    // 「getCheckoutEmail が全ソース走査して null だった（＝真の匿名セッション）」と確定する。
+    // 出ていなければ、このコミットを含むビルドが未デプロイ（旧 preview を見ている）。
+    console.warn('[checkout-debug]', {
+      hasUser: Boolean(userData.user),
+      userId: userData.user.id,
+      topLevelEmail: Boolean(userData.user.email),
+      metadataEmail: Boolean(userData.user.user_metadata?.email),
+      identitiesCount: userData.user.identities?.length ?? 0,
+      resolvedEmail: Boolean(email),
+    });
     // 全ソースに有効な email が無い（真の匿名 / 未確定）。Stripe Customer が
     // email を持てず receipt / Portal が機能しないため、メール OTP ログインを促す。
     return NextResponse.json({ error: 'email-required' }, { status: 400 });
