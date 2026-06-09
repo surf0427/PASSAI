@@ -11,7 +11,7 @@
 // フロー:
 //   1. メール入力 → OTP 送信（signInWithEmailOtp({ allowSignup: true })）
 //      - 初回購入者（未登録メール）も新規発行、既存ユーザーはログインに使える同一入口。
-//   2. メールに届いた 6 桁コードを入力 → verifyEmailOtp で検証しセッション確立。
+//   2. メールに届いたコードを入力 → verifyEmailOtp で検証しセッション確立。
 //      - テンプレートがリンクのみの構成でも、リンク click → /auth/callback で
 //        同じ user_id に着地する（コード経路はその UX 改善版）。
 //   3. 成功後、`next`（相対パスのみ許可）へ window.location で **フル遷移**。
@@ -100,6 +100,8 @@ function LoginForm() {
   })();
 
   const canSend = !sending && email !== '' && isValidEmailFormat(email);
+  // 桁数非依存: Supabase の OTP 長（6〜8 桁等の設定差）に追従するため、
+  // 下限 6 桁のみ要求し上限は入力側で 10 桁に緩める。
   const canVerify = !verifying && code.trim().length >= 6;
 
   async function handleSend() {
@@ -226,8 +228,7 @@ function LoginForm() {
           <div className="space-y-4">
             <AlertBox variant="info">
               <span className="font-medium">{step.email}</span>{' '}
-              宛にコードを送りました。メールに記載の 6
-              桁コードを入力してください。
+              宛にコードを送りました。メールに記載のコードを入力してください。
             </AlertBox>
 
             {resent && (
@@ -237,7 +238,7 @@ function LoginForm() {
             )}
 
             <FormField
-              label="認証コード（6桁）"
+              label="認証コード"
               hint="メールが届かない場合は迷惑メールフォルダもご確認ください。"
               error={verifyError ?? undefined}
             >
@@ -245,14 +246,15 @@ function LoginForm() {
                 type="text"
                 value={code}
                 onChange={(e) => {
-                  // 数字のみ・最大 6 桁に正規化。
-                  setCode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                  // 数字のみに正規化。桁数は Supabase 設定（6〜8 桁等）に追従するため
+                  // 固定せず、暴走防止に上限 10 桁まで許容する。
+                  setCode(e.target.value.replace(/\D/g, '').slice(0, 10));
                   if (verifyError) setVerifyError(null);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && canVerify) handleVerify();
                 }}
-                placeholder="123456"
+                placeholder="認証コードを入力"
                 autoComplete="one-time-code"
                 inputMode="numeric"
                 disabled={verifying}

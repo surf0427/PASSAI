@@ -281,7 +281,8 @@ export type VerifyEmailOtpResult =
   | { kind: "error"; message: string };
 
 /**
- * STEP-AUTH-P0: メールに届いた 6 桁 OTP コードを検証してセッションを確立する。
+ * STEP-AUTH-P0: メールに届いた OTP コードを検証してセッションを確立する。
+ * （コード桁数は Supabase の OTP 設定に依存。検証は桁数非依存でサーバー側が判定。）
  *
  * 目的: マジックリンク（/auth/callback 経路）と同じ「同一 auth.users.id への
  * 復帰 / 永続アカウント確立」を、メールアプリ往復なしの **コード入力** で完結
