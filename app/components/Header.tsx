@@ -55,7 +55,7 @@ export function Header() {
 
             {/* 「PASSAIを始める」：スマホでは ml-auto で右端、PC は nav の flex-1 が押し出す */}
             <Link
-              href="/login"
+              href="/pricing"
               className="ml-auto sm:ml-0 px-3 py-1.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors whitespace-nowrap"
             >
               PASSAIを始める
