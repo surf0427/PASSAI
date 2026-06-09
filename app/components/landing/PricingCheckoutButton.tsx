@@ -34,6 +34,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   useCurrentUserId,
   useIsPermanentUser,
+  useUserEmail,
 } from '@/app/components/AuthProvider';
 import type { PlanId } from '@/lib/billing/plans';
 
@@ -59,6 +60,7 @@ const autoResumeAttemptedPlans = new Set<string>();
 export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   const userId = useCurrentUserId();
   const isPermanentUser = useIsPermanentUser();
+  const userEmail = useUserEmail();
   const router = useRouter();
   const pathname = usePathname();
   const [loading, setLoading] = useState(false);
@@ -137,7 +139,17 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   async function handleClick() {
     if (disabled) return;
     // 課金前にメール OTP ログインを必須化（STEP-AUTH-P0）。
-    if (!isPermanentUser) {
+    // 確定 email が無いユーザー（匿名 / is_anonymous 取得失敗で permanent 扱いだが
+    // email=null）は checkout を一切叩かず client 側で /login へ送る。
+    //   - isPermanentUser だけで判定すると、auth.ts の getUser/getSession 経路で
+    //     is_anonymous が undefined のとき `?? false` に倒れて匿名が permanent 扱いになり、
+    //     startCheckout → /api/billing/checkout が 401（無反応）/ 400 email-required に
+    //     落ちて /login へ進めないケースがある。email の有無でゲートすれば、解決経路に
+    //     関わらず匿名/未確定は必ず /login?next=/pricing?plan=... に直行する。
+    //   - /login 側 alreadyLoggedIn は email=null で false のため OTP フォームが出る
+    //     （ループしない）。OTP 完了後はフル遷移で permanent+email 確定 → auto-resume
+    //     で checkout 再開、という既存導線はそのまま機能する。
+    if (!isPermanentUser || !userEmail) {
       redirectToLogin();
       return;
     }
