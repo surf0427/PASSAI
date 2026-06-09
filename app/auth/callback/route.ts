@@ -82,6 +82,17 @@ export async function GET(request: Request): Promise<Response> {
   // コード入力経路と同じく safeNext に着地させる）。
   const safeNext = sanitizeNextPath(requestUrl.searchParams.get('next'));
 
+  // 一時ログ（TODO: 確認後に削除）。route が実行されたか自体を最上位で記録する。
+  // 出ない = /auth/callback が呼ばれていない（client の OTP コード経路でログイン等）。
+  // 出るのに [callback-auth-debug] が出ない = errorRedirect 分岐に入っている。
+  // type は OTP 種別の文字列でメール等の機微情報ではない。
+  console.warn('[callback-entry]', {
+    hasCode: Boolean(code),
+    hasTokenHash: Boolean(tokenHash),
+    type: type ?? null,
+    hasNext: Boolean(requestUrl.searchParams.get('next')),
+  });
+
   const errorRedirect = NextResponse.redirect(
     `${origin}/login?error=auth_callback`,
   );
