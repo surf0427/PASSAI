@@ -11,8 +11,11 @@
 //
 // 判定:
 //   - 保護対象パス（PROTECTED_PREFIXES）で profile.plan が free のとき /pricing へ replace。
-//   - 許可パス（LP / login / mypage / billing / account / input/basic / diagnosis / 法務 等）は
+//   - 許可パス（LP / login / mypage / billing / account / diagnosis / 法務 等）は
 //     未課金でも素通し。/pricing 自身も非保護（ループ防止）。
+//   - 基本情報入力（/input/basic）は課金後の導線のため保護対象。課金後フローは
+//     /billing/success → /home（課金済みで通過）→ 未入力なら /input/basic（同じく
+//     課金済みで通過）なのでループしない。
 //   - profile 取得失敗（ready かつ profile===null）は fail-open。課金済みユーザーを誤って
 //     締め出さないことを優先する（profiles 行は通常 ensureProfile で必ず存在するため、
 //     null は DB エラー時のみの稀ケース）。
@@ -40,6 +43,7 @@ const PROTECTED_PREFIXES = [
   '/self-analysis',
   '/self-pr',
   '/tutor',
+  '/input/basic',
   '/input/activity',
   '/analyze',
   '/admission-matching',
