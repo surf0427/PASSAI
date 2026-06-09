@@ -11,8 +11,9 @@
 //   hydration 後に client で実データに切り替える。
 //   既存ページと同じ useSyncExternalStore パターン。
 
-import { useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import { useAuthDebug } from '@/app/components/AuthProvider';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LinkButton } from '@/components/ui/LinkButton';
@@ -43,6 +44,21 @@ export default function MyPage() {
     getMountedSnapshot,
     getMountedServerSnapshot,
   );
+
+  // AuthProvider は profile を mount 時 1 回しか取得しないため、webhook で
+  // plan が basic に更新されても stale free cache のまま Free 表示になり得る。
+  // /mypage 表示時と、タブ復帰（focus）時に profile を 1 回ずつ再取得して是正する。
+  // retryProfile は useCallback(deps=[]) で安定参照のため deps に入れても再実行されず、
+  // ループ・過剰 fetch にならない（mount 1 回 + focus ごと 1 回）。
+  const { retryProfile } = useAuthDebug();
+  useEffect(() => {
+    void retryProfile();
+    const onFocus = () => {
+      void retryProfile();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [retryProfile]);
 
   const data: MypageData = useMemo(
     () => (isMounted ? loadMypageData() : EMPTY_MYPAGE_DATA),

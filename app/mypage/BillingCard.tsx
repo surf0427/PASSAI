@@ -39,13 +39,20 @@ export function BillingCard() {
   const userId = useCurrentUserId();
   const profile = useProfile();
   const [sub, setSub] = useState<SubInfo | null>(null);
+  // subscriptions 取得が「未完了」か「完了したが行なし」かを区別する。
+  // sub===null は両義（loading or no-row）になるため、判定にこのフラグを使う。
+  const [subLoaded, setSubLoaded] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
   const [portalError, setPortalError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
     const supabase = getBrowserSupabaseClient();
-    if (!supabase) return;
+    if (!supabase) {
+      // env 無しで live 取得不可。これ以上待たせず profile.plan の fallback 判定へ。
+      setSubLoaded(true);
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -66,6 +73,7 @@ export function BillingCard() {
           cancelAtPeriodEnd: Boolean(data.cancel_at_period_end),
         });
       }
+      setSubLoaded(true);
     })();
     return () => {
       cancelled = true;
@@ -74,7 +82,24 @@ export function BillingCard() {
 
   if (!profile) return null;
 
-  if (profile.plan === 'free') {
+  // Free/Paid 判定は live subscriptions を優先する。
+  // AuthProvider.useProfile() は mount 時の denormalized cache のため、webhook で
+  // plan が basic に変わっても stale free のまま残り得る（mypage が Free 誤表示）。
+  // live subscriptions 行が active/trialing の paid plan ならそれを正とし、
+  // 未取得・無し・非 active のときだけ profile.plan に fallback する。
+  const hasActivePaidSub =
+    sub !== null &&
+    isPlanId(sub.plan) &&
+    (sub.status === 'active' || sub.status === 'trialing');
+  const isPaid =
+    hasActivePaidSub || (profile.plan !== 'free' && isPlanId(profile.plan));
+
+  if (!isPaid) {
+    // profile.plan が free でも subscriptions 取得が終わるまでは Free 断定を避け、
+    // 「確認中」を出す（stale free cache による一瞬の Free 誤表示を防ぐ）。
+    if (!subLoaded) {
+      return <LoadingView />;
+    }
     return <FreeView />;
   }
 
@@ -115,6 +140,21 @@ export function BillingCard() {
       portalLoading={portalLoading}
       portalError={portalError}
     />
+  );
+}
+
+function LoadingView() {
+  // subscriptions 取得中の中間表示。stale free cache での誤 Free を避けるための
+  // 短時間プレースホルダ。
+  return (
+    <Card padding="md" className="mt-4">
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-xs font-medium text-slate-500">現在のプラン</p>
+          <p className="mt-1 text-xl font-bold text-slate-400">確認中…</p>
+        </div>
+      </div>
+    </Card>
   );
 }
 
