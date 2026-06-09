@@ -11,6 +11,8 @@
  *   production builds.
  */
 
+import type { User } from "@supabase/supabase-js";
+
 import { devWarn } from "@/lib/devLog";
 import { getBrowserSupabaseClient } from "./browserClient";
 
@@ -140,6 +142,60 @@ export function ensureAnonymousUser(): Promise<EnsureAnonymousUserResult> {
     inflight = null;
   });
   return inflight;
+}
+
+export type ResolveSessionResult =
+  | { kind: "no-env" }
+  | { kind: "guest" }
+  | { kind: "member"; userId: string; email: string | null };
+
+/**
+ * STEP-AUTH-REDESIGN: 既存セッションを「読むだけ」で解決する。anonymous は発行しない。
+ *
+ * - member: is_anonymous === false の永続（メール）ユーザー。課金導線の対象。
+ * - guest : セッション無し。または旧 anonymous セッション（検出したら local
+ *           signOut で破棄し未ログイン扱いにする。残骸を OTP / checkout に混ぜない）。
+ *
+ * 判定は is_anonymous のみで行い、email の有無では会員判定しない。
+ */
+export async function resolveSession(): Promise<ResolveSessionResult> {
+  const supabase = getBrowserSupabaseClient();
+  if (!supabase) {
+    devWarn("[auth] resolveSession: no env");
+    return { kind: "no-env" };
+  }
+
+  let user: User | null = null;
+  // network 検証つきで読む（新規発行はしない）。
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (!error && data?.user) user = data.user;
+  } catch (err) {
+    devWarn("[auth] resolveSession: getUser threw", err);
+  }
+  // network 一過性失敗時の保険として storage 読みも試す（新規発行はしない）。
+  if (!user) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      user = data.session?.user ?? null;
+    } catch (err) {
+      devWarn("[auth] resolveSession: getSession threw", err);
+    }
+  }
+
+  if (!user) return { kind: "guest" };
+
+  // 旧 anonymous セッションは未ログイン扱い。破棄して guest を返す。
+  if (user.is_anonymous === true) {
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+    } catch (err) {
+      devWarn("[auth] resolveSession: local signOut of anonymous failed", err);
+    }
+    return { kind: "guest" };
+  }
+
+  return { kind: "member", userId: user.id, email: user.email ?? null };
 }
 
 export type SignInWithEmailOtpResult =

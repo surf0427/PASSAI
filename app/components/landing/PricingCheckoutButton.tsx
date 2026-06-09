@@ -31,11 +31,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
-import {
-  useCurrentUserId,
-  useIsPermanentUser,
-  useUserEmail,
-} from '@/app/components/AuthProvider';
+import { useAuthStatus, useIsMember } from '@/app/components/AuthProvider';
 import type { PlanId } from '@/lib/billing/plans';
 
 type Props = {
@@ -58,9 +54,8 @@ type CheckoutResponse = {
 const autoResumeAttemptedPlans = new Set<string>();
 
 export function PricingCheckoutButton({ plan, label, highlight }: Props) {
-  const userId = useCurrentUserId();
-  const isPermanentUser = useIsPermanentUser();
-  const userEmail = useUserEmail();
+  const isMember = useIsMember();
+  const status = useAuthStatus();
   const router = useRouter();
   const pathname = usePathname();
   const [loading, setLoading] = useState(false);
@@ -68,7 +63,9 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   // ログイン後の自動再開を 1 回に限定するガード。
   const autoResumedRef = useRef(false);
 
-  const disabled = loading || userId === null;
+  // 認証状態の確定中（loading）と checkout 実行中のみ非活性。
+  // guest はクリック可能にし、押下時に /login へ送る（ボタンで止めない）。
+  const disabled = loading || status === 'loading';
 
   // STEP-AUTH-P0: 未ログイン時はログインへ誘導してから checkout に戻す。
   // 戻り先は現在ページで出し分ける。/pricing 上では LP（/?plan=...#pricing）に
@@ -137,19 +134,11 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   }
 
   async function handleClick() {
-    if (disabled) return;
-    // 課金前にメール OTP ログインを必須化（STEP-AUTH-P0）。
-    // 確定 email が無いユーザー（匿名 / is_anonymous 取得失敗で permanent 扱いだが
-    // email=null）は checkout を一切叩かず client 側で /login へ送る。
-    //   - isPermanentUser だけで判定すると、auth.ts の getUser/getSession 経路で
-    //     is_anonymous が undefined のとき `?? false` に倒れて匿名が permanent 扱いになり、
-    //     startCheckout → /api/billing/checkout が 401（無反応）/ 400 email-required に
-    //     落ちて /login へ進めないケースがある。email の有無でゲートすれば、解決経路に
-    //     関わらず匿名/未確定は必ず /login?next=/pricing?plan=... に直行する。
-    //   - /login 側 alreadyLoggedIn は email=null で false のため OTP フォームが出る
-    //     （ループしない）。OTP 完了後はフル遷移で permanent+email 確定 → auto-resume
-    //     で checkout 再開、という既存導線はそのまま機能する。
-    if (!isPermanentUser || !userEmail) {
+    if (loading || status === 'loading') return;
+    // STEP-AUTH-REDESIGN: 課金導線は member（is_anonymous === false）のみ。
+    // guest は checkout を一切叩かず client 側で /login?next=/pricing?plan=... へ送る。
+    // OTP 完了後はフル遷移で member 確定 → auto-resume で checkout 再開。
+    if (!isMember) {
       redirectToLogin();
       return;
     }
@@ -160,7 +149,7 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
   // setState（startCheckout 内）を effect 本体で同期実行しないよう microtask で遅延。
   useEffect(() => {
     if (autoResumedRef.current) return;
-    if (userId === null || !isPermanentUser) return;
+    if (!isMember) return;
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('plan') !== plan) return;
@@ -175,7 +164,7 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
     return () => window.clearTimeout(id);
     // startCheckout / plan は安定参照のため deps から除外（mount 後 1 回起動）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, isPermanentUser, plan]);
+  }, [isMember, plan]);
 
   return (
     <div className="mt-auto">
@@ -191,7 +180,7 @@ export function PricingCheckoutButton({ plan, label, highlight }: Props) {
       >
         {loading
           ? '読み込み中…'
-          : userId === null
+          : status === 'loading'
             ? '認証情報を読み込み中…'
             : label}
       </button>

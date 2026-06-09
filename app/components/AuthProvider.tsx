@@ -25,11 +25,19 @@ import {
   type ReactNode,
 } from 'react';
 
-import { ensureAnonymousUser } from '@/lib/supabase/auth';
+import { resolveSession } from '@/lib/supabase/auth';
 import { ensureProfile } from '@/lib/supabase/profile';
 import type { Profile } from '@/types/profile';
 
+// STEP-AUTH-REDESIGN: 認証状態の単一定義。
+//   - loading: セッション読み取りが未確定。
+//   - guest  : 未ログイン（セッション無し / 旧 anonymous は破棄済み）。
+//   - member : is_anonymous === false の永続ユーザー。課金導線の対象。
+// 会員判定は is_anonymous のみで行い、email の有無では判定しない。
+export type AuthStatus = 'loading' | 'guest' | 'member';
+
 type AuthContextValue = {
+  status: AuthStatus;
   currentUserId: string | null;
   profile: Profile | null;
   authReady: boolean;
@@ -38,16 +46,15 @@ type AuthContextValue = {
   profileError: string | null;
   setProfile: (profile: Profile) => void;
   retryProfile: () => Promise<void>;
-  // STEP-AUTH-P0: メール連携済み（= 別端末でも復帰できる永続ユーザー）か。
-  //   判定基準: auth.users.email が存在する、または匿名でない。
-  //   匿名のまま / 未確定（auth pending）は false。認証キーではなく、
-  //   UI のログイン誘導出し分けにのみ使う（identity は currentUserId のまま）。
+  // STEP-AUTH-REDESIGN: member（is_anonymous === false）か。後方互換のため名称は
+  //   isPermanentUser のまま残すが、判定は status === 'member' に一本化（email 不問）。
   isPermanentUser: boolean;
-  /** STEP-AUTH-P0: 確定済みメール。匿名 / 未確定は null。表示・誘導用。 */
+  /** 確定済みメール。guest / 未確定は null。表示・誘導用。 */
   userEmail: string | null;
 };
 
 const AuthContext = createContext<AuthContextValue>({
+  status: 'loading',
   currentUserId: null,
   profile: null,
   authReady: false,
@@ -61,14 +68,13 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const [status, setStatus] = useState<AuthStatus>('loading');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [profile, setProfileState] = useState<Profile | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [profileReady, setProfileReady] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
-  // STEP-AUTH-P0: 永続ユーザー判定（メール連携済み or 非匿名）。
-  const [isPermanentUser, setIsPermanentUser] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   // retryProfile が常に最新の userId を参照できるよう ref に保持。
@@ -78,31 +84,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const authResult = await ensureAnonymousUser();
+      // STEP-AUTH-REDESIGN: セッションは「読むだけ」。anonymous は発行しない。
+      const session = await resolveSession();
       if (cancelled) return;
-      if (authResult.kind === 'ok') {
-        setCurrentUserId(authResult.userId);
-        // STEP-AUTH-P0: email があれば永続、無くても is_anonymous=false なら永続。
-        setIsPermanentUser(
-          authResult.email !== null || authResult.isAnonymous === false,
-        );
-        setUserEmail(authResult.email);
-        setAuthError(null);
-      } else if (authResult.kind === 'no-env') {
+
+      if (session.kind === 'no-env') {
+        setStatus('guest');
+        setCurrentUserId(null);
+        setUserEmail(null);
         setAuthError(
           'Supabase 接続情報が読み込まれていません (NEXT_PUBLIC_SUPABASE_* 未設定)。',
         );
-      } else {
-        setAuthError(authResult.message);
-      }
-      setAuthReady(true);
-
-      if (authResult.kind !== 'ok') {
+        setAuthReady(true);
         setProfileReady(true);
         return;
       }
 
-      const profileResult = await ensureProfile(authResult.userId);
+      if (session.kind === 'guest') {
+        // 未ログイン（セッション無し / 旧 anonymous は resolveSession が破棄済み）。
+        setStatus('guest');
+        setCurrentUserId(null);
+        setUserEmail(null);
+        setAuthError(null);
+        setAuthReady(true);
+        setProfileReady(true); // guest は profile を持たない。
+        return;
+      }
+
+      // member（is_anonymous === false の永続ユーザー）。
+      setStatus('member');
+      setCurrentUserId(session.userId);
+      setUserEmail(session.email);
+      setAuthError(null);
+      setAuthReady(true);
+
+      const profileResult = await ensureProfile(session.userId);
       if (cancelled) return;
       if (profileResult.kind === 'ok') {
         setProfileState(profileResult.profile);
@@ -136,8 +152,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       //   集中し得るが、fire-and-forget のため UI / auth は待たない。
       //   requestIdleCallback 等の遅延起動は本 STEP では導入しない（必要になれば
       //   後続 STEP で計測のうえ判断）。
-      if (!cancelled && authResult.kind === 'ok') {
-        const backfillUserId = authResult.userId;
+      if (!cancelled) {
+        const backfillUserId = session.userId;
         void import('@/lib/repository/tutorRepository')
           .then((mod) => mod.backfillTutorOnce(backfillUserId))
           .catch(() => {});
@@ -173,8 +189,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       //     別の flag（supabaseBackfill の 'selfAnalysisLogs' / 'selfAnalysisLogsRestore'）
       //     で冪等・1 回限り。再マウント / 再ログインでも二重実行されない。
       //   - tutor backfill とはチェーンしない（独立起動）。
-      if (!cancelled && authResult.kind === 'ok') {
-        const backfillUserId = authResult.userId;
+      if (!cancelled) {
+        const backfillUserId = session.userId;
         void import('@/lib/repository/selfAnalysisLogRepository')
           .then((mod) =>
             mod
@@ -203,8 +219,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       //   - cancelled guard: アンマウント後は起動しない。
       //   - backfillSelfPRsOnce 自身が flag（supabaseBackfill の 'selfPRs'）で
       //     冪等・1 回限り。再マウント / 再ログインでも二重実行されない。
-      if (!cancelled && authResult.kind === 'ok') {
-        const backfillUserId = authResult.userId;
+      if (!cancelled) {
+        const backfillUserId = session.userId;
         void import('@/lib/repository/selfPRRepository')
           .then((mod) => mod.backfillSelfPRsOnce(backfillUserId))
           .catch(() => {});
@@ -232,8 +248,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       //   - backfillStatementReviewHistoryOnce 自身が flag（supabaseBackfill の
       //     'statementReviewHistory'）で冪等・1 回限り。再マウント / 再ログインでも
       //     二重実行されない。
-      if (!cancelled && authResult.kind === 'ok') {
-        const backfillUserId = authResult.userId;
+      if (!cancelled) {
+        const backfillUserId = session.userId;
         void import('@/lib/repository/statementReviewHistoryRepository')
           .then((mod) =>
             mod.backfillStatementReviewHistoryOnce({ userId: backfillUserId }),
@@ -257,8 +273,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       //     冪等・1 回限り。snapshot 型のため restore は LS 空のときだけ取り込む（上書き事故防止）。
       //   - 既存 anonymous mirror（mirrorBasicInfo / mirrorDiagnosis / mirrorActivityData）には
       //     触らない（別経路）。
-      if (!cancelled && authResult.kind === 'ok') {
-        const backfillUserId = authResult.userId;
+      if (!cancelled) {
+        const backfillUserId = session.userId;
         void import('@/lib/repository/basicInfoRepository')
           .then((mod) =>
             mod
@@ -312,6 +328,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
+        status,
         currentUserId,
         profile,
         authReady,
@@ -320,7 +337,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profileError,
         setProfile,
         retryProfile,
-        isPermanentUser,
+        isPermanentUser: status === 'member',
         userEmail,
       }}
     >
@@ -337,9 +354,19 @@ export function useProfile(): Profile | null {
   return useContext(AuthContext).profile;
 }
 
+/** STEP-AUTH-REDESIGN: 認証状態（loading / guest / member）。 */
+export function useAuthStatus(): AuthStatus {
+  return useContext(AuthContext).status;
+}
+
+/** STEP-AUTH-REDESIGN: member（is_anonymous === false）か。課金導線のゲートに使う。 */
+export function useIsMember(): boolean {
+  return useContext(AuthContext).status === 'member';
+}
+
 /**
- * STEP-AUTH-P0: メール連携済み（別端末でも復帰できる永続ユーザー）か。
- * 匿名 / 未確定は false。ログイン誘導の出し分けに使う。
+ * STEP-AUTH-REDESIGN: 後方互換エイリアス。判定は member（is_anonymous === false）。
+ * 新規コードは useIsMember を使う。
  */
 export function useIsPermanentUser(): boolean {
   return useContext(AuthContext).isPermanentUser;

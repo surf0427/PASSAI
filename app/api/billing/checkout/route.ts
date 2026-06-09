@@ -30,7 +30,6 @@
 import 'server-only';
 
 import { NextResponse } from 'next/server';
-import type { User } from '@supabase/supabase-js';
 import type Stripe from 'stripe';
 
 import { isPlanId } from '@/lib/billing/plans';
@@ -43,17 +42,11 @@ import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// 課金メール解決。Magic Link 経由などで top-level `user.email` が null でも、
-// `user_metadata.email` / `identities[].identity_data.email` に確定メールが入って
-// いるケースがあるため、複数ソースから最初の有効なメールを採用する。
-// （server-only route のため client 専用の isValidEmailFormat は import せず、
-//   同等の簡易バリデーションをここに inline する。認証方式は不変。）
-type CheckoutEmailSource =
-  | 'user.email'
-  | 'user_metadata.email'
-  | 'identity.identity_data.email'
-  | 'none';
-
+// STEP-AUTH-REDESIGN: 課金は member（is_anonymous === false）のみ。member は
+// top-level `user.email` を必ず持つため、user.email だけを採用する
+// （旧: user_metadata / identities の 3 段フォールバックは廃止）。
+// server-only route のため client 専用の isValidEmailFormat は import せず、
+// 同等の簡易バリデーションをここに inline する。
 const CHECKOUT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function isEmailLike(value: unknown): value is string {
@@ -63,33 +56,6 @@ function isEmailLike(value: unknown): value is string {
     value.length <= 254 &&
     CHECKOUT_EMAIL_RE.test(value)
   );
-}
-
-function getCheckoutEmail(user: User): {
-  email: string | null;
-  source: CheckoutEmailSource;
-} {
-  if (isEmailLike(user.email)) {
-    return { email: user.email, source: 'user.email' };
-  }
-  const metaEmail = user.user_metadata?.email;
-  if (isEmailLike(metaEmail)) {
-    return { email: metaEmail, source: 'user_metadata.email' };
-  }
-  for (const identity of user.identities ?? []) {
-    const idEmail = identity.identity_data?.email;
-    if (isEmailLike(idEmail)) {
-      return { email: idEmail, source: 'identity.identity_data.email' };
-    }
-  }
-  return { email: null, source: 'none' };
-}
-
-// ログ用 masked email（生メールは出さない）。先頭1文字 + ドメインのみ残す。
-function maskEmail(email: string): string {
-  const at = email.indexOf('@');
-  if (at <= 0) return '***';
-  return `${email.slice(0, 1)}***@${email.slice(at + 1)}`;
 }
 
 export async function POST(req: Request) {
@@ -119,20 +85,16 @@ export async function POST(req: Request) {
   const tAuth = Date.now();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   // 一時ログ（TODO: 確認後に削除）。生メール禁止・boolean / id のみ。
-  // checkout が見ているセッションが anonymous か permanent かを実測する。
-  // 401 判定より前に出すことで「セッション喪失(user=null)」も同時に捕捉する。
+  // checkout が見ているセッションが anonymous か member かを実測する。
   console.warn('[checkout-auth-debug]', {
     userId: userData?.user?.id ?? null,
     isAnonymous: userData?.user?.is_anonymous ?? null,
     hasTopLevelEmail: Boolean(userData?.user?.email),
-    hasMetadataEmail: Boolean(userData?.user?.user_metadata?.email),
-    identitiesCount: userData?.user?.identities?.length ?? 0,
-    providers: userData?.user?.identities?.map((i) => i.provider) ?? [],
     hasGetUserError: Boolean(userErr),
   });
-  if (userErr || !userData.user) {
-    // Phase 0 instrumentation: 「401 + 10秒待ち」が ConnectTimeoutError 由来か
-    // 本物の未認証かを切り分ける。既存挙動 (401 を返す) は変更しない。
+  // STEP-AUTH-REDESIGN: 課金は member（is_anonymous === false）のみ。未認証 /
+  // セッション喪失 / 旧 anonymous はすべて 401 で弾く（client の isMember ゲートと二重防御）。
+  if (userErr || !userData.user || userData.user.is_anonymous === true) {
     logAuthFail({
       route: 'billing/checkout',
       feature: 'checkout',
@@ -144,41 +106,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const userId = userData.user.id;
-  // top-level user.email だけでなく user_metadata / identities も見て解決する。
-  const resolved = getCheckoutEmail(userData.user);
-  const email = resolved.email;
-
-  // 一時診断ログ（TODO: 根本原因確認後に削除）。生メールは出さず masked / boolean のみ。
-  // email が user.email・user_metadata・identities のどこに入っているかを確認する。
-  console.warn('[checkout][email-resolve]', {
-    user_id: userId,
-    has_user_email: Boolean(userData.user.email),
-    is_anonymous: userData.user.is_anonymous ?? null,
-    app_metadata_provider: userData.user.app_metadata?.provider ?? null,
-    user_metadata_keys: Object.keys(userData.user.user_metadata ?? {}),
-    identity_providers: (userData.user.identities ?? []).map((i) => i.provider),
-    has_identity_email: (userData.user.identities ?? []).some((i) =>
-      isEmailLike(i.identity_data?.email),
-    ),
-    resolved_source: resolved.source,
-    resolved_email_masked: email ? maskEmail(email) : null,
-  });
-
+  // member は top-level user.email を必ず持つ。これだけを採用する。
+  const email = isEmailLike(userData.user.email) ? userData.user.email : null;
   if (!email) {
-    // email-required 直前の確定診断ログ（TODO: 確認後に削除）。生メール禁止・boolean のみ。
-    // このログが Vercel Function Logs に出ていれば「最新ビルドがデプロイ済み」かつ
-    // 「getCheckoutEmail が全ソース走査して null だった（＝真の匿名セッション）」と確定する。
-    // 出ていなければ、このコミットを含むビルドが未デプロイ（旧 preview を見ている）。
-    console.warn('[checkout-debug]', {
-      hasUser: Boolean(userData.user),
-      userId: userData.user.id,
-      topLevelEmail: Boolean(userData.user.email),
-      metadataEmail: Boolean(userData.user.user_metadata?.email),
-      identitiesCount: userData.user.identities?.length ?? 0,
-      resolvedEmail: Boolean(email),
-    });
-    // 全ソースに有効な email が無い（真の匿名 / 未確定）。Stripe Customer が
-    // email を持てず receipt / Portal が機能しないため、メール OTP ログインを促す。
+    // member なのに email が無い異常系。Stripe Customer が email を持てないため弾く。
     return NextResponse.json({ error: 'email-required' }, { status: 400 });
   }
 
