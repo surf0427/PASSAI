@@ -34,6 +34,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { useAuthDebug, useIsMember } from '@/app/components/AuthProvider';
 import { signInWithEmailOtp, verifyEmailOtp } from '@/lib/supabase/auth';
 import { isValidEmailFormat } from '@/lib/supabase/email';
+import { loadBasicInfo } from '@/lib/basicInfoStorage';
 
 // next 未指定時の既定遷移先。本体ホーム。未課金なら PlanGate が /pricing へ送るため、
 // 「課金済み → /home」「未課金 → /pricing」が遷移先の出し分けなしで成立する。
@@ -49,6 +50,20 @@ function sanitizeNext(raw: string | null): string {
   if (!raw.startsWith('/')) return DEFAULT_NEXT;
   if (raw.startsWith('//') || raw.startsWith('/\\')) return DEFAULT_NEXT;
   return raw;
+}
+
+/**
+ * STEP-AUTH: 基本情報入力は next より優先する。
+ * basicInfo（localStorage 'basicFormData'）未入力なら /input/basic?next=<元のnext>
+ * へ送り、入力完了後に元の next（購入再開なら /pricing?plan=…、通常は /home）へ
+ * 戻す。入力済みなら next にそのまま遷移する。
+ * 引数の next は sanitizeNext 済みの相対パス前提。encodeURIComponent で安全に内包する。
+ */
+function resolvePostLoginDest(next: string): string {
+  if (loadBasicInfo() === null) {
+    return `/input/basic?next=${encodeURIComponent(next)}`;
+  }
+  return next;
 }
 
 type Step =
@@ -72,7 +87,7 @@ function LoginForm() {
 
   useEffect(() => {
     if (alreadyLoggedIn) {
-      router.replace(safeNext);
+      router.replace(resolvePostLoginDest(safeNext));
     }
   }, [alreadyLoggedIn, router, safeNext]);
 
@@ -140,7 +155,8 @@ function LoginForm() {
     const result = await verifyEmailOtp(step.email, code);
     if (result.kind === 'ok') {
       // フル遷移で AuthProvider を再マウントし、新セッションを読み直す。
-      window.location.assign(safeNext);
+      // basicInfo 未入力なら next より優先して /input/basic へ送る。
+      window.location.assign(resolvePostLoginDest(safeNext));
       return;
     }
     setVerifying(false);

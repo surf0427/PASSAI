@@ -36,6 +36,18 @@ export default function BillingSuccessPage() {
   const [status, setStatus] = useState<Status>({ kind: 'pending' });
   const startedAtRef = useRef<number | null>(null);
 
+  // 課金有効化を確認できたら full navigation で /home へ誘導する。
+  // full nav で AuthProvider を再マウントさせ、webhook 同期済みの
+  // profiles.plan（basic/premium）を読み直す → PlanGate を通過できる
+  // （soft nav だと旧 'free' のまま残り /pricing へ弾かれる）。
+  // /home は basicInfo 未入力なら /input/basic へ誘導（既存ロジック）するため、
+  // 「課金 → (未入力なら) 基本情報入力 → 利用開始」がこの 1 行で保証される。
+  useEffect(() => {
+    if (status.kind === 'active') {
+      window.location.assign('/home');
+    }
+  }, [status]);
+
   useEffect(() => {
     if (!userId) return;
     const supabase = getBrowserSupabaseClient();
@@ -106,19 +118,21 @@ function PendingView() {
 
 function ActiveView({ plan }: { plan: PlanId }) {
   const label = PLANS[plan].label;
+  // 通常は上位の useEffect が /home へ full nav するため、この画面は一瞬しか
+  // 表示されない。リンクは nav が遅延した場合のフォールバック（/home）。
   return (
     <>
       <h1 className="text-xl sm:text-2xl font-bold mb-3 text-brand-700">
         {label} プランが有効になりました
       </h1>
       <p className="text-sm text-slate-600 leading-relaxed mb-8">
-        ご購読ありがとうございます。マイページから利用状況を確認できます。
+        ご購読ありがとうございます。利用を開始しましょう。
       </p>
       <Link
-        href="/mypage"
+        href="/home"
         className="inline-flex items-center justify-center font-bold text-sm sm:text-base px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white shadow-sm transition-colors"
       >
-        マイページへ
+        はじめる
       </Link>
     </>
   );

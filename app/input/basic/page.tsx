@@ -50,6 +50,17 @@ const SUBJECT_GRADE_FIELDS: ReadonlyArray<{
 
 const emptyPreference: SchoolPreference = { university: '', faculty: '', department: '' };
 
+// 保存後の遷移先。next クエリ（同一オリジンの相対パスのみ許可）を最優先し、
+// 無ければ /home。login の resolvePostLoginDest と対になり、「基本情報入力 →
+// 本来の next（購入再開 /pricing?plan=… 等）へ復帰」を成立させる。
+// open-redirect 防止: "/" 始まりかつ protocol-relative（//, /\）でないものだけ通す。
+function sanitizeNext(raw: string | null): string {
+  if (!raw) return '/home';
+  if (!raw.startsWith('/')) return '/home';
+  if (raw.startsWith('//') || raw.startsWith('/\\')) return '/home';
+  return raw;
+}
+
 // マウント前 false / マウント後 true を返す flag（SSR/hydration セーフ）。
 // useSyncExternalStore は server snapshot / client snapshot を React のハイドレーション
 // フェーズと協調させるため、setState を使わずに「マウント済み」フラグを表現できる。
@@ -219,7 +230,13 @@ export default function BasicInfoPage() {
         .catch(() => {});
     }
 
-    router.push('/home');
+    // next クエリがあれば本来の導線へ戻す（無ければ /home）。
+    // useSearchParams（Suspense 要求）を避け、submit 時に直接 search を読む。
+    const nextDest =
+      typeof window !== 'undefined'
+        ? sanitizeNext(new URLSearchParams(window.location.search).get('next'))
+        : '/home';
+    router.push(nextDest);
   }
 
   if (!isMounted) return null;
