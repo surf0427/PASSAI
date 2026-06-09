@@ -80,6 +80,25 @@ export async function POST(req: Request) {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'signature verification failed';
+
+    // ── DEBUG(一時): 400 invalid signature の原因切り分け用。
+    // secret 値は絶対に出さず、prefix / length / boolean のみ。
+    // devWarn は本番で DCE されるため、本番でも残る console.error で出す。
+    const ws = process.env.STRIPE_WEBHOOK_SECRET;
+    const sk = process.env.STRIPE_SECRET_KEY;
+    console.error('[webhook-debug] verify failed', {
+      errName: err instanceof Error ? err.name : null,
+      errMessage: message,
+      hasSig: Boolean(sig),
+      sigPrefix: sig ? sig.slice(0, 3) : null,
+      hasWebhookSecret: Boolean(ws),
+      webhookSecretPrefix: ws ? ws.slice(0, 6) : null,
+      webhookSecretLen: ws ? ws.length : 0,
+      hasSecretKey: Boolean(sk),
+      secretKeyPrefix: sk ? sk.slice(0, 8) : null,
+      nodeEnv: process.env.NODE_ENV,
+    });
+
     devWarn('[billing/webhook] signature verification failed', message);
     return NextResponse.json({ error: 'invalid signature' }, { status: 400 });
   }
