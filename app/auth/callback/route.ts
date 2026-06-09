@@ -22,6 +22,7 @@
 //   - 匿名認証フロー・AuthProvider には非干渉（明示リンク click 経由のみ）。
 
 import { NextResponse } from 'next/server';
+import type { User } from '@supabase/supabase-js';
 
 import { captureRouteException } from '@/lib/sentry/capture';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
@@ -56,6 +57,20 @@ function sanitizeNextPath(raw: string | null): string {
   return raw;
 }
 
+// 一時ログ（TODO: 確認後に削除）。生メール禁止・id / boolean / provider のみ。
+// callback が確立したセッションが匿名 A か email user E かを実測し、checkout が見る
+// userId（[checkout-auth-debug]）と突き合わせて session 引き継ぎの成否を確定する。
+function logCallbackAuth(path: 'code' | 'token_hash', user: User | null): void {
+  console.warn('[callback-auth-debug]', {
+    path,
+    establishedUserId: user?.id ?? null,
+    establishedIsAnonymous: user?.is_anonymous ?? null,
+    establishedHasEmail: Boolean(user?.email),
+    identitiesCount: user?.identities?.length ?? 0,
+    providers: user?.identities?.map((i) => i.provider) ?? [],
+  });
+}
+
 export async function GET(request: Request): Promise<Response> {
   const t0 = Date.now();
   const requestUrl = new URL(request.url);
@@ -78,7 +93,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // (1) code 形式（既存挙動。PKCE / {{ .ConfirmationURL }}）。
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
       // Sentry: code 交換失敗。code 値・token は送らず error code とメタのみ。
       captureRouteException(
@@ -88,13 +103,14 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
+    logCallbackAuth('code', data.user ?? data.session?.user ?? null);
     return NextResponse.redirect(`${origin}${safeNext}`);
   }
 
   // (2) token_hash + 許可された type 形式（{{ .TokenHash }} テンプレ）。
   //     ここで type は AllowedOtpType に narrow される。
   if (tokenHash && isAllowedOtpType(type)) {
-    const { error } = await supabase.auth.verifyOtp({
+    const { data, error } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
       type,
     });
@@ -107,6 +123,7 @@ export async function GET(request: Request): Promise<Response> {
       );
       return errorRedirect;
     }
+    logCallbackAuth('token_hash', data.user ?? data.session?.user ?? null);
     return NextResponse.redirect(`${origin}${safeNext}`);
   }
 
