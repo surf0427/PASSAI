@@ -29,9 +29,15 @@ const LP_NAV_LINKS = [
 export function Header() {
   const pathname = usePathname();
   const isLanding = pathname === '/';
-  // 認証ページ（/login）では Home / 基本情報 のナビを出さず、ロゴのみ表示する。
-  // ログイン完了までユーザーを導くのが目的で、他ページへの導線は不要なため。
+  // 認証ページ（/login）と料金ページ（/pricing）では Home / 基本情報 のナビを
+  // 出さず、ロゴのみ表示する。
+  //   - /login: ログイン完了までユーザーを導くため、他ページへの導線は不要。
+  //   - /pricing: 課金コンバージョンページのため、離脱導線（Home / 基本情報）を
+  //     封鎖して Checkout への集中度を上げる。
   const isAuthPage = pathname === '/login';
+  const isPricingPage = pathname === '/pricing';
+  // ロゴのみ（ナビ非表示）にするページ。
+  const isLogoOnly = isAuthPage || isPricingPage;
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm">
@@ -71,7 +77,7 @@ export function Header() {
               </Link>
             </div>
           </>
-        ) : isAuthPage ? null : (
+        ) : isLogoOnly ? null : (
           <nav className="flex items-center gap-1">
             <NavLink href="/home" pathname={pathname}>Home</NavLink>
             <NavLink href="/input/basic" pathname={pathname}>基本情報</NavLink>
