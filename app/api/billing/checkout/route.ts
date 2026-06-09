@@ -133,10 +133,36 @@ export async function POST(req: Request) {
     );
   }
 
-  // 5. Checkout Session 作成
+  // ── DEBUG (一時): checkout 500 の原因切り分け用。
+  // secret key / full email は出さない。userId / plan / priceId は出して可。
+  console.warn('[checkout-debug] request', { userId, plan });
+
+  // 5. priceId 解決。getStripePriceId は env 不備 / 形式不正で throw し得る。
+  // 従来はこの呼び出しが params リテラル内（try の外）にあり、throw すると
+  // catch に入らず本文不明の 500 になっていた。ここでログしてから再throwする
+  // （再throw により従来どおり unhandled → 500 のまま。挙動は不変）。
+  let priceId: string;
+  try {
+    priceId = getStripePriceId(plan);
+    console.warn('[checkout-debug] priceId', {
+      userId,
+      priceId,
+      startsWithPrice: priceId.startsWith('price_'),
+    });
+  } catch (err) {
+    console.error('[checkout-debug] getStripePriceId failed', {
+      userId,
+      plan,
+      name: err instanceof Error ? err.name : null,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+
+  // 6. Checkout Session 作成
   const params: Stripe.Checkout.SessionCreateParams = {
     mode: 'subscription',
-    line_items: [{ price: getStripePriceId(plan), quantity: 1 }],
+    line_items: [{ price: priceId, quantity: 1 }],
     success_url: `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/billing/cancel`,
     client_reference_id: userId,
@@ -152,6 +178,7 @@ export async function POST(req: Request) {
   };
 
   try {
+    console.warn('[checkout-debug] before sessions.create', { userId, priceId });
     const session = await getStripeClient().checkout.sessions.create(params);
     if (!session.url) {
       return NextResponse.json(
@@ -162,6 +189,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ url: session.url }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'checkout failed';
+    // ── DEBUG (一時): devWarn は本番で出力されないため、Stripe エラー本文を
+    // console.error で可視化する。raw.* は Stripe API の生エラー詳細。
+    const e = err as {
+      name?: unknown;
+      message?: unknown;
+      type?: unknown;
+      code?: unknown;
+      raw?: { message?: unknown; param?: unknown; code?: unknown };
+    };
+    console.error('[checkout-debug] sessions.create failed', {
+      userId,
+      priceId,
+      name: e?.name ?? null,
+      errMessage: e?.message ?? null,
+      type: e?.type ?? null,
+      code: e?.code ?? null,
+      rawMessage: e?.raw?.message ?? null,
+      rawParam: e?.raw?.param ?? null,
+      rawCode: e?.raw?.code ?? null,
+    });
     devWarn('[billing/checkout] stripe error', message);
     // Sentry: Stripe Checkout 作成失敗。plan は判明、本文は送らない。
     captureRouteException(
