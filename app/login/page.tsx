@@ -32,6 +32,7 @@ import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useAuthDebug, useIsMember } from '@/app/components/AuthProvider';
+import { FooterSection } from '@/app/components/landing/FooterSection';
 import { signInWithEmailOtp, verifyEmailOtp } from '@/lib/supabase/auth';
 import { isValidEmailFormat } from '@/lib/supabase/email';
 
@@ -302,14 +303,17 @@ function LoginForm() {
 export default function LoginPage() {
   // useSearchParams は Suspense 境界を要求するため wrap する。
   return (
-    <Suspense
-      fallback={
-        <div className="max-w-md mx-auto px-4 py-10 text-sm text-slate-500">
-          読み込み中…
-        </div>
-      }
-    >
-      <LoginForm />
-    </Suspense>
+    <>
+      <Suspense
+        fallback={
+          <div className="max-w-md mx-auto px-4 py-10 text-sm text-slate-500">
+            読み込み中…
+          </div>
+        }
+      >
+        <LoginForm />
+      </Suspense>
+      <FooterSection />
+    </>
   );
 }

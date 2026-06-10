@@ -7,7 +7,13 @@
 // 認証フロー・認可ロジックには手を入れない（PricingSection を描画するだけ）。
 
 import { PricingSection } from '@/app/components/landing/PricingSection';
+import { FooterSection } from '@/app/components/landing/FooterSection';
 
 export default function PricingPage() {
-  return <PricingSection />;
+  return (
+    <>
+      <PricingSection />
+      <FooterSection />
+    </>
+  );
 }

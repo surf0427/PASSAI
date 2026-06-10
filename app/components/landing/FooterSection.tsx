@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { Logo } from '@/app/components/Logo';
 
-// LP 内 footer。グローバル layout には入れず、`/` でだけ表示する。
+// 公開ページ共通 footer。グローバル layout には入れず、公開ページ
+// （/, /pricing, /login, /terms, /privacy, /legal/commerce, /about, /contact）で
+// 個別に描画する。ログイン後の作業画面（/home, 各AI機能ページ等）には出さない。
 // スマホ：ブランド → リンク列 → コピーライト の縦並び。
 // PC：ブランド（左）／リンク列（右）の左右配置 + 下にコピーライト。
-// 法的ページのリンク先（/about, /terms, /privacy, /contact）は未作成（仮）。
 
 export function FooterSection() {
   return (
@@ -38,6 +39,12 @@ export function FooterSection() {
               className="text-slate-600 hover:text-slate-900 transition-colors"
             >
               プライバシーポリシー
+            </Link>
+            <Link
+              href="/legal/commerce"
+              className="text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              特定商取引法に基づく表記
             </Link>
             <Link
               href="/contact"

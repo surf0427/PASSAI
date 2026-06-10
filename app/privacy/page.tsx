@@ -3,6 +3,8 @@ import Link from 'next/link';
 
 import { LegalSection } from '@/components/legal/LegalSection';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { FooterSection } from '@/app/components/landing/FooterSection';
+import { CONTACT_EMAIL } from '@/lib/legal';
 
 // STEP-LEGAL-02: PASSAI の正式プライバシーポリシー (初版)。
 //
@@ -17,6 +19,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 
 export const metadata: Metadata = {
   title: 'プライバシーポリシー | PASSAI',
+  description:
+    'PASSAI が取得する情報の種類・利用目的・第三者提供・保存期間・ユーザーの権利について定めたプライバシーポリシーです。',
 };
 
 const ENACTED_AT = '2026年6月2日';
@@ -65,7 +69,8 @@ export default function PrivacyPage() {
             <ul className="list-disc pl-5 space-y-2">
               <li>
                 <strong>アカウント情報</strong>: 匿名認証ID
-                (Supabase Auth が発行する UUID)、登録された場合のメールアドレス
+                (Supabase Auth が発行する UUID)、登録された場合のメールアドレス、
+                ユーザーが任意に設定する表示用ユーザーID
               </li>
               <li>
                 <strong>決済関連情報</strong>: Stripe Customer ID、購読プラン
@@ -311,8 +316,13 @@ export default function PrivacyPage() {
                 PASSAI 運営チーム
               </p>
               <p className="text-slate-600 leading-relaxed">
-                お問い合わせフォームおよび専用連絡先は準備中です。整備までの間は、サイト
-                上の最新の案内をご確認ください。
+                メールアドレス:{' '}
+                <a
+                  href={`mailto:${CONTACT_EMAIL}`}
+                  className="text-brand-700 hover:underline"
+                >
+                  {CONTACT_EMAIL}
+                </a>
               </p>
             </div>
           </LegalSection>
@@ -337,6 +347,8 @@ export default function PrivacyPage() {
 
         <p className="text-xs text-slate-500 mt-12">以上</p>
       </div>
+
+      <FooterSection />
     </div>
   );
 }

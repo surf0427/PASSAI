@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { LegalArticle } from '@/components/legal/LegalArticle';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { FooterSection } from '@/app/components/landing/FooterSection';
 
 // STEP-LEGAL-01: PASSAI の正式利用規約 (初版)。
 //
@@ -25,6 +26,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 
 export const metadata: Metadata = {
   title: '利用規約 | PASSAI',
+  description:
+    'PASSAI の利用規約です。サービス内容・料金・解約・AI機能に関する重要事項・禁止事項・免責などの利用条件を定めています。',
 };
 
 const ENACTED_AT = '2026年6月2日';
@@ -363,6 +366,8 @@ export default function TermsPage() {
 
         <p className="text-xs text-slate-500 mt-12">以上</p>
       </div>
+
+      <FooterSection />
     </div>
   );
 }

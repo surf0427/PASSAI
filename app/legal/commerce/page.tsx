@@ -1,12 +1,10 @@
 /**
- * STEP-BILLING-07: 特定商取引法に基づく表記 (placeholder)。
+ * 特定商取引法に基づく表記。
  *
- * 本ページの目的:
- *   - Stripe Customer Portal 設定 / 本番審査時に「特商法表記 URL」が必要。
- *     本番化までに正式版に差し替えるが、URL は今のうちに確保しておく。
- *   - 仮表記は「準備中」とし、リリース前に下記項目を実値で埋める:
- *       事業者名 / 運営責任者 / 住所 / 連絡先 / 代金支払時期・方法 /
- *       商品引渡時期 / 返品・キャンセル / 動作環境 等
+ * - Stripe Customer Portal 設定 / 本番審査で必要となる「特商法表記 URL」。
+ *   URL は /legal/commerce で固定（移設しない）。
+ * - 事業者情報・連絡先・価格は lib/legal.ts に集約し、二重管理を避ける。
+ *   価格は lib/billing/plans.ts の priceJpy を single source として参照する。
  *
  * 既存の /privacy /terms と同じレイアウト (max-w-3xl / PageHeader / 戻る Link)
  * に揃える。
@@ -16,9 +14,20 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { PageHeader } from '@/components/ui/PageHeader';
+import { FooterSection } from '@/app/components/landing/FooterSection';
+import {
+  BUSINESS_NAME,
+  CONTACT_EMAIL,
+  DISCLOSURE_ON_REQUEST,
+  OPERATOR_NAME,
+  SALES_PRICE_LABEL,
+  SERVICE_DESCRIPTION,
+} from '@/lib/legal';
 
 export const metadata: Metadata = {
   title: '特定商取引法に基づく表記 | PASSAI',
+  description:
+    'PASSAI（運営責任者 窪田 慶大）の特定商取引法に基づく表記です。販売価格・支払方法・サービス提供時期・解約方法・返金・動作環境について記載しています。',
 };
 
 export default function CommercePage() {
@@ -35,47 +44,60 @@ export default function CommercePage() {
         <PageHeader title="特定商取引法に基づく表記" />
 
         <div className="space-y-5 text-slate-700 leading-relaxed">
-          <div className="rounded-xl bg-slate-50 ring-1 ring-slate-200 px-5 py-4 text-sm text-slate-600">
-            正式版を準備中です。本番リリース前に下記項目を実値で記載します。
-          </div>
+          <CommerceRow label="事業者名">{BUSINESS_NAME}</CommerceRow>
+          <CommerceRow label="運営責任者">{OPERATOR_NAME}</CommerceRow>
+          <CommerceRow label="所在地">{DISCLOSURE_ON_REQUEST}</CommerceRow>
+          <CommerceRow label="電話番号">{DISCLOSURE_ON_REQUEST}</CommerceRow>
+          <CommerceRow label="メールアドレス">
+            <a
+              href={`mailto:${CONTACT_EMAIL}`}
+              className="text-brand-700 hover:underline"
+            >
+              {CONTACT_EMAIL}
+            </a>
+          </CommerceRow>
+          <CommerceRow label="サービス内容">{SERVICE_DESCRIPTION}</CommerceRow>
+          <CommerceRow label="販売価格">{SALES_PRICE_LABEL}</CommerceRow>
+          <CommerceRow label="商品代金以外の必要料金">
+            インターネット接続に必要な通信料は利用者のご負担となります。
+          </CommerceRow>
+          <CommerceRow label="支払方法">
+            クレジットカード決済（Stripe）
+          </CommerceRow>
+          <CommerceRow label="支払時期">
+            初回お申し込み時、および以後毎月の更新日に自動課金されます。
+          </CommerceRow>
+          <CommerceRow label="サービス提供時期">
+            決済完了後ただちにご利用いただけます。
+          </CommerceRow>
+          <CommerceRow label="解約方法">
+            マイページの「請求情報を管理」（Stripe Customer Portal）からいつでも
+            解約のお手続きが可能です。
+          </CommerceRow>
+          <CommerceRow label="返品・返金">
+            サービスの性質上、購入後の返金には対応いたしかねます。
+          </CommerceRow>
+          <CommerceRow label="動作環境">
+            Google Chrome 最新版 / Safari 最新版
+          </CommerceRow>
+        </div>
 
-          <PlaceholderRow label="販売事業者">準備中</PlaceholderRow>
-          <PlaceholderRow label="運営責任者">準備中</PlaceholderRow>
-          <PlaceholderRow label="所在地">
-            ご請求があった場合は遅滞なく開示します
-          </PlaceholderRow>
-          <PlaceholderRow label="連絡先">
-            ご請求があった場合は遅滞なく開示します
-          </PlaceholderRow>
-          <PlaceholderRow label="販売価格">
-            各プランのページに表示する価格(税込)
-          </PlaceholderRow>
-          <PlaceholderRow label="商品代金以外の必要料金">
-            通信料はお客様のご負担となります
-          </PlaceholderRow>
-          <PlaceholderRow label="支払方法">
-            クレジットカード決済 (Stripe)
-          </PlaceholderRow>
-          <PlaceholderRow label="支払時期">
-            毎月の更新日に自動課金
-          </PlaceholderRow>
-          <PlaceholderRow label="商品引渡時期">
-            決済完了後ただちにご利用いただけます
-          </PlaceholderRow>
-          <PlaceholderRow label="返品・キャンセル">
-            デジタルサービスの性質上、決済後の返金は原則対応いたしかねます。
-            次回更新前の解約はマイページの「請求情報を管理」よりお手続きください。
-          </PlaceholderRow>
-          <PlaceholderRow label="動作環境">
-            最新版の主要ブラウザ (Chrome / Safari / Edge / Firefox) を推奨
-          </PlaceholderRow>
+        <div className="mt-8 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm leading-relaxed text-amber-900">
+            本サービスは生成AIを利用した受験サポートサービスです。特定の学校への
+            合格その他の結果を保証するものではなく、AIが生成する添削・アドバイス等の
+            出力の正確性・完全性についても保証いたしません。最終的なご判断は利用者
+            ご自身の責任で行ってください。
+          </p>
         </div>
       </div>
+
+      <FooterSection />
     </div>
   );
 }
 
-function PlaceholderRow({
+function CommerceRow({
   label,
   children,
 }: {
