@@ -29,6 +29,7 @@ import { EmptyState } from './EmptyState';
 import { BillingCard } from './BillingCard';
 import { UsageStatusCard } from './UsageStatusCard';
 import { LoginNudge } from './LoginNudge';
+import { LogoutButton } from './LogoutButton';
 
 const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
@@ -221,6 +222,11 @@ export default function MyPage() {
           </section>
         </>
       )}
+
+      {/* ── 最下部：補助アクション（ログアウト） ──────────────
+          設定系の補助操作のため、誤タップを避けてページ最下部に控えめに配置。
+          empty-state 分岐の外側に置き、活動有無に関わらず常に表示する。 */}
+      <LogoutButton />
     </div>
   );
 }
