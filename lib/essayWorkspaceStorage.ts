@@ -10,12 +10,16 @@
 //   - migration: essayPracticeReview から 1 件移行（key 不在時のみ、idempotent）
 //   - normalize: 壊れたデータを throw せず安全に落とす（null 返却または除外）
 //
+// dual-write / Supabase mirror（STEP B で追加）:
+//   upsertEssayWorkspace 後に注入式 mirror hook（setEssayWorkspaceMirrorHook）を fire する。
+//   storage 自身は Supabase を import しない（依存方向を types → lib → storage に保つ）。
+//   実際の mirror 実装（debounce / userId / Supabase upsert）は
+//   lib/repository/essayWorkspaceRepository.ts が hook を登録して担う。
+//
 // STEP A で意図的にやらないこと:
-//   - dual-write（STEP B 着手時に追加）
 //   - schemaVersion 管理（defensive parse で代用）
 //   - workspaceOps からの mutation 関数の埋め込み
 //   - React hook 化
-//   - Supabase mirror 連携
 //
 // 関連:
 //   - 型: types/essay.ts
@@ -107,6 +111,30 @@ export function upsertEssayWorkspace(workspace: EssayWorkspace): void {
   const filtered = list.filter((w) => w.id !== workspace.id);
   const next = applyLruCap([workspace, ...filtered]);
   safeSetStorage(ESSAY_WORKSPACES_KEY, next);
+
+  // localStorage（canonical）への保存が完了した後に Supabase mirror hook を fire する。
+  // hook 未登録（未ログイン / repository 未配線）なら no-op。失敗は hook 側で握り潰す。
+  if (mirrorHook) {
+    try {
+      mirrorHook(workspace);
+    } catch {
+      // mirror hook の例外で canonical 保存フローを壊さない。
+    }
+  }
+}
+
+// ─── 公開: Supabase mirror hook（注入式・dual-write 配線点） ──────────────
+
+// upsertEssayWorkspace が保存成功後に呼ぶ hook。storage は Supabase を直接 import せず、
+// repository（lib/repository/essayWorkspaceRepository.ts）が実装を注入する。
+// null で解除（未ログイン / SSR では呼ばれない）。
+type EssayWorkspaceMirrorHook = (workspace: EssayWorkspace) => void;
+let mirrorHook: EssayWorkspaceMirrorHook | null = null;
+
+export function setEssayWorkspaceMirrorHook(
+  hook: EssayWorkspaceMirrorHook | null,
+): void {
+  mirrorHook = hook;
 }
 
 // ─── 公開: id 生成 ────────────────────────────────────────────────────────

@@ -297,6 +297,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           )
           .catch(() => {});
       }
+
+      // ── 小論文 essayWorkspaces の mirror 配線 + 初回 backfill（上りのみ）──
+      //
+      // 先行 feature と同形・同じ場所で起動する独立した fire-and-forget。essay は
+      // 保存経路が localStorage のみで Supabase 未連携だったため、本配線で durable mirror を
+      // 確立する。statement_review_history（志望理由書）とは別 table・別機能。
+      //
+      //   1. registerEssayWorkspaceMirror: 以降の upsertEssayWorkspace（autosave / 添削結果 /
+      //      改善ワーク保存）を debounce で essay_workspaces に mirror する dualWrite を配線。
+      //   2. backfillEssayWorkspacesOnce: 配線前に localStorage（key='essayWorkspaces'）へ
+      //      蓄積された既存 workspace を一括同期（flag で 1 回限り・冪等）。
+      //
+      // 契約（先行 backfill と同一）:
+      //   - await しない。認証 / profile フローをブロックしない。
+      //   - 例外は握りつぶす。同期失敗を auth / profile の失敗にしない。
+      //   - dynamic import で browser-only な repository / Supabase client を server bundle に
+      //     引き込まない（boundary 安全）。cancelled guard: アンマウント後は起動しない。
+      //   - userId が空なら mirror は no-op。RLS（auth.uid() = user_id）で他人の行は触れない。
+      if (!cancelled) {
+        const essayUserId = session.userId;
+        void import('@/lib/repository/essayWorkspaceRepository')
+          .then((mod) => {
+            mod.registerEssayWorkspaceMirror(essayUserId);
+            return mod.backfillEssayWorkspacesOnce({ userId: essayUserId });
+          })
+          .catch(() => {});
+      }
     })();
     return () => {
       cancelled = true;

@@ -51,7 +51,9 @@ export type BackfillFeature =
   | 'diagnosisLog'
   | 'diagnosisLogRestore'
   | 'activityLog'
-  | 'activityLogRestore';
+  | 'activityLogRestore'
+  // 小論文 essay workspace の上り backfill（restore は別 STEP）。
+  | 'essayWorkspaces';
 
 // backfill ロジックの世代。ロジックを変えて再 backfill させたいときに +1 する。
 export const BACKFILL_VERSION = 1;

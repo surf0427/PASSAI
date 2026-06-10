@@ -1554,4 +1554,110 @@ CREATE POLICY "activity_logs owner delete"
   FOR DELETE
   TO authenticated
   USING (auth.uid() = user_id);
-  
+
+
+-- ════════════════════════════════════════════════════════════════════════
+--   §50–§52  essay_workspaces — 小論文ワークスペースの durable mirror
+-- ════════════════════════════════════════════════════════════════════════
+--   §50  essay_workspaces  table
+--   §51  essay_workspaces  trigger (set_updated_at)
+--   §52  essay_workspaces  RLS
+--
+-- 50. essay_workspaces
+--     localStorage key='essayWorkspaces'（小論文 EssayWorkspace[], lib/essayWorkspaceStorage.ts）
+--     の auth-scoped Supabase durable mirror。localStorage canonical は維持し、本 table は
+--     同期先（best-effort）。self_prs §35 / self_analysis_logs §32 / statement_review_history
+--     §38 と同じ auth-scoped 永続層であり、anonymous *_mirrors 系統ではない。
+--
+--     【志望理由書(statement)とは別機能】statement_review_history（§38, 志望理由書添削履歴）
+--     とは混同しない。本 table は小論文(essay)練習ワークスペース専用。
+--
+--     natural key は (user_id, local_workspace_id)。local_workspace_id = EssayWorkspace.id
+--     （'ws-{timestamp}-{random4hex}' 形式）をそのまま使う。
+--
+--     statement_review_history（不変 item）と異なり、EssayWorkspace は可変である
+--     （body の autosave / reviews の追記 / improvementInProgress の更新）。よって upsert は
+--     workspace 全体を都度上書きする mirror として使う（onConflict で冪等）。activity_logs
+--     §47 と同じ「ドキュメント全体を payload に snapshot」する型だが、1 ユーザー複数件
+--     （localStorage 側は LRU 10 件）保持するため UNIQUE は (user_id, local_workspace_id)。
+--
+--     delete を伴う点に注意: localStorage 側に 10 件 cap eviction がある。本 STEP では
+--     DB に伝播しない（上り mirror は upsert-only）。DB が 10 件超を durable 保持できるのは
+--     むしろ利点。down-sync / restore は別 STEP。
+CREATE TABLE essay_workspaces (
+  id                  uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  local_workspace_id  text         NOT NULL,
+  workspace           jsonb        NOT NULL,
+  created_at          timestamptz  NOT NULL DEFAULT now(),
+  updated_at          timestamptz  NOT NULL DEFAULT now(),
+  CONSTRAINT essay_workspaces_local_unique UNIQUE (user_id, local_workspace_id)
+);
+
+COMMENT ON TABLE essay_workspaces IS
+  '小論文(essay)ワークスペース（localStorage essayWorkspaces）の auth-scoped Supabase durable mirror。'
+  'localStorage canonical は維持し、本 table は同期先。natural key = (user_id, local_workspace_id)。'
+  'local_workspace_id = EssayWorkspace.id, workspace = EssayWorkspace 全体（jsonb・本文/テーマ/'
+  '添削結果 reviews/改善 improvementInProgress を含む）。志望理由書 statement_review_history (§38) '
+  'とは別機能で混同しない。EssayWorkspace は可変なので upsert で全体を都度上書きする。';
+
+COMMENT ON COLUMN essay_workspaces.user_id IS
+  'auth.users(id). Owner key. RLS gate uses auth.uid() = user_id.';
+
+COMMENT ON COLUMN essay_workspaces.local_workspace_id IS
+  'localStorage の EssayWorkspace.id（''ws-{timestamp}-{random4hex}'' 形式）をそのまま入れる。'
+  'natural key の一部で upsert の onConflict 対象。';
+
+COMMENT ON COLUMN essay_workspaces.workspace IS
+  'EssayWorkspace 全体を jsonb 丸ごと保存（types/essay.ts）。target / theme / mini / body / '
+  'reviews（添削結果・スコア）/ improvementInProgress（改善 Q&A・AI 改善方針）/ sparring を含む。'
+  'shape は DB では強制しない。表示時の normalize は read 側（lib/essayWorkspaceStorage.ts）が担保する。';
+
+COMMENT ON COLUMN essay_workspaces.created_at IS
+  'EssayWorkspace.createdAt を mirror 時に原値保持する（LS の作成時刻）。';
+
+COMMENT ON CONSTRAINT essay_workspaces_local_unique ON essay_workspaces IS
+  'UNIQUE(user_id, local_workspace_id)。EssayWorkspace.id を natural key とし、onConflict 指定の '
+  'upsert を冪等化するための制約。';
+
+
+-- 51. trigger: keep updated_at fresh (re-uses set_updated_at() from §3)
+--     EssayWorkspace は可変なので、upsert の ON CONFLICT DO UPDATE 経路で updated_at を前進させる。
+CREATE TRIGGER essay_workspaces_set_updated_at
+  BEFORE UPDATE ON essay_workspaces
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+
+-- 52. RLS — essay_workspaces
+--     Anonymous Auth 経由でも role=authenticated として届くので policy 対象は authenticated。
+--     すべての行操作を auth.uid() = user_id で閉じる（statement_review_history §40 と同形）。
+--     UPDATE policy が必要な理由: .upsert(..., {onConflict}) は INSERT ... ON CONFLICT DO UPDATE
+--     を発行する。EssayWorkspace は可変で実際に DO UPDATE 経路を頻繁に通るため、UPDATE policy が
+--     無いと mirror が RLS に弾かれ devWarn に黙って失敗が出続ける。
+ALTER TABLE essay_workspaces ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "essay_workspaces owner select"
+  ON essay_workspaces
+  FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "essay_workspaces owner insert"
+  ON essay_workspaces
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "essay_workspaces owner update"
+  ON essay_workspaces
+  FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "essay_workspaces owner delete"
+  ON essay_workspaces
+  FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
