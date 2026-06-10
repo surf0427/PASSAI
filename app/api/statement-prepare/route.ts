@@ -25,6 +25,10 @@ const MODEL = 'claude-sonnet-4-6';
 // M4: Vercel 実行時間上限。AI timeout（lib/aiTimeout.ts = 60s）+ 余裕。Pro 前提
 // （Hobby は 60s 上限で AI timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
 export const maxDuration = 80;
+// 整理メモ生成は毎回ユーザー固有入力に依存する。Next.js / fetch 層のキャッシュを明示無効化し、
+// 古い生成結果が hit 扱いで返るのを防ぐ（POST handler は既定で dynamic だが明示する）。
+export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
 const ROUTE = 'api/statement-prepare';
 // STEP-GATE-COMPLETE: usage_records.route 識別子 (schema コメント規約)。

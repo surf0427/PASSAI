@@ -1,4 +1,4 @@
-// 改善ワーク深掘り画面（STEP E 新規、責務分離 UX 修正版）。
+// 改善ワーク深掘り画面（STEP E 新規 → STEP-ESSAY-DEEPQ-AI-01 で AI 質問化）。
 //
 // UX 修正後の方針:
 //   - session 粒度は workspace（≒ essay）単位。issue 切替で conflict にしない
@@ -8,22 +8,26 @@
 //     deep page では生成 CTA を持たない
 //   - 完了後は「改善点一覧へ戻る」CTA を出して hub への自然な誘導
 //
-// 表示モード（render 時に決まる、内部 phase state は持たない）:
-//   1. 読み込み中（pre-mount）
-//   2. NotFound（workspace 不在 / wid 不正）
-//   3. InvalidIssue（issueId parse 失敗 / sourceReviewIndex 範囲外 / issueText 空）
-//   4. Questions form （resume または lazy start）
+// 深掘り質問の出どころ（STEP-ESSAY-DEEPQ-AI-01）:
+//   従来は lib/essay/deepDiveQuestions.ts の axis 別固定テンプレ（本文に紐付かない
+//   抽象質問）だった。実機で「ユーザー本文と無関係な深掘り質問」になる問題があったため、
+//   /api/essay-deep-questions を mount 時に呼び、本文・テーマ・改善対象・直前の AI
+//   フィードバックに紐付いた具体質問を生成する。
+//   - 既存 work（resume）があれば snapshot（deepQuestions）を再利用し再生成しない
+//   - API 失敗 / quota 超過時は固定テンプレに silent fallback して機能を止めない
 //
 // lazy start パターン（Phase 1 deep page と同型）:
 //   - mount 直後は workspace の works[issueId] を作らない
 //   - 最初の textarea 入力で startImprovementWork が works[issueId] を追加
+//     （このとき AI 生成質問が deepQuestions として snapshot される）
 //   - 別 issue の work は触らずに残す（並行保存）
 
 'use client';
 
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   loadEssayWorkspace,
   upsertEssayWorkspace,
@@ -37,6 +41,7 @@ import {
   getDeepDiveQuestions,
   inferAxis,
 } from '@/lib/essay/deepDiveQuestions';
+import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { parseIssueId, type ParsedIssueId } from '@/lib/essay/issueId';
 import { Textarea } from '@/components/ui/Textarea';
 import {
@@ -44,7 +49,7 @@ import {
   BUTTON_SIZE,
   BUTTON_VARIANT,
 } from '@/components/ui/buttonStyles';
-import type { EssayWorkspace, ReviewEntry } from '@/types/essay';
+import type { BreakdownAxis, EssayWorkspace, ReviewEntry } from '@/types/essay';
 
 // SSR-stable mount flag。
 const subscribeMount = () => () => {};
@@ -67,13 +72,10 @@ export default function EssayDeepDivePage() {
     getMountedServerSnapshot,
   );
 
-  const mountedWorkspace = useMemo<EssayWorkspace | null>(
+  const workspace = useMemo<EssayWorkspace | null>(
     () => (isMounted && wid ? loadEssayWorkspace(wid) : null),
     [isMounted, wid],
   );
-
-  const [postUserWorkspace, setWorkspace] = useState<EssayWorkspace | null>(null);
-  const workspace: EssayWorkspace | null = postUserWorkspace ?? mountedWorkspace;
 
   // pre-mount。
   if (!isMounted) {
@@ -131,29 +133,144 @@ export default function EssayDeepDivePage() {
     );
   }
 
-  // ─── derived ──────────────────────────────────────────────────────
+  // 全ガード通過後に form 本体を別 component で描画する。
+  // AI 質問 fetch / answers autosave 用の hook は本 component に閉じ込める
+  // （親側で条件付き hook 呼び出しにならないようにするため）。
+  return (
+    <DeepDiveForm
+      key={issueId}
+      wid={wid}
+      issueId={issueId}
+      reviewIndex={parsed.reviewIndex}
+      issueText={issueText}
+      review={review}
+      initialWorkspace={workspace}
+    />
+  );
+}
 
-  // 既存の work があればその snapshot を使う、なければ live derive。
+function DeepDiveForm({
+  wid,
+  issueId,
+  reviewIndex,
+  issueText,
+  review,
+  initialWorkspace,
+}: {
+  wid: string;
+  issueId: string;
+  reviewIndex: number;
+  issueText: string;
+  review: ReviewEntry;
+  initialWorkspace: EssayWorkspace;
+}) {
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+  const [workspace, setWorkspace] = useState<EssayWorkspace>(initialWorkspace);
+
   const existingWork = workspace.improvementInProgress?.works[issueId] ?? null;
-  const axis = existingWork ? existingWork.axis : inferAxis(issueText);
-  const questions = existingWork
+  const axis: BreakdownAxis = existingWork ? existingWork.axis : inferAxis(issueText);
+
+  // 深掘り質問の source:
+  //   - existingWork あり（resume） → snapshot を使い、AI を再生成しない
+  //   - なし → mount 時に /api/essay-deep-questions で生成。失敗時は固定テンプレ fallback
+  const [aiQuestions, setAiQuestions] = useState<string[] | null>(
+    existingWork ? existingWork.deepQuestions : null,
+  );
+  const [questionsLoading, setQuestionsLoading] = useState(!existingWork);
+  const [usedFallback, setUsedFallback] = useState(false);
+  const fetchStartedRef = useRef(false);
+
+  useEffect(() => {
+    // resume（既存 work あり）は snapshot を使うので fetch 不要。
+    if (existingWork) return;
+    // StrictMode の二重実行・再 render での多重 fetch を防ぐ。
+    if (fetchStartedRef.current) return;
+    fetchStartedRef.current = true;
+
+    let cancelled = false;
+
+    const fallbackToTemplate = () => {
+      if (cancelled) return;
+      setAiQuestions(getDeepDiveQuestions(axis));
+      setUsedFallback(true);
+    };
+
+    // 出力収束（同一 workspace で似た質問に偏る）対策: 他の改善点で既に生成済みの
+    // 深掘り質問を集めて重複回避の参考として渡す。決定論的処理（乱数なし）。
+    const otherWorks = workspace.improvementInProgress?.works ?? {};
+    const existingQuestions = Object.entries(otherWorks)
+      .filter(([id]) => id !== issueId)
+      .flatMap(([, w]) => w.deepQuestions ?? []);
+
+    (async () => {
+      try {
+        const res = await fetch('/api/essay-deep-questions', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            essayBody: workspace.body,
+            theme: workspace.theme.text,
+            issueText,
+            axis,
+            mini: workspace.mini,
+            previousFeedback: {
+              improvement: review.improvement,
+              goodPoints: review.goodPoints,
+              weakPoints: review.weakPoints,
+              verdict: review.verdict,
+            },
+            basicInfo: loadBasicInfo(),
+            existingQuestions,
+          }),
+        });
+
+        // 402 quota 超過は dialog に委譲。質問はテンプレ fallback で機能継続。
+        if (await handleQuotaResponse(res)) {
+          fallbackToTemplate();
+          return;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        if (
+          !res.ok ||
+          !Array.isArray(data.questions) ||
+          data.questions.length === 0
+        ) {
+          fallbackToTemplate();
+          return;
+        }
+        if (!cancelled) setAiQuestions(data.questions as string[]);
+      } catch {
+        fallbackToTemplate();
+      } finally {
+        if (!cancelled) setQuestionsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // mount 時に 1 回だけ実行する（issueId はルートで一意・remount される）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const questions: string[] = existingWork
     ? existingWork.deepQuestions
-    : getDeepDiveQuestions(axis);
+    : aiQuestions ?? [];
   const answers: string[] = existingWork
     ? existingWork.answers
     : new Array(questions.length).fill('');
 
-  // ─── handlers ─────────────────────────────────────────────────────
-
   function handleAnswerChange(index: number, value: string) {
-    if (!workspace) return;
-
     let ws = workspace;
     if (!ws.improvementInProgress?.works[issueId]) {
       // lazy start: 該当 issue の work を新規作成（既存の他 issue は保持）。
+      // ここで AI 生成質問（questions）が deepQuestions として snapshot される。
       ws = startImprovementWork(ws, {
         issueId,
-        sourceReviewIndex: parsed!.reviewIndex,
+        sourceReviewIndex: reviewIndex,
         issueText,
         axis,
         deepQuestions: questions,
@@ -173,8 +290,6 @@ export default function EssayDeepDivePage() {
     }
     setWorkspace(updated);
   }
-
-  // ─── render ───────────────────────────────────────────────────────
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
@@ -209,24 +324,39 @@ export default function EssayDeepDivePage() {
       </section>
 
       {/* 深掘り質問 */}
-      <div className="space-y-4 mb-8">
-        {questions.map((q, i) => (
-          <section
-            key={i}
-            className="bg-white border border-gray-200 rounded-xl p-5"
-          >
-            <p className="text-sm font-semibold text-gray-700 mb-3">
-              Q{i + 1}. {q}
+      {questionsLoading ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-8 text-center mb-8">
+          <p className="text-sm text-gray-500">
+            あなたの小論文に合わせた深掘り質問を生成しています…
+          </p>
+        </div>
+      ) : (
+        <>
+          {usedFallback && (
+            <p className="mb-4 text-xs text-amber-600">
+              ※ 質問の自動生成に失敗したため、汎用の深掘り質問を表示しています。
             </p>
-            <Textarea
-              value={answers[i] ?? ''}
-              onChange={(e) => handleAnswerChange(i, e.target.value)}
-              rows={3}
-              placeholder="短く・自分の言葉で書いてみましょう"
-            />
-          </section>
-        ))}
-      </div>
+          )}
+          <div className="space-y-4 mb-8">
+            {questions.map((q, i) => (
+              <section
+                key={i}
+                className="bg-white border border-gray-200 rounded-xl p-5"
+              >
+                <p className="text-sm font-semibold text-gray-700 mb-3">
+                  Q{i + 1}. {q}
+                </p>
+                <Textarea
+                  value={answers[i] ?? ''}
+                  onChange={(e) => handleAnswerChange(i, e.target.value)}
+                  rows={3}
+                  placeholder="短く・自分の言葉で書いてみましょう"
+                />
+              </section>
+            ))}
+          </div>
+        </>
+      )}
 
       {/* 改善点一覧へ戻る CTA（責務分離 UX: まとめ生成はここではしない、hub 側で行う）。 */}
       <div className="text-center">
@@ -240,6 +370,9 @@ export default function EssayDeepDivePage() {
           ※ 回答は自動保存されています。他の改善点も進められます。
         </p>
       </div>
+
+      {/* STEP-GATE-COMPLETE: 402 quota-exceeded ダイアログ。 */}
+      {quotaDialog}
     </div>
   );
 }

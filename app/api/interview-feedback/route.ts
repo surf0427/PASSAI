@@ -39,6 +39,10 @@ const MODEL = 'claude-opus-4-7';
 // AI timeout 90s（他 route の 60s より長い）。それに余裕を足した値。Pro 前提
 // （Hobby は 60s 上限で 90s timeout を吸収できない）。runtime は既定 nodejs（edge 不可）。
 export const maxDuration = 120;
+// フィードバック生成は毎回ユーザー固有の Q&A に依存する。Next.js / fetch 層のキャッシュを
+// 明示無効化し、古い生成結果が hit 扱いで返るのを防ぐ（POST handler は既定で dynamic だが明示する）。
+export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
 const ROUTE = 'api/interview-feedback';
 // STEP-BILLING-06: usage_records.route 識別子。

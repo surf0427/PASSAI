@@ -70,7 +70,17 @@ import { stableStringify } from '@/lib/hash/stableStringify';
 //             cache entry の意味的妥当性が変わるため lane 分離が必要。
 //             first-attempt prompt / system prompt / schema / 質問数 / category / 代筆禁止 /
 //             temperature は 1 字も変えない。
-export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 6;
+//   v6 → v7 : 出力収束化対策。SYSTEM_PROMPT に【personalized の問い方（観点）の分散】
+//             （観点バンク10種 + 同一問い方 3 問超え禁止 + 「学び/成長」系 1 問上限）と
+//             【安全回答への収束防止】（リーダーシップ/コミュ力/成長 等の無難な抽象語着地を回避）
+//             を追加。user prompt の【出題バリエーション指示】に「seed で観点割り当ても回す」
+//             「同一観点 3 問超え禁止」を追記。schema / 質問数 10 / general5+personalized5 /
+//             category 許可値 / sourceHint / authenticity_check の作り方 / 代筆禁止 / temperature /
+//             max_tokens / model / HashInterviewQuestionsInput の signature は 1 字も変えない。
+//             prompt 文言が変わるため、旧 v6 cache（観点分散指示なしで生成）が新出力契約と
+//             混ざらないよう lane 分離（intentional 1 回 miss）。dailySeed 未送信 client も
+//             SYSTEM 側の観点分散ルールは効くため legacy fallback でも改善が届く。
+export const INTERVIEW_QUESTIONS_PROMPT_VERSION = 7;
 export const INTERVIEW_QUESTIONS_MODEL = 'claude-sonnet-4-6';
 
 export type HashInterviewQuestionsInput = {

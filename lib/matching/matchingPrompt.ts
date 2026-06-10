@@ -90,10 +90,43 @@ ${MATCHING_SUBJECT_GRADES_QUALIFIER}
 - actionItems は「〇〇（具体的に何を）して、〇〇（何を得る / 書く / 調べる）」の形に揃え、
   「具体性を上げる」「もっと頑張る」のような抽象表現は禁止。
 
+【reason / strengthPoints の観点分散（出力収束の防止・必須）】
+- 「あなたの興味・経験・将来像が〇〇大学に合っています」型の、どの大学にも言える書き出し・観点に揃えない。学部名だけ差し替えた汎用文を禁止する。
+- reason / strengthPoints は、その大学固有の特色（【大学情報】の特徴・【大学DB情報】に実在する要素）に紐付け、下記の観点バンクから、その大学で最も差が出るものを選んで構成する（全部使う必要はない）:
+  - 学問内容との接続（学べる分野・研究テーマと生徒の関心の重なり）
+  - 過去活動との接続（部活・探究・留学・資格 等、生徒の具体活動との結びつき）
+  - 将来像との接続（生徒の将来目標に向けた道筋）
+  - 入試方式との相性（総合型 / 学校推薦 / 一般 等と生徒の強みの噛み合い）
+  - 学び方の相性（少人数 / 実践 / 研究重視 等、提示情報にある場合のみ）
+  - キャンパス / 地域 / 環境（提示情報にある場合のみ）
+  - 他大学との差分（候補の中でこの大学を選ぶ固有の理由）
+  - 弱点・注意点（この大学固有の補強ポイント）
+- 「この大学ならでは」の要素が提示情報に無い場合は、特色を作らず、weaknesses か actionItems で「確認すべき情報」として出す。
+
+【actionItems の分散（出力収束の防止・必須）】
+- 「公式サイトを見る」「オープンキャンパスに行く」「志望理由を深める」のような、毎回同じ一般アクションに寄せない。
+- 下記の actionバンクから、その大学・その生徒の状況（不足点・接続点）に最も効くものを選ぶ（全部使う必要はない）:
+  - アドミッションポリシー確認（生徒の経験と重なる語を探す）
+  - ゼミ / 授業 / 研究室の検索（関心テーマに合う具体名を 1 つ見つける）
+  - 入試要項の確認（出願要件・評定基準・提出書類）
+  - 過去問 / 小論文・面接傾向の確認
+  - 志望理由書での接続点メモ（この大学の特色 × 自分の経験）
+  - 自分の活動との接続メモ（どの活動がどの評価軸に効くか）
+  - 比較校との差分整理（他候補と何が違うかを 1 行で）
+  - 不足情報の洗い出し（この大学について分かっていないことを書き出す）
+  - 面接で聞かれそうな論点整理
+- 5 大学で actionItems が同一の並びにならないようにする。
+
+【他の候補大学との差分（提示された場合のみ）】
+- user prompt に【他の候補大学（差分の参考）】section がある場合、その大学群との違いを踏まえ、この大学を選ぶ固有の理由を 1 点 reason または strengthPoints に織り込む。
+- 差分は、提示された各大学の説明文に実在する要素にのみ基づく。説明に無い違いを推測で断定しない。判断材料が無い場合は actionItems の「比較校との差分整理」に回す。
+
 【禁止】
 - 「素晴らしいですね」「あなたなら大丈夫」型の中身のない称賛
 - 数字を 1 つも含まない reason（活動データの実数・大学要求値などを織り込むこと）
 - universityId / reason 等のフィールドを欠落させること
+- 5 大学で書き出し・観点・actionItems が同型になること（学部名だけ差し替えた汎用文の量産）
+- 【大学情報】【大学DB情報】に無い特色・科目・制度・研究室名・カリキュラムを作ること。不明な点は断定せず「確認すべき情報」として出す
 
 【出力形式】
 必ず JSON のみを出力してください。説明文・補足・前置き・後書きは一切禁止です。
@@ -115,6 +148,11 @@ export type BuildMatchingUserPromptOptions = {
   basicInfo: BasicInfo | null;
   activityData: ActivityData | null;
   universityContext: UniversityContext | null;
+  // 出力収束化対策（同一 run 内の他候補大学）。同じマッチング結果の他の大学群を
+  // 渡し、AI が「この大学を選ぶ固有の理由」を差分として書けるようにする。
+  // 決定論的入力（route が候補リストから組み立てる。乱数なし）。
+  // 未指定 / 空なら section を出さない（後方互換・QA harness 互換）。
+  otherCandidates?: { name: string; faculty: string; description: string }[];
 };
 
 // 活動整理の概要を短く整形する。詳細は出さず件数とラベルだけ出して、AI の文脈に渡す。
@@ -197,14 +235,37 @@ export function buildMatchingUserPrompt(opts: BuildMatchingUserPromptOptions): s
     hasAnyDepartmentSpecified(basicInfo),
   );
   const studentProfileSection = buildMatchingStudentProfileContext(studentProfile);
+  const otherCandidatesSection = buildOtherCandidatesSection(opts.otherCandidates);
 
   return `${basicInfoSection}
 ${activitySection ? `\n${activitySection}\n` : ''}${studentProfileSection ? `\n${studentProfileSection}\n` : ''}
-${guidanceSection ? `\n${guidanceSection}\n` : ''}${universityContextSection ? `\n${universityContextSection}\n` : ''}
+${guidanceSection ? `\n${guidanceSection}\n` : ''}${universityContextSection ? `\n${universityContextSection}\n` : ''}${otherCandidatesSection ? `\n${otherCandidatesSection}\n` : ''}
 【大学情報（スコアリング層から）】
 大学ID: ${result.university.id}
 大学名: ${result.university.name}（${result.university.faculty}）
 入試方式: ${result.university.admissionType}
 スコア: ${result.score}点
 特徴: ${result.university.description}`;
+}
+
+// 同一 run 内の他候補大学を「差分の参考」section に整形する。
+// 出力収束化対策: AI が「この大学を選ぶ固有の理由」を他候補との違いとして書けるようにする。
+// 提示する説明文に実在する要素のみを差分根拠にするルールは SYSTEM_PROMPT 側に置く（捏造防止）。
+// 空 / 未指定なら空文字（section なし＝後方互換）。
+function buildOtherCandidatesSection(
+  others: { name: string; faculty: string; description: string }[] | undefined,
+): string {
+  if (!others || others.length === 0) return '';
+  const lines = others
+    .filter((o) => o && o.name)
+    .map((o) => {
+      const desc = (o.description ?? '').trim();
+      return `- ${o.name}（${o.faculty}）${desc ? `：${desc}` : ''}`;
+    });
+  if (lines.length === 0) return '';
+  return [
+    '【他の候補大学（差分の参考）】',
+    '同じ生徒に提案された他の候補です。下記の説明に実在する要素のみを根拠に、この大学を選ぶ固有の理由を差分として書いてください（説明に無い違いは断定しない）。',
+    ...lines,
+  ].join('\n');
 }

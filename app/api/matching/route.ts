@@ -428,6 +428,17 @@ export async function POST(req: Request) {
             universityContexts,
             candidate.university.name,
           ),
+          // 出力収束化対策: 同一 run 内の他候補（自分以外）を差分の参考として渡す。
+          // 決定論的（candidates から自分を除いた静的リスト・乱数なし）。AI が「この大学を
+          // 選ぶ固有の理由」を他候補との違いとして書けるようにする。差分根拠は提示説明文に
+          // 実在する要素のみ（捏造防止は SYSTEM_PROMPT 側で縛る）。
+          otherCandidates: candidates
+            .filter((c) => c.university.id !== candidate.university.id)
+            .map((c) => ({
+              name: c.university.name,
+              faculty: c.university.faculty,
+              description: c.university.description,
+            })),
         }),
       ),
     );
