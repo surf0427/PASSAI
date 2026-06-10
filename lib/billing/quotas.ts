@@ -93,8 +93,14 @@ export const FEATURE_ROUTE_KEYS: Record<QuotaFeature, readonly string[]> = {
   // 志望理由書: 添削 (-review) + 整理メモ (-prepare)
   statement: ['statement-review', 'statement-prepare'],
   // 小論文: 添削 (-review) + チャット (-chat) + 改善方針 (-improve-summary)
-  //         + 改善の深掘り質問生成 (-deep-questions)
-  essay: ['essay-review', 'essay-chat', 'essay-improve-summary', 'essay-deep-questions'],
+  //         + 改善の深掘り質問生成 (-deep-questions) + テーマ追加生成 (-themes)
+  essay: [
+    'essay-review',
+    'essay-chat',
+    'essay-improve-summary',
+    'essay-deep-questions',
+    'essay-themes',
+  ],
   // 自己PR / 自己分析クラスタ:
   //   - self-pr-review: 未実装、quota 予約
   //   - analysis: 自己分析 (壁打ち) profile + 質問生成

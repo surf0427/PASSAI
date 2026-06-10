@@ -91,6 +91,11 @@ legacy 退役判断（Phase 2 完了時点・未実施）:
 | API route | [`app/api/essay-improve-summary/route.ts`](../../app/api/essay-improve-summary/route.ts) | AI 改善方針生成（本文ドラフト禁止 prompt、PROMPT_VERSION = 1） |
 | AI cache | [`lib/essayReviewCache.ts`](../../lib/essayReviewCache.ts) | `essayReviewInputHash` cache（既存・不変） |
 | AI parse | [`lib/essay/parseEssayReview.ts`](../../lib/essay/parseEssayReview.ts) | `/api/essay-review` レスポンス normalize（既存・不変） |
+| AI input shaper | [`lib/essayThemes.ts`](../../lib/essayThemes.ts) | 決定論テーマ候補（不変）+ `getEssayThemeAiContext` / `ALL_ESSAY_THEME_TYPES`（AI 追加生成 route 用に admission_policy / bias / reason / sourceType を供給。data/ 境界は本ファイルに閉じる） |
+| prompt | [`lib/prompts/essayThemesPrompt.ts`](../../lib/prompts/essayThemesPrompt.ts) | `/api/essay-themes` の SYSTEM_PROMPT + `buildEssayThemesPrompt`。お題のみ生成（本文禁止）/ category 付与 / 既出テーマ・カテゴリ分散 |
+| AI parse | [`lib/essay/parseEssayThemes.ts`](../../lib/essay/parseEssayThemes.ts) | `/api/essay-themes` 出力 `{themes:[{theme,category}]}` の defensive normalize → `EssayThemeCandidate[]`（category 検証 / batch 内 dedup） |
+| client hook | [`lib/essay/useEssayThemeFeed.ts`](../../lib/essay/useEssayThemeFeed.ts) | テーマ無限フィード。決定論シード即時表示 + 末尾到達で `/api/essay-themes` 追加生成 + dedup + 失敗/quota 時は既存循環。workspace に書かない（ghost autosave 防止） |
+| API route | [`app/api/essay-themes/route.ts`](../../app/api/essay-themes/route.ts) | テーマ追加生成（sonnet-4-6 / temp 0.8 / cache なし / essay quota）。3 件固定循環の廃止。本文ドラフト禁止 |
 | API route | [`app/api/essay-review/route.ts`](../../app/api/essay-review/route.ts) | 既存・不変 |
 | API route | [`app/api/essay-chat/route.ts`](../../app/api/essay-chat/route.ts) | 既存・不変 |
 | UI | [`app/essay-practice/page.tsx`](../../app/essay-practice/page.tsx) | 既存 UI。STEP A で migration 発火、STEP B で添削成功時に dual-write |

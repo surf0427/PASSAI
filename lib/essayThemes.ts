@@ -446,3 +446,57 @@ export function getEssayThemeCandidates(
   const label = buildTargetLabel(input);
   return buildThemeCandidates(policies, bias, examResult.tone, label);
 }
+
+// ===================================
+// AI 追加生成 route 用アダプタ
+// ===================================
+
+// 全 themeType（category/tag 妥当性検証や偏り判定に使う）。
+// DEFAULT_THEME_TYPE_ORDER と同じ集合だが、用途が「全列挙」なので別名で公開する。
+export const ALL_ESSAY_THEME_TYPES: readonly EssayThemeType[] =
+  DEFAULT_THEME_TYPE_ORDER;
+
+// /api/essay-themes が prompt を組むための文脈。
+// data/ 境界は lib/universities.ts に閉じたまま（route から data/ を直 import しない）、
+// admission_policy / バイアス順 / 表示ラベル / reason・sourceType を route に渡す。
+export type EssayThemeAiContext = {
+  hasPolicy: boolean;
+  // 意味のある admission_policy 全文（重複排除済み・最大数件）。
+  policies: string[];
+  // faculty > exam > selection > default で合成した全 themeType 順。偏りを避ける優先順。
+  biasOrder: EssayThemeType[];
+  // examType 由来の語気ヒント（決定論的）。
+  experiencePhrase: string;
+  // 「○○大学 ○○学部」表示ラベル。
+  label: string;
+  // 生成テーマに付与する出典説明（決定論版と同一文言）。
+  reason: string;
+  // UI バッジ色分岐に使う sourceType（決定論版と同一規約）。
+  sourceType: EssayThemeSourceType;
+};
+
+export function getEssayThemeAiContext(
+  input: EssayThemeInput,
+): EssayThemeAiContext {
+  const policies = collectAdmissionPolicies(input);
+  const facultyBias = detectFacultyThemeBias(
+    input.faculty ?? '',
+    input.department ?? '',
+  );
+  const examResult = detectExamThemeBias(input.examType ?? '');
+  const selectionBias = detectSelectionThemeBias(input);
+  const biasOrder = mergeBiases(facultyBias, examResult.types, selectionBias);
+  const label = buildTargetLabel(input);
+  const hasPolicy = policies.length > 0;
+  return {
+    hasPolicy,
+    policies,
+    biasOrder,
+    experiencePhrase: examResult.tone.experiencePhrase,
+    label,
+    reason: hasPolicy
+      ? buildAdmissionPolicyReason(label)
+      : buildFallbackReason(label),
+    sourceType: hasPolicy ? 'admission_policy' : 'fallback',
+  };
+}

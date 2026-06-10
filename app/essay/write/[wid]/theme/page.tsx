@@ -6,7 +6,7 @@
 
 'use client';
 
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -14,10 +14,8 @@ import {
   upsertEssayWorkspace,
 } from '@/lib/essayWorkspaceStorage';
 import { updateTheme } from '@/lib/essay/workspaceOps';
-import {
-  getEssayThemeCandidates,
-  type EssayThemeCandidate,
-} from '@/lib/essayThemes';
+import { useEssayThemeFeed } from '@/lib/essay/useEssayThemeFeed';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   BUTTON_BASE,
   BUTTON_SIZE,
@@ -45,8 +43,21 @@ export default function EssayWriteThemePage() {
     [isMounted, wid],
   );
 
-  // rotate 用 local index（workspace に書き込まない）。
-  const [themeIndex, setThemeIndex] = useState(0);
+  // quota 超過 dialog（テーマ追加生成が essay quota を消費する）。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
+  // テーマフィード（決定論シード + 末尾到達で AI 追加生成）。
+  // workspace 未確定時は空 target でシードのみ供給され、表示は workspace 確定後に行う。
+  const feed = useEssayThemeFeed(
+    {
+      university: workspace?.target.university ?? '',
+      faculty: workspace?.target.faculty ?? '',
+      department: workspace?.target.department ?? '',
+      examType: workspace?.target.examType ?? '',
+    },
+    handleQuotaResponse,
+  );
 
   if (!isMounted) {
     return (
@@ -78,22 +89,11 @@ export default function EssayWriteThemePage() {
     );
   }
 
-  const candidates = getEssayThemeCandidates({
-    university: workspace.target.university,
-    faculty: workspace.target.faculty,
-    department: workspace.target.department,
-    examType: workspace.target.examType,
-  });
-  const current: EssayThemeCandidate =
-    candidates[themeIndex % candidates.length];
+  const current = feed.current;
 
   const isPersistedThemeMatch =
     workspace.theme.text === current.theme &&
     workspace.theme.type === current.themeType;
-
-  function handleRotate() {
-    setThemeIndex((prev) => prev + 1);
-  }
 
   function handleConfirm() {
     if (!workspace) return;
@@ -162,12 +162,14 @@ export default function EssayWriteThemePage() {
         >
           {current.reason}
         </p>
-        {candidates.length > 1 && (
-          <p className="text-xs text-gray-400 mt-2">
-            ※ 候補 {candidates.length} 件 / 表示中 {(themeIndex % candidates.length) + 1} 件目
-          </p>
-        )}
+        <p className="text-xs text-gray-400 mt-2">
+          ※ 表示中 {feed.index + 1} 件目（候補を見終わると新しいテーマを自動生成します）
+        </p>
       </section>
+
+      {feed.error && (
+        <p className="mb-4 text-xs text-amber-600">※ {feed.error}</p>
+      )}
 
       {workspace.theme.text && !isPersistedThemeMatch && (
         <p className="mb-4 text-xs text-amber-600">
@@ -183,16 +185,17 @@ export default function EssayWriteThemePage() {
         >
           このテーマで進む →
         </button>
-        {candidates.length > 1 && (
-          <button
-            type="button"
-            onClick={handleRotate}
-            className={`${BUTTON_BASE} ${BUTTON_VARIANT.outline} ${BUTTON_SIZE.md}`}
-          >
-            別のテーマを見る
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={feed.next}
+          disabled={feed.loadingMore}
+          className={`${BUTTON_BASE} ${BUTTON_VARIANT.outline} ${BUTTON_SIZE.md} disabled:opacity-60`}
+        >
+          {feed.loadingMore ? '新しいテーマを生成中…' : '別のテーマを見る'}
+        </button>
       </div>
+
+      {quotaDialog}
     </div>
   );
 }

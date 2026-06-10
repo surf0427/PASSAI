@@ -1,20 +1,19 @@
 // /essay/structure/[wid]/theme page（Phase 2 STEP L 新規）。
 //
 // 役割:
-//   workspace.target からテーマ候補を導出し、ユーザーに 1 件選ばせる。
-//   候補 rotate は **local state のみ**（workspace に書き込まない）。
+//   workspace.target からテーマ候補を供給し（useEssayThemeFeed）、ユーザーに 1 件選ばせる。
+//   候補は決定論シード + 末尾到達時の AI 追加生成（/api/essay-themes）で実質無制限。
+//   rotate / 追加生成は **表示状態のみ**（workspace に書き込まない）。
 //   「このテーマで進む」CTA で初めて workspace.theme に確定保存する。
 //
 // 設計判断（ghost autosave 禁止）:
 //   - rotate 中の theme 値を毎回 workspace に保存すると、ユーザーが迷っている途中の
 //     不本意な theme が workspace に残る → ghost autosave。これを避けるため
 //     確定操作（CTA クリック）でだけ updateTheme + upsertEssayWorkspace を呼ぶ。
-//   - workspace.theme.text に既存値があれば、それを themeIndex の初期表示に対応させる
-//     （resume 時に「最後に選んだテーマが残っている」体験を保つ）。
 
 'use client';
 
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -22,10 +21,8 @@ import {
   upsertEssayWorkspace,
 } from '@/lib/essayWorkspaceStorage';
 import { updateTheme } from '@/lib/essay/workspaceOps';
-import {
-  getEssayThemeCandidates,
-  type EssayThemeCandidate,
-} from '@/lib/essayThemes';
+import { useEssayThemeFeed } from '@/lib/essay/useEssayThemeFeed';
+import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import {
   BUTTON_BASE,
   BUTTON_SIZE,
@@ -54,8 +51,21 @@ export default function EssayStructureThemePage() {
     [isMounted, wid],
   );
 
-  // 候補 rotate 用の local index。workspace に書かない（ghost autosave 防止）。
-  const [themeIndex, setThemeIndex] = useState(0);
+  // quota 超過 dialog（テーマ追加生成が essay quota を消費する）。
+  const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
+    useQuotaDialog();
+
+  // テーマフィード（決定論シード + 末尾到達で AI 追加生成）。
+  // 候補 rotate は workspace に書かない（ghost autosave 防止の既存方針を維持）。
+  const feed = useEssayThemeFeed(
+    {
+      university: workspace?.target.university ?? '',
+      faculty: workspace?.target.faculty ?? '',
+      department: workspace?.target.department ?? '',
+      examType: workspace?.target.examType ?? '',
+    },
+    handleQuotaResponse,
+  );
 
   // pre-mount: 読み込み中。SSR / hydration safe。
   if (!isMounted) {
@@ -88,26 +98,14 @@ export default function EssayStructureThemePage() {
     );
   }
 
-  // テーマ候補は workspace.target から導出。target は STEP K で保存済み前提。
-  const candidates = getEssayThemeCandidates({
-    university: workspace.target.university,
-    faculty: workspace.target.faculty,
-    department: workspace.target.department,
-    examType: workspace.target.examType,
-  });
-  // 必ず 1 件以上返る保証。空配列ハンドリングは不要（essayThemes.ts の契約）。
-  const current: EssayThemeCandidate =
-    candidates[themeIndex % candidates.length];
+  // テーマ候補は feed（決定論シード + AI 追加生成）から供給。target は STEP K で保存済み前提。
+  const current = feed.current;
 
   const isPersistedThemeMatch =
     workspace.theme.text === current.theme &&
     workspace.theme.type === current.themeType;
 
   // ─── handlers ──────────────────────────────────────────────────────
-
-  function handleRotate() {
-    setThemeIndex((prev) => prev + 1);
-  }
 
   function handleConfirm() {
     if (!workspace) return;
@@ -181,12 +179,14 @@ export default function EssayStructureThemePage() {
         >
           {current.reason}
         </p>
-        {candidates.length > 1 && (
-          <p className="text-xs text-gray-400 mt-2">
-            ※ 候補 {candidates.length} 件 / 表示中 {(themeIndex % candidates.length) + 1} 件目
-          </p>
-        )}
+        <p className="text-xs text-gray-400 mt-2">
+          ※ 表示中 {feed.index + 1} 件目（候補を見終わると新しいテーマを自動生成します）
+        </p>
       </section>
+
+      {feed.error && (
+        <p className="mb-4 text-xs text-amber-600">※ {feed.error}</p>
+      )}
 
       {/* resume 時の補足 */}
       {workspace.theme.text && !isPersistedThemeMatch && (
@@ -203,16 +203,17 @@ export default function EssayStructureThemePage() {
         >
           このテーマで進む →
         </button>
-        {candidates.length > 1 && (
-          <button
-            type="button"
-            onClick={handleRotate}
-            className={`${BUTTON_BASE} ${BUTTON_VARIANT.outline} ${BUTTON_SIZE.md}`}
-          >
-            別のテーマを見る
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={feed.next}
+          disabled={feed.loadingMore}
+          className={`${BUTTON_BASE} ${BUTTON_VARIANT.outline} ${BUTTON_SIZE.md} disabled:opacity-60`}
+        >
+          {feed.loadingMore ? '新しいテーマを生成中…' : '別のテーマを見る'}
+        </button>
       </div>
+
+      {quotaDialog}
     </div>
   );
 }
