@@ -115,12 +115,20 @@ export async function POST(req: Request) {
     return Response.json({ result });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    // 原因 msg は server ログ / Sentry に残す。レスポンスには英語の内部詳細を含めず、
+    // ユーザー向け日本語 message のみ返す（consumer が detail を表示しても英語が漏れない）。
     console.error('Claude API error:', msg);
     // 例外経路: messages.create() が throw した時点で response が無いため usage は取れない。
     // status のみログして「失敗回数」を集計できる状態にする（analysis 系列と共通方針）。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'failed' });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
-    return Response.json({ error: 'Claude API call failed', detail: msg }, { status: 500 });
+    return Response.json(
+      {
+        error: 'AI_REASON_FAILED',
+        message: 'AIの生成に失敗しました。時間をおいて再度お試しください。',
+      },
+      { status: 500 },
+    );
   }
 }

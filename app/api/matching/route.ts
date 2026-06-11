@@ -162,11 +162,12 @@ async function generateUniversityDetail(
     parsed = safeParseJson<typeof parsed>(raw);
   } catch (error) {
     // PR9d-2 / M3 marker:
-    //   safeParseJson も内部で console.error を 2 行出す（"JSON parse failed:" /
-    //   "Text to parse:"）。本 catch でも logAiUsage と throw により observability に
-    //   layer 情報が出る。**2 重 console.error は intentional**: lib 側はパース失敗の
-    //   生 text、route 側は per-call status (parse_failed) + 上位 catch までの伝播を
-    //   それぞれ独立 stream として記録する責務分離。集約ログ整理は別 STEP。
+    //   safeParseJson も内部で console.error を 1 行出す（'matching: JSON parse failed'
+    //   + length / 末尾 200 字 / error 名のみ。AI 出力全文は出さない）。本 catch でも
+    //   logAiUsage と throw により observability に layer 情報が出る。**2 重 console.error
+    //   は intentional**: lib 側はパース失敗の最小診断情報、route 側は per-call status
+    //   (parse_failed) + 上位 catch までの伝播を、それぞれ独立 stream として記録する
+    //   責務分離。集約ログ整理は別 STEP。
     logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     throw error;
   }
@@ -484,10 +485,15 @@ export async function POST(req: Request) {
     // 全 candidate 失敗 → 既存 UX 維持で 500 を返す（client 側 alert + 再診断）。
     // 空 advices を返すと UI が「全大学に空 reason」を表示する経路に入ってしまうため。
     if (successfulCandidates === 0) {
+      // 原因は server ログに残す。レスポンスには英語の内部詳細を含めず、
+      // ユーザー向け日本語 message のみ返す（consumer が detail を表示しても英語が漏れない）。
       console.error('matching: all candidates failed');
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
-        { error: 'AI matching failed', detail: 'all candidates failed' },
+        {
+          error: 'AI_MATCHING_FAILED',
+          message: '志望校候補の生成に失敗しました。時間をおいて再度お試しください。',
+        },
         { status: 500 },
       );
     }
@@ -503,9 +509,17 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    // 原因 msg は server ログ / Sentry に残す。レスポンスには英語の内部詳細を含めず、
+    // ユーザー向け日本語 message のみ返す。
     console.error('Matching AI error:', msg);
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
     captureRouteException(error, { route: ROUTE, feature: 'ai', status: 500 }, { status: 500, code: 'AI_REQUEST_FAILED' });
-    return Response.json({ error: 'AI matching failed', detail: msg }, { status: 500 });
+    return Response.json(
+      {
+        error: 'AI_MATCHING_FAILED',
+        message: '志望校候補の生成に失敗しました。時間をおいて再度お試しください。',
+      },
+      { status: 500 },
+    );
   }
 }
