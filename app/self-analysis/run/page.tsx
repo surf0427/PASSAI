@@ -16,6 +16,7 @@ import { loadStudentProfile, saveStudentProfile } from '@/lib/studentProfileStor
 import { toStudentProfile } from '@/lib/studentProfile';
 import { saveAnalyzeState, loadAnalyzeState, clearAnalyzeState } from '@/lib/analyzeStorage';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { loadActivityData } from '@/lib/activityStorage';
 import { buildUniversityContextFromBasicInfo } from '@/lib/buildUniversityContext';
 import {
   ADDITIONAL_QUESTIONS_MODEL,
@@ -151,12 +152,16 @@ export default function SelfAnalysisPage() {
   });
   const [activityData] = useState<ActivityData | null>(() => {
     if (typeof window === 'undefined') return null;
+    // session 優先（同一タブの提出スナップショット）。空 / JSON.parse 失敗のときは
+    // localStorage の form draft（activityFormData・タブを閉じても残る canonical）に
+    // フォールバックする。これにより再ログイン後も活動データを復元できる（resume と整合）。
     try {
       const stored = sessionStorage.getItem('activityData');
-      return stored ? JSON.parse(stored) as ActivityData : null;
+      if (stored) return JSON.parse(stored) as ActivityData;
     } catch {
-      return null;
+      // ignore: parse 失敗時も localStorage フォールバックへ進む
     }
+    return loadActivityData();
   });
   // SSRとCSRのHTML不一致（Hydration error）を防ぐためのフラグ。
   // localStorageから復元した値に依存するUIはこれが true になってから描画する。
