@@ -213,7 +213,17 @@ export async function POST(req: Request) {
     }
 
     if (!isStatementPrepareApiResult(parsed)) {
-      console.error('statement-prepare API: invalid shape', parsed);
+      // parsed には AI が生成した志望理由書の整理結果（経験・強み・志望理由などの
+      // ユーザー本文）が含まれ得るため、全体はログに出さない。原因調査に必要な
+      // 構造メタ（型 / トップレベルキー / JSON 長）だけを残す。
+      console.error('statement-prepare API: invalid shape', {
+        type: parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed,
+        keys:
+          parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? Object.keys(parsed as Record<string, unknown>)
+            : undefined,
+        jsonLength: JSON.stringify(parsed)?.length,
+      });
       // JSON は parse できたが期待 shape ではない（AI schema 違反）。
       // 「AI 出力を期待通りに読み取れなかった」という意味で parse_failed として記録する。
       logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
