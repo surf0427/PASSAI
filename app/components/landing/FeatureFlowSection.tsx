@@ -11,96 +11,6 @@
 // num を省略すると番号バッジが消える以外は、流れカードと同一デザインを共有する。
 //
 // 説明文は \n\n で段落区切り。CSS の whitespace-pre-line が空行を再現する。
-//
-// スクリーンショット紹介はカード内ではなく、セクション下部の専用ブロックで「大きく」見せる。
-//   PC 3列カードに画像を入れると縮小されて読めないため、機能一覧（文章＋タグ）と
-//   スクショ紹介（大きいプレビュー）を分離する。ScreenshotPreview 参照。
-
-import Image from 'next/image';
-
-// 自己分析の「実際の画面」紹介フェーズ。「質問 → 文章化」の2段階に統合。
-//   STEP1：AIが質問して経験を引き出す（self-analysis-1）。
-//   STEP2：AIが自己PR化しながらさらに具体化（self-analysis-2 → 3 を連続表示）。
-//     ※ 自己PR添削と追加質問は同一フロー・同一体験のため STEP を分けない。
-// 1 ステップに複数スクショを持てる（srcs）。STEP 境界だけ区切り線＋ラベルで区切る。
-// 画像は public/landing/features/ 配下。他機能を追加する場合は同形式の配列を増やす。
-const PHASES = [
-  {
-    step: 'STEP 1',
-    title: 'AIが質問して経験を引き出す',
-    srcs: [
-      {
-        src: '/landing/features/self-analysis-1.webp',
-        alt: '活動のまとめと、AIが経験を深掘りする質問が並ぶ自己分析の画面',
-      },
-    ],
-  },
-  {
-    step: 'STEP 2',
-    title: 'AIが自己PR化しながらさらに具体化する',
-    srcs: [
-      {
-        src: '/landing/features/self-analysis-2.webp',
-        alt: '入力した内容をもとに、AIが自己PRの文章に整理・添削した画面',
-      },
-      {
-        src: '/landing/features/self-analysis-3.webp',
-        alt: 'AIの追加質問に答えて、自己PRをさらに具体化していく画面',
-      },
-    ],
-  },
-] as const;
-
-// 自己分析フロー全体を「1つのスクロールボックス」に収めるプレビュー。
-// LP 上ではボックスは1つだけ。中をスクロールすると STEP1→2→3 が順に流れる。
-// フェーズ境界は divide-y の区切り線＋STEPラベルで区切り、無理に1枚に見せない。
-// 画像は width=0 / height=0 + w-full h-auto で「横幅100% × 自然な高さ」に
-//   （next/image 必須の width/height をダミー指定しつつ実寸比を保つ定石）。
-// 下部のフェード＋ヒントはボックスに固定（pointer-events-none で操作を邪魔しない）。
-function FlowScrollBox({ phases }: { phases: typeof PHASES }) {
-  return (
-    <div className="relative overflow-hidden rounded-2xl ring-1 ring-slate-200 shadow-sm bg-white">
-      <div className="max-h-[400px] sm:max-h-[440px] lg:max-h-[520px] overflow-y-auto overscroll-contain divide-y divide-slate-200">
-        {phases.map((p) => (
-          <div key={p.step} className="p-4 sm:p-5">
-            <div className="flex items-center gap-2.5 mb-3">
-              <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-brand-700 text-white text-xs font-bold px-3 py-1">
-                {p.step}
-              </span>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900">
-                {p.title}
-              </h4>
-            </div>
-            {/* 1 ステップ内の複数スクショは STEP 区切りを挟まず連続表示する。 */}
-            <div className="space-y-3">
-              {p.srcs.map((s) => (
-                <div
-                  key={s.src}
-                  className="overflow-hidden rounded-xl ring-1 ring-slate-200 bg-slate-50"
-                >
-                  <Image
-                    src={s.src}
-                    alt={s.alt}
-                    width={0}
-                    height={0}
-                    loading="lazy"
-                    sizes="(max-width: 768px) 100vw, 720px"
-                    className="block w-full h-auto"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      {/* スクロール可能を示す下部フェード＋ヒント（ボックスに固定。中身と一緒には動かない） */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-white via-white/70 to-transparent" />
-      <span className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-xs font-medium text-slate-500">
-        スクロールして全体を見る ↓
-      </span>
-    </div>
-  );
-}
 
 type StepCardProps = {
   num?: string;
@@ -244,27 +154,6 @@ export function FeatureFlowSection() {
               tags={['#一元管理', '#成長記録', '#振り返り']}
             />
           </ul>
-        </div>
-
-        {/* 実際の画面紹介：機能一覧（小）とは分離し、スクショを大きく見せて中身を読ませる。
-            LP 上はスクショボックスを1つだけにして縦幅を抑える。ボックス内をスクロールすると
-            STEP1→2→3 が順に流れ、フェーズ境界は区切り線＋STEPラベルで自然に分かる。
-            質問 → 整理 → 添削の流れ。まずは自己分析のみ（他機能は PHASES に追加で増設）。 */}
-        <div className="mt-16 sm:mt-24">
-          <div className="text-center mb-8 sm:mb-10">
-            <h3 className="text-lg sm:text-2xl font-extrabold tracking-tight leading-snug mb-3">
-              実際の画面で、使い方をイメージできます
-            </h3>
-            <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-              PASSAIは完成文を出すだけではなく、質問を通じて経験や考えを引き出し、
-              <br className="hidden sm:inline" />
-              出願書類や面接で使える言葉に整理します。
-            </p>
-          </div>
-
-          <div className="mx-auto max-w-2xl">
-            <FlowScrollBox phases={PHASES} />
-          </div>
         </div>
       </div>
     </section>
