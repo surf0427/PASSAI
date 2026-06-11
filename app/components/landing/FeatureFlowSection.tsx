@@ -1,4 +1,4 @@
-// 6 ステップを番号付きカードで提示。
+// 01〜06 の番号付きカードで「合格までの流れ」を提示。
 // スマホ：1列／タブレット：2列／PC：3列のグリッド。
 // 番号バッジ自体が「流れ」の可読性を担保するため、矢印類は省略。
 //
@@ -6,10 +6,14 @@
 // flex-col + 説明 flex-1 + タグ末尾固定の構造で、
 // グリッド内の同じ行のカードどうしで「タグの位置」が揃う。
 //
+// 流れの 6 ステップとは別に、それらを横断して支える機能（受験相談AI / マイページ）を
+// 「流れ全体を支える機能」として番号なしの別ブロックで提示する。
+// num を省略すると番号バッジが消える以外は、流れカードと同一デザインを共有する。
+//
 // 説明文は \n\n で段落区切り。CSS の whitespace-pre-line が空行を再現する。
 
 type StepCardProps = {
-  num: string;
+  num?: string;
   title: string;
   desc: string;
   tags: string[];
@@ -19,9 +23,11 @@ function StepCard({ num, title, desc, tags }: StepCardProps) {
   return (
     <li className="list-none flex flex-col bg-white rounded-2xl ring-1 ring-slate-200 shadow-sm p-6 sm:p-7">
       <div className="flex items-center gap-3 mb-3">
-        <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-brand-50 text-brand-700 text-sm font-extrabold tracking-tight">
-          {num}
-        </span>
+        {num && (
+          <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-brand-50 text-brand-700 text-sm font-extrabold tracking-tight">
+            {num}
+          </span>
+        )}
         <p className="text-base sm:text-lg font-bold text-slate-900">{title}</p>
       </div>
       <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line mb-5 flex-1">
@@ -55,6 +61,8 @@ export function FeatureFlowSection() {
             活動整理から自己分析、志望理由書、小論文、面接対策まで。
             <br className="hidden sm:inline" />
             バラバラに対策するのではなく、入力した内容を次の対策に活かしながら進められます。
+            <br className="hidden sm:inline" />
+            さらに、受験相談AIとマイページが相談と振り返りで全体を支えます。
           </p>
         </div>
 
@@ -115,6 +123,38 @@ export function FeatureFlowSection() {
             tags={['#予想質問', '#AIフィードバック', '#深掘り対策']}
           />
         </ol>
+
+        {/* 流れ全体を支える機能：01〜06 の順序フローには属さない横断機能。
+            番号バッジを外し、見出しで「下支え」だと一目で分かるようにする。 */}
+        <div className="mt-12 sm:mt-16">
+          <div className="text-center mb-6 sm:mb-8">
+            <h3 className="text-lg sm:text-2xl font-extrabold tracking-tight leading-snug mb-2">
+              流れ全体を支える機能
+            </h3>
+            <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+              どのステップの途中でも、いつでも相談でき、これまでの取り組みを振り返れます。
+            </p>
+          </div>
+
+          <ul className="grid gap-5 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <StepCard
+              title="受験相談AI"
+              desc={
+                '志望校選び、学習計画、面接の不安、志望理由書の方向性まで。受験の悩みを24時間いつでも相談できます。\n\n' +
+                'これまでの自己分析や活動整理をふまえて、AIが一人ひとりに合わせた具体的なアドバイスを返します。'
+              }
+              tags={['#24時間相談', '#あなた専用', '#具体的アドバイス']}
+            />
+            <StepCard
+              title="マイページ"
+              desc={
+                '自己分析・志望理由書・小論文・面接練習の履歴や成長記録を、ひとつの場所でまとめて管理。\n\n' +
+                'これまでの取り組みを振り返りながら、効率的に受験準備を進められます。'
+              }
+              tags={['#一元管理', '#成長記録', '#振り返り']}
+            />
+          </ul>
+        </div>
       </div>
     </section>
   );
