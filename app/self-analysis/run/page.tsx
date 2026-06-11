@@ -35,6 +35,7 @@ import { useCurrentUserId } from '@/app/components/AuthProvider';
 import { FREE_MEMO_MAX_CHARS, normalizeDeepAnswers, normalizeFreeMemo } from '@/lib/summarizeNormalize';
 import { decideSummarizeMode } from '@/lib/summarizeMode';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { aiErrorMessage } from '@/lib/aiErrorMessage';
 import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
 import { validateSummarizeInput } from '@/lib/validation/validateSummarizeInput';
 import { logAiValidation } from '@/lib/aiValidationLog';
@@ -373,7 +374,8 @@ export default function SelfAnalysisPage() {
       }
       const data = await res.json();
       if (!res.ok) {
-        setAddQuestionsError(data.detail ?? '質問の追加に失敗しました');
+        // data.detail（英語の実装詳細）は表示せず、error code を日本語文言にマップする。
+        setAddQuestionsError(aiErrorMessage(data.error));
         return;
       }
       const newQuestions: string[] = data.questions;
@@ -511,7 +513,8 @@ export default function SelfAnalysisPage() {
       }
       const data = await res.json();
       if (!res.ok) {
-        setSummarizeError(data.detail ?? 'まとめの生成に失敗しました');
+        // data.detail（英語の実装詳細）は表示せず、error code を日本語文言にマップする。
+        setSummarizeError(aiErrorMessage(data.error));
         return;
       }
       const summaryResult = data.summary as SummaryResult;

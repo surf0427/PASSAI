@@ -27,6 +27,7 @@ import {
   saveAdditionalQuestionsCache,
 } from '@/lib/additionalQuestionsCache';
 import { logAiCache } from '@/lib/aiCacheLog';
+import { aiErrorMessage } from '@/lib/aiErrorMessage';
 import { validateAdditionalQuestionInput } from '@/lib/validation/validateAdditionalQuestionInput';
 import { logAiValidation } from '@/lib/aiValidationLog';
 import { additionalQuestionsLimit, type DailyUsage } from '@/lib/dailyLimit';
@@ -192,7 +193,8 @@ export default function ResumePage() {
       }
       const data = await res.json();
       if (!res.ok) {
-        setError(data.detail ?? '深掘り質問の生成に失敗しました');
+        // data.detail（英語の実装詳細）は表示せず、error code を日本語文言にマップする。
+        setError(aiErrorMessage(data.error));
         return;
       }
       const newQuestions: string[] = Array.isArray(data.questions) ? data.questions : [];

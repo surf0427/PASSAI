@@ -99,87 +99,122 @@ export async function POST(req: Request) {
     //   STEP-API-MEASURE-01 で system prompt が ~2,191 chars / ~1,100 tokens（中央推定でほぼ
     //   1,024 tokens 閾値）と計測。閾値未達なら Anthropic 側で silently skip されるため
     //   low-risk 配備。「再び深掘る」連打など短時間連続呼び出しで cache hit する余地がある。
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 500,
-      system: [
-        {
-          type: 'text',
-          text: ADDITIONAL_QUESTIONS_SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: buildAdditionalQuestionsPrompt({
-            activityText,
-            existingQuestions,
-            basicInfo,
-            universityContext,
-            // STEP-DIVERGENCE-03C: テーマ偏り（activityData から決定論派生）を質問生成の探索 context に。
-            // この段階では StudentProfile 未生成のため studentProfile は null（activityData のみで集計）。
-            // activityData は既に HashAdditionalQuestionsInput に含まれるため hash field は増やさず
-            // PROMPT_VERSION bump のみ（03A/DET 系と同型）。StudentProfile 生成には一切作用しない。
-            themeFrequency: buildThemeFrequency({ activityData, studentProfile: null }),
-          }),
-        },
-      ],
-    }, { signal: createTimeoutSignal() });
+    // 入力は決定論的なので system / user は 1 度だけ組み立てて 2 回の attempt で再利用する。
+    const systemBlocks = [
+      {
+        type: 'text' as const,
+        text: ADDITIONAL_QUESTIONS_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' as const },
+      },
+    ];
+    const userMessages = [
+      {
+        role: 'user' as const,
+        content: buildAdditionalQuestionsPrompt({
+          activityText,
+          existingQuestions,
+          basicInfo,
+          universityContext,
+          // STEP-DIVERGENCE-03C: テーマ偏り（activityData から決定論派生）を質問生成の探索 context に。
+          // この段階では StudentProfile 未生成のため studentProfile は null（activityData のみで集計）。
+          // activityData は既に HashAdditionalQuestionsInput に含まれるため hash field は増やさず
+          // PROMPT_VERSION bump のみ（03A/DET 系と同型）。StudentProfile 生成には一切作用しない。
+          themeFrequency: buildThemeFrequency({ activityData, studentProfile: null }),
+        }),
+      },
+    ];
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+    // parse 失敗時のみ 1 回だけ temperature 0 で再生成する暫定安定化。
+    //   - JSON.parse(extractJson(raw)) が失敗したケースだけ retry（model 出力揺れの吸収）。
+    //   - max_tokens truncation は retry せず、既存どおり AI_ADDITIONAL_QUESTIONS_TRUNCATED で返す。
+    //   - 2 回目も失敗したときだけ AI_ADDITIONAL_QUESTIONS_PARSE_FAILED を返す。
+    // prompt / output schema / max_tokens / truncation 分岐は据え置き。
+    let questions: string[] | null = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const message = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 500,
+        // retry 時のみ temperature 0 に下げて出力を安定させる（初回は既定のまま）。
+        ...(attempt === 2 ? { temperature: 0 } : {}),
+        system: systemBlocks,
+        messages: userMessages,
+      }, { signal: createTimeoutSignal() });
 
-    // STEP3.11: AI 出力が max_tokens 到達で途中切れする pre-existing 問題に対する hardening。
-    // 他 route (/api/analysis / /api/summarize / /api/statement-review / /api/essay-review /
-    // /api/interview-feedback) と同じパターンで、JSON.parse 前に stop_reason を確認して
-    // 明示エラーで弾く。途中切れた raw を JSON.parse すると "Unexpected end of JSON input"
-    // など実装詳細がユーザーに露出してしまうため、構造化エラーで包む。
-    // max_tokens=500 / 出力 2 問のため truncation 確率は低いが、analysis 系列 3 route
-    // (analysis / additional / summarize) の防御構造を揃えるために本 route も追加対応。
-    if (message.stop_reason === 'max_tokens') {
-      console.error('additional questions truncated', {
-        stopReason: message.stop_reason,
-        rawTextTail: raw.slice(-200),
-      });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+
+      // STEP3.11: AI 出力が max_tokens 到達で途中切れする pre-existing 問題に対する hardening。
+      // 他 route (/api/analysis / /api/summarize / /api/statement-review / /api/essay-review /
+      // /api/interview-feedback) と同じパターンで、JSON.parse 前に stop_reason を確認して明示エラーで弾く。
+      // truncation は出力揺れではなく長さ起因のため retry 対象にしない。
+      // max_tokens=500 / 出力 2 問のため truncation 確率は低いが、analysis 系列 3 route
+      // (analysis / additional / summarize) の防御構造を揃えるために本 route も対応。
+      if (message.stop_reason === 'max_tokens') {
+        console.error('additional questions truncated', {
+          attempt,
+          stopReason: message.stop_reason,
+          rawTextTail: raw.slice(-200),
+        });
+        logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+        await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+        return Response.json(
+          {
+            error: 'AI_ADDITIONAL_QUESTIONS_TRUNCATED',
+            detail: 'AI response was truncated before completion',
+          },
+          { status: 502 },
+        );
+      }
+
+      // truncation 以外の JSON malformation を parse failure として区別する。
+      // (truncation を弾いた後でも extractJson / JSON.parse が失敗するケースは
+      // model が schema 違反の文字列を返した場合などに発生し得る。)
+      try {
+        const result = JSON.parse(extractJson(raw));
+        questions = result.questions as string[];
+      } catch {
+        if (attempt === 1) {
+          // 1 回目失敗: 生レスポンス全文は残さず、retry する旨だけ記録する。
+          console.error('additional questions parse failed, retrying', {
+            attempt,
+            stopReason: message.stop_reason,
+            rawLength: raw.length,
+          });
+          continue;
+        }
+        // 2 回目も失敗: ここで初めて PARSE_FAILED として返す。
+        console.error('additional questions parse failed', {
+          attempt,
+          stopReason: message.stop_reason,
+          rawLength: raw.length,
+          rawTextTail: raw.slice(-200),
+          outputTokens: message.usage?.output_tokens,
+        });
+        logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+        await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+        captureRouteException(new Error('AI_ADDITIONAL_QUESTIONS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED' });
+        return Response.json(
+          {
+            error: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED',
+            detail: 'AI response could not be parsed as JSON',
+          },
+          { status: 502 },
+        );
+      }
+
+      // parse 成功: 成功 attempt の usage を success ログに残してループを抜ける。
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      break;
+    }
+
+    // 制御フロー上 questions は break 前に必ず代入される（attempt 2 失敗時は return 済み）。
+    if (!questions) {
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
       return Response.json(
-        {
-          error: 'AI_ADDITIONAL_QUESTIONS_TRUNCATED',
-          detail: 'AI response was truncated before completion',
-        },
+        { error: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED', detail: 'AI response could not be parsed as JSON' },
         { status: 502 },
       );
     }
 
-    // truncation 以外の JSON malformation を parse failure として区別する。
-    // (truncation を弾いた後でも extractJson / JSON.parse が失敗するケースは
-    // model が schema 違反の文字列を返した場合などに発生し得る。)
-    let questions: string[];
-    try {
-      const result = JSON.parse(extractJson(raw));
-      questions = result.questions as string[];
-    } catch {
-      console.error('additional questions parse failed', {
-        stopReason: message.stop_reason,
-        rawLength: raw.length,
-        rawTextHead: raw.slice(0, 200),
-        rawTextTail: raw.slice(-200),
-        outputTokens: message.usage?.output_tokens,
-      });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
-      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
-      captureRouteException(new Error('AI_ADDITIONAL_QUESTIONS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED' });
-      return Response.json(
-        {
-          error: 'AI_ADDITIONAL_QUESTIONS_PARSE_FAILED',
-          detail: 'AI response could not be parsed as JSON',
-        },
-        { status: 502 },
-      );
-    }
-
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ questions });
   } catch (error) {

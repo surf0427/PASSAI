@@ -18,6 +18,7 @@ import {
 import { logAiCache } from '@/lib/aiCacheLog';
 import { validateAnalysisInput } from '@/lib/validation/validateAnalysisInput';
 import { logAiValidation } from '@/lib/aiValidationLog';
+import { aiErrorMessage } from '@/lib/aiErrorMessage';
 
 // STEP5.2: input hash cache の対象 route。logAiCache の `route` field とも一致。
 // server route.ts の ROUTE 定数と揃えてある（server は変更しないため別箇所で定義）。
@@ -105,7 +106,8 @@ export function useWallHitting(
 
       const data = await res.json();
       if (!res.ok) {
-        setError(data.detail ?? '分析に失敗しました。もう一度お試しください。');
+        // data.detail（英語の実装詳細）は表示せず、error code を日本語文言にマップする。
+        setError(aiErrorMessage(data.error));
         return;
       }
       // STEP5.2: 成功 response の入力 hash を保存。

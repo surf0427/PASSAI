@@ -105,72 +105,109 @@ export async function POST(req: Request) {
     // overhead を見込み 2400 を確保する。STEP-SELFANALYSIS-QUESTION-QUALITY-01 で
     // questions を AI 出力に戻したため、旧 1600 から増量。
     // truncation hardening は既存ロジックで継続して効く。
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 2400,
-      system: [
-        {
-          type: 'text',
-          text: ANALYSIS_SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        {
-          role: 'user',
-          // buildWallHittingPrompt は dynamic 部のみ（basicInfo / universityContext / activityText）。
-          // (A) profile 生成 + (B) questions 生成の責務境界は ANALYSIS_SYSTEM_PROMPT 側で
-          // 「出力内容の指針」として記述されている。lib/prompts.ts のヘッダコメント参照。
-          content: buildWallHittingPrompt({ activityText, basicInfo, universityContext }),
-        },
-      ],
-    }, { signal: createTimeoutSignal() });
+    // buildWallHittingPrompt は dynamic 部のみ（basicInfo / universityContext / activityText）。
+    // (A) profile 生成 + (B) questions 生成の責務境界は ANALYSIS_SYSTEM_PROMPT 側で
+    // 「出力内容の指針」として記述されている。lib/prompts.ts のヘッダコメント参照。
+    // 入力は決定論的なので 1 度だけ組み立てて 2 回の attempt で再利用する。
+    const systemBlocks = [
+      {
+        type: 'text' as const,
+        text: ANALYSIS_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' as const },
+      },
+    ];
+    const userMessages = [
+      {
+        role: 'user' as const,
+        content: buildWallHittingPrompt({ activityText, basicInfo, universityContext }),
+      },
+    ];
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+    // parse 失敗時のみ 1 回だけ temperature 0 で再生成する暫定安定化。
+    //   - JSON.parse(extractJson(raw)) が失敗したケースだけ retry（model 出力揺れの吸収）。
+    //   - max_tokens truncation は retry せず、既存どおり AI_ANALYSIS_TRUNCATED で返す。
+    //   - 2 回目も失敗したときだけ AI_ANALYSIS_PARSE_FAILED を返す。
+    // prompt / output schema / max_tokens / truncation 分岐は据え置き。
+    let parsed: WallHittingResult | null = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const message = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 2400,
+        // retry 時のみ temperature 0 に下げて出力を安定させる（初回は既定のまま）。
+        ...(attempt === 2 ? { temperature: 0 } : {}),
+        system: systemBlocks,
+        messages: userMessages,
+      }, { signal: createTimeoutSignal() });
 
-    // STEP3.7: AI 出力が max_tokens 到達で途中切れする pre-existing 問題に対する hardening。
-    // 他 route (/api/statement-review / /api/essay-review / /api/interview-feedback) と
-    // 同じパターンで、JSON.parse 前に stop_reason を確認して明示エラーで弾く。
-    // 途中切れた raw を JSON.parse すると "Unexpected end of JSON input" など実装詳細が
-    // ユーザーに露出してしまうため、構造化エラーで包む。
-    if (message.stop_reason === 'max_tokens') {
-      console.error('analysis truncated', {
-        stopReason: message.stop_reason,
-        rawTextTail: raw.slice(-200),
-      });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
-      await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
-      return Response.json(
-        {
-          error: 'AI_ANALYSIS_TRUNCATED',
-          detail: 'AI response was truncated before completion',
-        },
-        { status: 502 },
-      );
+      const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+
+      // STEP3.7: AI 出力が max_tokens 到達で途中切れする pre-existing 問題に対する hardening。
+      // 他 route (/api/statement-review / /api/essay-review / /api/interview-feedback) と
+      // 同じパターンで、JSON.parse 前に stop_reason を確認して明示エラーで弾く。
+      // truncation は出力揺れではなく長さ起因のため retry 対象にしない。
+      if (message.stop_reason === 'max_tokens') {
+        console.error('analysis truncated', {
+          attempt,
+          stopReason: message.stop_reason,
+          rawTextTail: raw.slice(-200),
+        });
+        logAiUsage({ route: ROUTE, model: MODEL, status: 'truncated', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+        await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+        return Response.json(
+          {
+            error: 'AI_ANALYSIS_TRUNCATED',
+            detail: 'AI response was truncated before completion',
+          },
+          { status: 502 },
+        );
+      }
+
+      // truncation 以外の JSON malformation を parse failure として区別する。
+      // (truncation を弾いた後でも extractJson / JSON.parse が失敗するケースは
+      // model が schema 違反の文字列を返した場合などに発生し得る。)
+      try {
+        parsed = JSON.parse(extractJson(raw)) as WallHittingResult;
+      } catch {
+        if (attempt === 1) {
+          // 1 回目失敗: 生レスポンス全文は残さず、retry する旨だけ記録する。
+          console.error('analysis parse failed, retrying', {
+            attempt,
+            stopReason: message.stop_reason,
+            rawLength: raw.length,
+          });
+          continue;
+        }
+        // 2 回目も失敗: ここで初めて PARSE_FAILED として返す。
+        console.error('analysis parse failed', {
+          attempt,
+          stopReason: message.stop_reason,
+          rawLength: raw.length,
+          rawTextTail: raw.slice(-200),
+          outputTokens: message.usage?.output_tokens,
+        });
+        logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+        await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
+        captureRouteException(new Error('AI_ANALYSIS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ANALYSIS_PARSE_FAILED' });
+        return Response.json(
+          {
+            error: 'AI_ANALYSIS_PARSE_FAILED',
+            detail: 'AI response could not be parsed as JSON',
+          },
+          { status: 502 },
+        );
+      }
+
+      // parse 成功: 成功 attempt の usage を success ログに残してループを抜ける。
+      logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+      break;
     }
 
-    // truncation 以外の JSON malformation を parse failure として区別する。
-    // (truncation を弾いた後でも extractJson / JSON.parse が失敗するケースは
-    // model が schema 違反の文字列を返した場合などに発生し得る。)
-    let parsed: WallHittingResult;
-    try {
-      parsed = JSON.parse(extractJson(raw)) as WallHittingResult;
-    } catch {
-      console.error('analysis parse failed', {
-        stopReason: message.stop_reason,
-        rawLength: raw.length,
-        rawTextHead: raw.slice(0, 200),
-        rawTextTail: raw.slice(-200),
-        outputTokens: message.usage?.output_tokens,
-      });
-      logAiUsage({ route: ROUTE, model: MODEL, status: 'parse_failed', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    // 制御フロー上 parsed は break 前に必ず代入される（attempt 2 失敗時は return 済み）。
+    // TS の narrowing 補助として明示ガードを置く。
+    if (!parsed) {
       await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'error' });
-      captureRouteException(new Error('AI_ANALYSIS_PARSE_FAILED'), { route: ROUTE, feature: 'ai', status: 502 }, { status: 502, code: 'AI_ANALYSIS_PARSE_FAILED' });
       return Response.json(
-        {
-          error: 'AI_ANALYSIS_PARSE_FAILED',
-          detail: 'AI response could not be parsed as JSON',
-        },
+        { error: 'AI_ANALYSIS_PARSE_FAILED', detail: 'AI response could not be parsed as JSON' },
         { status: 502 },
       );
     }
@@ -193,7 +230,7 @@ export async function POST(req: Request) {
       ...(validApplicantType ? { applicantType: validApplicantType } : {}),
     };
 
-    logAiUsage({ route: ROUTE, model: MODEL, status: 'success', usage: message.usage, cache_creation_input_tokens: message.usage?.cache_creation_input_tokens, cache_read_input_tokens: message.usage?.cache_read_input_tokens });
+    // success の logAiUsage は parse 成功時にループ内で記録済み（usage は attempt-local）。
     await recordUsage({ userId, route: USAGE_ROUTE, model: MODEL, status: 'ok' });
     return Response.json({ result });
   } catch (error) {
