@@ -12,21 +12,54 @@
 //
 // 説明文は \n\n で段落区切り。CSS の whitespace-pre-line が空行を再現する。
 //
-// デモGIF/画像（任意）：
-//   demoSrc を渡したカードだけ、説明文の下・タグの上にデモ枠を表示する。
+// デモ画像（スクリーンショット・任意）：
+//   demoSrc を渡したカードだけ、説明文の下・タグの上にスクショ枠を表示する。
 //   demoSrc 未設定のカードは従来どおり（枠ごと描画されない）。
-//   ファイルは public/landing/features/ 配下に置く想定（例: demoSrc="/landing/features/self-analysis.gif"）。
-//   アニメGIFの動きを保持するため next/image は unoptimized で渡す（最適化でアニメが失われるため）。
-//   loading="lazy"（next/image 既定）＋ aspect 固定でレイアウトシフトを防ぐ。
+//   ファイルは public/landing/features/ 配下に .webp / .png で置く想定
+//   （例: demoSrc="/landing/features/self-analysis.webp"）。
+//
+//   表示方針（ScreenshotPreview 参照）：
+//   縦長スクショを縮小しすぎないよう、枠は固定 max-height を持ち、枠内を縦スクロール。
+//   画像は横幅100% × 自然な高さ（object-cover で切り抜かない）。
+//   下部のフェード＋「スクロールして全体を見る」で、続きがあることを示す。
+//   静止画なので next/image の最適化に任せる（unoptimized は付けない）。
 
 import Image from 'next/image';
+
+// 縦長スクショ用のプレビュー枠。
+// 枠は固定 max-height を持ち、枠内を縦スクロールして全体を確認できる。
+// 画像は width=0 / height=0 + className w-full h-auto で「横幅100% × 自然な高さ」に。
+//   （next/image に必須の width/height をダミー指定しつつ、実寸比は読み込んだ画像から保つ定石）
+// 下部のフェード＋ヒントで「続きがある」ことを示す（pointer-events-none で操作を邪魔しない）。
+function ScreenshotPreview({ src, alt }: { src: string; alt: string }) {
+  return (
+    <div className="relative mb-5 overflow-hidden rounded-xl ring-1 ring-slate-200 shadow-sm bg-slate-50">
+      <div className="max-h-56 sm:max-h-64 overflow-y-auto overscroll-contain">
+        <Image
+          src={src}
+          alt={alt}
+          width={0}
+          height={0}
+          loading="lazy"
+          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+          className="block w-full h-auto"
+        />
+      </div>
+      {/* スクロール可能を示す下部フェード＋ヒント（枠に固定。中身と一緒には動かない） */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white via-white/70 to-transparent" />
+      <span className="pointer-events-none absolute inset-x-0 bottom-1.5 text-center text-[10px] font-medium text-slate-500">
+        スクロールして全体を見る ↓
+      </span>
+    </div>
+  );
+}
 
 type StepCardProps = {
   num?: string;
   title: string;
   desc: string;
   tags: string[];
-  // 任意：デモGIF/画像。未設定ならデモ枠は一切描画しない。
+  // 任意：デモ画像（スクリーンショット）。未設定ならデモ枠は一切描画しない。
   demoSrc?: string;
   demoAlt?: string;
 };
@@ -46,17 +79,7 @@ function StepCard({ num, title, desc, tags, demoSrc, demoAlt }: StepCardProps) {
         {desc}
       </p>
       {demoSrc && (
-        <div className="relative mb-5 aspect-[16/10] overflow-hidden rounded-xl ring-1 ring-slate-200 shadow-sm bg-slate-50">
-          <Image
-            src={demoSrc}
-            alt={demoAlt ?? `${title}の操作デモ`}
-            fill
-            unoptimized
-            loading="lazy"
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-            className="object-cover object-top"
-          />
-        </div>
+        <ScreenshotPreview src={demoSrc} alt={demoAlt ?? `${title}の画面イメージ`} />
       )}
       <div className="flex flex-wrap gap-1.5">
         {tags.map((tag) => (
