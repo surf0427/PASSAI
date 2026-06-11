@@ -11,15 +11,27 @@
 // num を省略すると番号バッジが消える以外は、流れカードと同一デザインを共有する。
 //
 // 説明文は \n\n で段落区切り。CSS の whitespace-pre-line が空行を再現する。
+//
+// デモGIF/画像（任意）：
+//   demoSrc を渡したカードだけ、説明文の下・タグの上にデモ枠を表示する。
+//   demoSrc 未設定のカードは従来どおり（枠ごと描画されない）。
+//   ファイルは public/landing/features/ 配下に置く想定（例: demoSrc="/landing/features/self-analysis.gif"）。
+//   アニメGIFの動きを保持するため next/image は unoptimized で渡す（最適化でアニメが失われるため）。
+//   loading="lazy"（next/image 既定）＋ aspect 固定でレイアウトシフトを防ぐ。
+
+import Image from 'next/image';
 
 type StepCardProps = {
   num?: string;
   title: string;
   desc: string;
   tags: string[];
+  // 任意：デモGIF/画像。未設定ならデモ枠は一切描画しない。
+  demoSrc?: string;
+  demoAlt?: string;
 };
 
-function StepCard({ num, title, desc, tags }: StepCardProps) {
+function StepCard({ num, title, desc, tags, demoSrc, demoAlt }: StepCardProps) {
   return (
     <li className="list-none flex flex-col bg-white rounded-2xl ring-1 ring-slate-200 shadow-sm p-6 sm:p-7">
       <div className="flex items-center gap-3 mb-3">
@@ -33,6 +45,19 @@ function StepCard({ num, title, desc, tags }: StepCardProps) {
       <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line mb-5 flex-1">
         {desc}
       </p>
+      {demoSrc && (
+        <div className="relative mb-5 aspect-[16/10] overflow-hidden rounded-xl ring-1 ring-slate-200 shadow-sm bg-slate-50">
+          <Image
+            src={demoSrc}
+            alt={demoAlt ?? `${title}の操作デモ`}
+            fill
+            unoptimized
+            loading="lazy"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            className="object-cover object-top"
+          />
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
         {tags.map((tag) => (
           <span
