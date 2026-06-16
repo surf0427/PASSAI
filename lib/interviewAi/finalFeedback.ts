@@ -56,8 +56,13 @@ const SYSTEM_PROMPT = [
   '    "questionNumber": number, "originalQuestion": string, "followUps": string[] }],',
   '  "nextPractice": string[]                // 次に練習すべきこと',
   '}',
-  'すべての配列は空でも構わないが、キーは必ず含めてください。levelEvaluation の各値は',
-  '"weak" / "normal" / "strong" のいずれかにしてください。',
+  'levelEvaluation の各値は "weak" / "normal" / "strong" のいずれかにしてください。',
+  '【出力品質（厳守）】',
+  '- goodPoints / improvements / nextPractice は必ずそれぞれ 2〜4 個入れ、空配列にしない。',
+  '  実際の面接のやり取り（受験生の回答内容）に即した具体的な指摘にする（一般論・テンプレ文の羅列にしない）。',
+  '- 同じ内容や同一文の繰り返しを避ける。各項目は異なる観点にし、表現も重複させない。',
+  '- 各項目は 1〜2 文の意味のある日本語にする（単語だけ・空文字は禁止）。',
+  '- perQuestionFeedback / followUpQuestions は対象が無ければ空配列でよい（キーは必ず含める）。',
 ].join('\n');
 
 function buildTargetContext(targetRef: Record<string, unknown>): string {
