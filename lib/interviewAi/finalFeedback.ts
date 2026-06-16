@@ -9,7 +9,11 @@ import {
   INTERVIEW_AI_FEEDBACK_MAX_TOKENS,
   INTERVIEW_AI_FEEDBACK_MODEL,
 } from './constants';
-import { feedbackGuidanceFor, type InterviewType } from './interviewTypes';
+import {
+  feedbackGuidanceFor,
+  FEEDBACK_TONE_RULES,
+  type InterviewType,
+} from './interviewTypes';
 
 /**
  * STEP-INTERVIEW-AI-PR7: 面接 AI セッションの final feedback 生成（InterviewFeedback 形式）。
@@ -86,8 +90,11 @@ export async function generateFinalFeedback(args: {
   turns: FeedbackTurn[];
   sourceContext?: string;
 }): Promise<InterviewFeedback> {
-  // タイプ別の追加評価観点を system に足す（item 10）。
-  const system = `${SYSTEM_PROMPT}\n【評価観点（タイプ別）】${feedbackGuidanceFor(args.interviewType)}`;
+  // タイプ別の追加評価観点 + 全モード共通の建設的トーン規約を system に足す。
+  // 圧迫面接モードでも講評トーンは通常モードと統一する（FEEDBACK_TONE_RULES）。
+  const system =
+    `${SYSTEM_PROMPT}\n【評価観点（タイプ別）】${feedbackGuidanceFor(args.interviewType)}\n` +
+    FEEDBACK_TONE_RULES;
   const sourceLine = (args.sourceContext ?? '').trim()
     ? `受験生の関連データ:\n${(args.sourceContext ?? '').trim()}\n\n`
     : '';
