@@ -12,7 +12,7 @@ import {
   kickoff,
   retryFollowup,
   submitTextAnswer,
-  submitVoiceAnswer,
+  transcribeVoice,
   type AiSession,
   type AnswerResult,
   type CompleteResult,
@@ -93,17 +93,39 @@ export function InterviewAiClient() {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [done, setDone] = useState(false);
   const [questionError, setQuestionError] = useState(false);
-  const [sttGuidance, setSttGuidance] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [resume, setResume] = useState<AiSession | null>(null);
   const [result, setResult] = useState<Extract<CompleteResult, { kind: 'completed' }> | null>(null);
 
-  // voice 録音
-  const [isRecording, setIsRecording] = useState(false);
+  // 回答の入力方法（ターン単位で切替可）。音声回答も最終的には text answer として保存する。
+  const [inputMode, setInputMode] = useState<'voice' | 'text'>('text');
+  // 音声入力のサブ状態。idle: 録音前 or 文字起こし結果待ち / recording: 録音中 / transcribing: STT 中。
+  const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // MediaRecorder / getUserMedia 対応判定（非対応なら最初からテキスト回答）。
+  // mounted を噛ませて SSR/hydration では false に固定（hydration mismatch 回避）。client mount 後に確定。
+  const mediaSupported =
+    mounted &&
+    typeof window !== 'undefined' &&
+    typeof window.MediaRecorder !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia;
+
+  function defaultInputMode(): 'voice' | 'text' {
+    return mode === 'voice' && mediaSupported ? 'voice' : 'text';
+  }
+
+  // 新しい質問を表示するときの入力状態リセット（入力方法を既定に戻す）。
+  function showQuestion(q: string) {
+    setCurrentQuestion(q);
+    setQuestionError(false);
+    setAnswerText('');
+    setVoiceStage('idle');
+    setInputMode(defaultInputMode());
+  }
 
   // 最初（= 大学・学部選択の setup）まで戻す。タイプ選択は setup の後段なので、戻り先は常に setup。
   function resetToStart(message?: string) {
@@ -115,7 +137,7 @@ export function InterviewAiClient() {
     setExchanges([]);
     setDone(false);
     setQuestionError(false);
-    setSttGuidance(false);
+    setVoiceStage('idle');
     setResult(null);
     setResume(null);
     setErrorMsg(message ?? null);
@@ -163,10 +185,10 @@ export function InterviewAiClient() {
   ) {
     setLoading(true);
     setErrorMsg(null);
-    setSttGuidance(false);
     try {
       const res = await createSession({
-        source: mode,
+        // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
+        source: 'text',
         targetRef: buildTargetRef(),
         interviewType: type,
         sourceType: resolvedSrc ? resolvedSrc.sourceType : null,
@@ -193,10 +215,9 @@ export function InterviewAiClient() {
   async function runKickoff(s: AiSession) {
     const q = await kickoff(s.id);
     if (q.kind === 'question') {
-      setCurrentQuestion(q.question);
-      setQuestionError(false);
       setDone(false);
       setPhase('interviewing');
+      showQuestion(q.question);
     } else {
       setErrorMsg('最初の質問の生成に失敗しました。再試行してください。');
       setPhase('interviewing');
@@ -216,7 +237,6 @@ export function InterviewAiClient() {
         return;
       }
       setSession(resume);
-      setMode(st.state.source);
       setResume(null);
       setPhase('interviewing');
       if (st.state.done) {
@@ -227,9 +247,10 @@ export function InterviewAiClient() {
       } else if (st.state.needsRetry) {
         setQuestionError(true);
         setCurrentQuestion(null);
+      } else if (st.state.currentQuestion) {
+        showQuestion(st.state.currentQuestion);
       } else {
-        setCurrentQuestion(st.state.currentQuestion);
-        setQuestionError(false);
+        setCurrentQuestion(null);
       }
     } finally {
       setLoading(false);
@@ -242,15 +263,14 @@ export function InterviewAiClient() {
       if (answeredQuestion) {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
       }
-      setCurrentQuestion(r.question);
-      setAnswerText('');
-      setQuestionError(false);
+      showQuestion(r.question);
     } else if (r.kind === 'question-error') {
       if (answeredQuestion) {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
       }
       setCurrentQuestion(null);
       setAnswerText('');
+      setVoiceStage('idle');
       setQuestionError(true); // 次の質問生成に失敗 → 再試行導線
     } else if (r.kind === 'done' || r.kind === 'limit') {
       if (answeredQuestion && r.kind === 'done') {
@@ -258,22 +278,17 @@ export function InterviewAiClient() {
       }
       setCurrentQuestion(null);
       setAnswerText('');
+      setVoiceStage('idle');
       setQuestionError(false);
       setDone(true);
-    } else if (r.kind === 'stt-error') {
-      // STT 未設定 → テキストモード誘導
-      setSttGuidance(true);
-      setErrorMsg(
-        r.error === 'stt-unavailable'
-          ? '音声認識が未設定です。テキストモードで面接を始め直してください。'
-          : '音声認識に失敗しました。もう一度録音するか、テキストモードをご利用ください。',
-      );
     } else {
       setErrorMsg('回答の送信に失敗しました。再試行してください。');
     }
   }
 
-  // ── テキスト回答 ────────────────────────────────────────────
+  // ── 回答送信（音声・テキスト共通で text answer として保存）─────────────
+  //   音声回答も STT 後の transcript を answerText に入れ、本関数で text answer として送る。
+  //   → 既存の text 回答フロー（/turn text）= 1セッション1カウントの課金仕様に合流する。
   async function handleSubmitText() {
     if (!session || !currentQuestion) return;
     const answer = answerText.trim();
@@ -288,16 +303,17 @@ export function InterviewAiClient() {
     }
   }
 
-  // ── 音声回答（録音 → STT） ──────────────────────────────────
+  // ── 音声入力（録音 → STT → transcript を answerText に格納。保存はしない）──────
   async function startRecording() {
     setErrorMsg(null);
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setErrorMsg('この環境では録音できません。テキストモードをご利用ください。');
-      setSttGuidance(true);
+    if (!mediaSupported) {
+      setInputMode('text');
+      setErrorMsg('この環境では録音できません。テキストで回答してください。');
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // mimeType は決め打ちしない（Safari/iOS は audio/mp4、Chrome は audio/webm）。
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
@@ -305,32 +321,41 @@ export function InterviewAiClient() {
       };
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        void handleSubmitVoice(blob);
+        const type = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(chunksRef.current, { type });
+        void handleTranscribe(blob);
       };
       recorderRef.current = recorder;
       recorder.start();
-      setIsRecording(true);
+      setVoiceStage('recording');
     } catch {
-      setErrorMsg('マイクへのアクセスが許可されませんでした。テキストモードをご利用ください。');
-      setSttGuidance(true);
+      setInputMode('text');
+      setErrorMsg('マイクへのアクセスが許可されませんでした。テキストで回答してください。');
     }
   }
 
   function stopRecording() {
     recorderRef.current?.stop();
-    setIsRecording(false);
+    // onstop で handleTranscribe に進む。stage は transcribing へ。
+    setVoiceStage('transcribing');
   }
 
-  async function handleSubmitVoice(blob: Blob) {
-    if (!session || !currentQuestion) return;
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const r = await submitVoiceAnswer(session.id, blob);
-      applyAnswerResult(r, currentQuestion);
-    } finally {
-      setLoading(false);
+  // 録音 blob を STT API でテキスト化。成功で answerText にセット（ユーザーが確認・編集して送信）。
+  // 失敗時は保存も課金もせず、テキスト入力にフォールバック。音声 blob はここで破棄。
+  async function handleTranscribe(blob: Blob) {
+    setVoiceStage('transcribing');
+    const r = await transcribeVoice(blob);
+    if (r.kind === 'ok') {
+      setAnswerText(r.transcript);
+      setVoiceStage('idle');
+    } else {
+      setVoiceStage('idle');
+      setInputMode('text');
+      setErrorMsg(
+        r.error === 'stt-unavailable'
+          ? '音声認識が利用できません。テキストで回答してください。'
+          : '音声認識に失敗しました。もう一度お試しいただくか、テキストで回答してください。',
+      );
     }
   }
 
@@ -342,8 +367,7 @@ export function InterviewAiClient() {
     try {
       const r = await retryFollowup(session.id);
       if (r.kind === 'next') {
-        setCurrentQuestion(r.question);
-        setQuestionError(false);
+        showQuestion(r.question);
       } else if (r.kind === 'done' || r.kind === 'limit') {
         setQuestionError(false);
         setDone(true);
@@ -515,7 +539,9 @@ export function InterviewAiClient() {
           </p>
 
           <div className="mb-5">
-            <span className="block text-sm font-semibold text-gray-700 mb-2">回答方法</span>
+            <span className="block text-sm font-semibold text-gray-700 mb-2">
+              回答方法（既定・あとで切替できます）
+            </span>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -531,18 +557,19 @@ export function InterviewAiClient() {
               <button
                 type="button"
                 onClick={() => setMode('voice')}
+                disabled={!mediaSupported}
                 className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
                   mode === 'voice'
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-gray-700 border-gray-300'
-                }`}
+                } ${!mediaSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 音声（録音）
               </button>
             </div>
-            {mode === 'voice' && (
+            {!mediaSupported && (
               <p className="text-xs text-amber-700 mt-2">
-                ※ 音声認識が未設定の環境では利用できません。その場合はテキストでお試しください。
+                ※ この端末/ブラウザは録音に対応していないため、テキストで回答します。
               </p>
             )}
           </div>
@@ -621,45 +648,91 @@ export function InterviewAiClient() {
                 <p className="text-xs font-semibold text-gray-500 mb-1">面接官からの質問</p>
                 <p className="text-base text-gray-800 mb-4">{currentQuestion}</p>
 
-                {mode === 'text' || sttGuidance ? (
-                  <>
-                    {sttGuidance && (
-                      <p className="text-xs text-amber-700 mb-2">
-                        音声が使えないため、テキストで回答してください。
-                      </p>
+                {inputMode === 'voice' ? (
+                  <div className="flex flex-col gap-2">
+                    {voiceStage === 'recording' ? (
+                      <button
+                        type="button"
+                        onClick={stopRecording}
+                        className="px-5 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white animate-pulse"
+                      >
+                        ⏹ 録音停止
+                      </button>
+                    ) : voiceStage === 'transcribing' ? (
+                      <p className="text-sm text-gray-500">文字起こし中…</p>
+                    ) : answerText ? (
+                      <>
+                        <label className="block text-xs font-semibold text-gray-500 mb-1">
+                          文字起こし結果（送信前に確認・編集できます）
+                        </label>
+                        <textarea
+                          className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1`}
+                          value={answerText}
+                          onChange={(e) => setAnswerText(e.target.value)}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
+                            この内容で送信
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAnswerText('');
+                              setVoiceStage('idle');
+                            }}
+                            disabled={loading}
+                            className="text-sm text-gray-600 border border-gray-300 hover:border-gray-400 font-semibold px-4 py-2 rounded-lg"
+                          >
+                            録音し直す
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <Button onClick={startRecording} disabled={loading}>
+                        🎤 録音開始
+                      </Button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInputMode('text');
+                        setVoiceStage('idle');
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-700 underline self-start mt-1"
+                    >
+                      テキストで回答に切り替え
+                    </button>
+                  </div>
+                ) : (
+                  <>
                     <label className="block text-xs font-semibold text-gray-500 mb-1">
                       回答（送信前に確認・編集できます）
                     </label>
                     <textarea
-                      className={`${INPUT_CLASS} min-h-[120px] resize-y mb-3`}
+                      className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1`}
                       value={answerText}
                       onChange={(e) => setAnswerText(e.target.value)}
                       placeholder="回答を入力してください"
                     />
-                    <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
-                      次へ
-                    </Button>
-                  </>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {!isRecording ? (
-                      <Button onClick={startRecording} disabled={loading}>
-                        録音開始
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
+                        次へ
                       </Button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={stopRecording}
-                        className="px-5 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white"
-                      >
-                        録音停止して送信
-                      </button>
-                    )}
-                    <p className="text-xs text-gray-400">
-                      録音を停止すると音声認識して回答を保存します。
-                    </p>
-                  </div>
+                      {mediaSupported && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInputMode('voice');
+                            setAnswerText('');
+                            setVoiceStage('idle');
+                          }}
+                          className="text-sm text-blue-600 hover:text-blue-700 border border-blue-300 hover:border-blue-400 font-semibold px-4 py-2 rounded-lg"
+                        >
+                          🎤 音声で回答
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             ) : (

@@ -165,6 +165,28 @@ export async function submitVoiceAnswer(
   return mapAnswerBody(res, await parseJson(res));
 }
 
+// ── STT（音声 → transcript）。保存も課金もしない。失敗時はテキスト入力にフォールバック ──
+export type TranscribeResult =
+  | { kind: 'ok'; transcript: string }
+  | { kind: 'error'; error: 'stt-unavailable' | 'stt-failed' | string };
+
+export async function transcribeVoice(audio: Blob): Promise<TranscribeResult> {
+  const form = new FormData();
+  // Blob.type（mimeType）はサーバ側で保持される。ファイル名は補助。
+  form.append('audio', audio, 'answer');
+  let res: Response;
+  try {
+    res = await fetch('/api/interview-ai/stt', { method: 'POST', body: form });
+  } catch {
+    return { kind: 'error', error: 'stt-failed' };
+  }
+  const body = await parseJson(res);
+  if (res.ok && typeof body.transcript === 'string') {
+    return { kind: 'ok', transcript: body.transcript };
+  }
+  return { kind: 'error', error: String(body.error ?? 'stt-failed') };
+}
+
 export async function retryFollowup(sessionId: string): Promise<AnswerResult> {
   const res = await fetch('/api/interview-ai/turn', {
     method: 'POST',
