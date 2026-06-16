@@ -308,8 +308,23 @@ export function InterviewAiClient() {
     typeof window.MediaRecorder !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia;
 
+  // ── 音声機能の有効判定（優先度C） ───────────────────────────────────
+  // 音声は補助機能。available でなければ UI を出さず、面接はテキストだけで必ず完走できる。
+  //
+  // STT（録音）available 条件:
+  //   feature flag ON（= env true / vercel.app Preview の ?sourceTypes=1。本番 passai.jp は常に false）
+  //   かつ ブラウザが録音対応（MediaRecorder + getUserMedia）。
+  //   ※ 録音権限拒否 / API 失敗（stt-unavailable / stt-failed）は実行時に判明するため、
+  //     startRecording / handleTranscribe 側でテキスト入力へフォールバックする（既存挙動）。
+  const sttAvailable = sourceTypesEnabled && mediaSupported;
+  //
+  // TTS（読み上げ）available 条件:
+  //   feature flag ON。provider 未設定 / API 失敗は実行時（speak）に判明し ttsStage='unavailable'
+  //   になってコントロールを隠す（API利用可否は実行時判定）。
+  const ttsAvailable = sourceTypesEnabled;
+
   function defaultInputMode(): 'voice' | 'text' {
-    return mode === 'voice' && mediaSupported ? 'voice' : 'text';
+    return mode === 'voice' && sttAvailable ? 'voice' : 'text';
   }
 
   // 新しい質問を表示するときの入力状態リセット（入力方法を既定に戻す）。
@@ -538,7 +553,8 @@ export function InterviewAiClient() {
   // ── 音声入力（録音 → STT → transcript を answerText に格納。保存はしない）──────
   async function startRecording() {
     setErrorMsg(null);
-    if (!mediaSupported) {
+    // STT unavailable（flag OFF / 非対応ブラウザ）なら録音せずテキスト入力へ。UI 上は到達しないが防御的に。
+    if (!sttAvailable) {
       setInputMode('text');
       setErrorMsg('この環境では録音できません。テキストで回答してください。');
       return;
@@ -800,41 +816,40 @@ export function InterviewAiClient() {
             面接対象の大学・学部・受験方式を選んでください（任意）。
           </p>
 
-          <div className="mb-5">
-            <span className="block text-sm font-semibold text-gray-700 mb-2">
-              回答方法（既定・あとで切替できます）
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setMode('text')}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-                  mode === 'text'
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-white text-gray-700 border-gray-300'
-                }`}
-              >
-                テキスト
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('voice')}
-                disabled={!mediaSupported}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-                  mode === 'voice'
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-white text-gray-700 border-gray-300'
-                } ${!mediaSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                音声（録音）
-              </button>
+          {/* 回答方法（音声/テキスト）の選択。STT available（flag ON かつ録音対応）のときだけ表示。
+              unavailable（Production / 非対応ブラウザ）ではこのブロックを出さず、テキスト回答のみ。
+              音声は補助機能なので、出さなくても面接はテキストで完走できる。 */}
+          {sttAvailable && (
+            <div className="mb-5">
+              <span className="block text-sm font-semibold text-gray-700 mb-2">
+                回答方法（既定・あとで切替できます）
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMode('text')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
+                    mode === 'text'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white text-gray-700 border-gray-300'
+                  }`}
+                >
+                  テキスト
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('voice')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
+                    mode === 'voice'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white text-gray-700 border-gray-300'
+                  }`}
+                >
+                  音声（録音）
+                </button>
+              </div>
             </div>
-            {!mediaSupported && (
-              <p className="text-xs text-amber-700 mt-2">
-                ※ この端末/ブラウザは録音に対応していないため、テキストで回答します。
-              </p>
-            )}
-          </div>
+          )}
 
           <div className="grid gap-3 mb-6">
             <input
@@ -922,7 +937,7 @@ export function InterviewAiClient() {
                     （flag false の本番導線では一切出さず、従来どおりテキスト質問のみ）。
                     provider 未設定（unavailable）時もコントロールを出さない。
                     自動再生がブロックされた場合は「🔊 読み上げ」ボタンで手動再生できる。 */}
-                {sourceTypesEnabled && ttsStage !== 'unavailable' && (
+                {ttsAvailable && ttsStage !== 'unavailable' && (
                   <div className="flex flex-wrap items-center gap-2 mb-4">
                     {ttsStage === 'loading' ? (
                       <span className="text-xs text-gray-500">🔊 読み上げ準備中…</span>
@@ -963,7 +978,8 @@ export function InterviewAiClient() {
                   </div>
                 )}
 
-                {inputMode === 'voice' ? (
+                {/* sttAvailable を必ず併せて判定（Production では録音 UI を絶対に出さない）。 */}
+                {inputMode === 'voice' && sttAvailable ? (
                   <div className="flex flex-col gap-2">
                     {voiceStage === 'recording' ? (
                       <button
@@ -1045,7 +1061,9 @@ export function InterviewAiClient() {
                       <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
                         次へ
                       </Button>
-                      {mediaSupported && (
+                      {/* 音声回答への切替は STT available（flag ON かつ録音対応）のときだけ。
+                          unavailable（Production / 非対応）ではテキスト入力のみ。 */}
+                      {sttAvailable && (
                         <button
                           type="button"
                           onClick={() => {
