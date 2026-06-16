@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/Button';
 import { AlertBox } from '@/components/ui/AlertBox';
@@ -23,10 +23,29 @@ import {
   INTERVIEW_TYPE_LABELS,
   type InterviewType,
 } from '@/lib/interviewAi/interviewTypes';
-import { isInterviewSourceTypesEnabled } from '@/lib/interviewAi/featureFlag';
+import {
+  isInterviewSourceTypesEnabledByEnv,
+  isInterviewSourceTypesEnabledByQuery,
+  isInterviewSourceTypesEnabledClient,
+} from '@/lib/interviewAi/featureFlag';
 
-// 機能別データ連動面接の feature flag。false（本番デフォルト）では従来のフリー面接のみ。
-const SOURCE_TYPES_ENABLED = isInterviewSourceTypesEnabled();
+// 機能別データ連動面接の有効化判定（env または Preview query override）。
+// SSR では env のみ（query は client のみ）。client mount 後に query を含めて再評価するため
+// useSyncExternalStore を使う（getServerSnapshot=env / getSnapshot=env||query → hydration mismatch 回避）。
+const emptySubscribe = () => () => {};
+const getTrue = () => true;
+const getFalse = () => false;
+function useSourceTypesEnabled(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    isInterviewSourceTypesEnabledClient, // client snapshot（env || query）
+    isInterviewSourceTypesEnabledByEnv, // server snapshot（env のみ）
+  );
+}
+// mount 後だけ true（SSR=false）。debug バナーを client 専用に描画して hydration mismatch を避ける。
+function useMounted(): boolean {
+  return useSyncExternalStore(emptySubscribe, getTrue, getFalse);
+}
 
 type Phase = 'type' | 'setup' | 'interviewing' | 'result';
 type Exchange = { question: string; transcript: string };
@@ -46,7 +65,11 @@ const TYPE_CARD_DESC: Record<InterviewType, string> = {
 };
 
 export function InterviewAiClient() {
-  // 常に setup（大学・学部選択）から始める。タイプ選択は setup 完了後（flag on のみ）。
+  // env または Preview query override で有効化（client mount 後に query を含めて確定）。
+  const sourceTypesEnabled = useSourceTypesEnabled();
+  const mounted = useMounted();
+
+  // 常に setup（大学・学部選択）から始める。タイプ選択は setup 完了後（有効時のみ）。
   const [phase, setPhase] = useState<Phase>('setup');
   const [mode, setMode] = useState<'voice' | 'text'>('text');
   const [university, setUniversity] = useState('');
@@ -94,7 +117,7 @@ export function InterviewAiClient() {
   //   - flag off: そのままフリー面接を開始（タイプ選択を出さない / 既存導線）。
   //   - flag on:  タイプ選択 phase へ進む。
   function handleSetupNext() {
-    if (!SOURCE_TYPES_ENABLED) {
+    if (!sourceTypesEnabled) {
       void startSession('free', null);
       return;
     }
@@ -365,12 +388,19 @@ export function InterviewAiClient() {
   // ── 描画 ────────────────────────────────────────────────────
   return (
     <div>
-      {/* 診断用: flag が build に反映されているかを Preview で目視確認するための debug 表示。
-          SOURCE_TYPES_ENABLED が true のときだけ描画されるため、本番（flag 未設定 = false）では
-          一切表示されない。表示されなければ env が build 時に反映されていない（再デプロイ要）。 */}
-      {SOURCE_TYPES_ENABLED && (
-        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-          debug: SOURCE_TYPES_ENABLED = true / phase = {phase}
+      {/* 診断用 debug 表示。sourceTypesEnabled が true のとき（= env true または Preview query
+          override）だけ描画。本番 passai.jp では query override が効かず env も未設定のため
+          常に false → 一切表示されない。env / query / hostname / phase を内訳表示する。 */}
+      {mounted && sourceTypesEnabled && (
+        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 break-all">
+          <div>debug: SOURCE_TYPES_ENABLED = {String(sourceTypesEnabled)}</div>
+          <div>env flag = {String(isInterviewSourceTypesEnabledByEnv())}</div>
+          <div>query override = {String(isInterviewSourceTypesEnabledByQuery())}</div>
+          <div>
+            hostname ={' '}
+            {typeof window !== 'undefined' ? window.location.hostname : '(ssr)'}
+          </div>
+          <div>phase = {phase}</div>
         </div>
       )}
 
@@ -406,7 +436,7 @@ export function InterviewAiClient() {
       )}
 
       {/* TYPE SELECT（大学選択後に表示。flag on のみ。どの内容をもとに面接するか） */}
-      {phase === 'type' && SOURCE_TYPES_ENABLED && (
+      {phase === 'type' && sourceTypesEnabled && (
         <div>
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-800">
@@ -533,7 +563,7 @@ export function InterviewAiClient() {
           <Button onClick={handleSetupNext} disabled={loading}>
             {loading
               ? '準備中…'
-              : SOURCE_TYPES_ENABLED
+              : sourceTypesEnabled
                 ? '次へ（面接タイプを選ぶ）'
                 : '面接を始める'}
           </Button>
