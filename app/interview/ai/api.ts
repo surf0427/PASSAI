@@ -187,6 +187,31 @@ export async function transcribeVoice(audio: Blob): Promise<TranscribeResult> {
   return { kind: 'error', error: String(body.error ?? 'stt-failed') };
 }
 
+// ── TTS（AI 質問テキスト → 音声）。保存も課金もしない。失敗時はテキスト表示のまま続行 ──
+export type SynthesizeResult =
+  | { kind: 'ok'; audio: Blob }
+  | { kind: 'error'; error: 'tts-unavailable' | 'tts-failed' | string };
+
+export async function synthesizeSpeech(text: string): Promise<SynthesizeResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/interview-ai/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+  } catch {
+    return { kind: 'error', error: 'tts-failed' };
+  }
+  if (res.ok && (res.headers.get('content-type') ?? '').startsWith('audio/')) {
+    const audio = await res.blob();
+    if (audio.size > 0) return { kind: 'ok', audio };
+    return { kind: 'error', error: 'tts-failed' };
+  }
+  const body = await parseJson(res);
+  return { kind: 'error', error: String(body.error ?? 'tts-failed') };
+}
+
 export async function retryFollowup(sessionId: string): Promise<AnswerResult> {
   const res = await fetch('/api/interview-ai/turn', {
     method: 'POST',

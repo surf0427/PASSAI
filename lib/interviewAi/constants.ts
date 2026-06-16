@@ -37,3 +37,7 @@ export const INTERVIEW_AI_MAX_ANSWER_TURNS = 5;
 // 入力サイズガード（暴走 payload 防止）。
 export const INTERVIEW_AI_MAX_ANSWER_CHARS = 8000;
 export const INTERVIEW_AI_MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25MB
+
+// TTS（AI 質問読み上げ）入力ガード。面接質問 1 つ分なので短く抑える。
+// 質問生成の出力上限（INTERVIEW_AI_MAX_TOKENS=400）から見て十分余裕のある上限。
+export const INTERVIEW_AI_MAX_TTS_CHARS = 2000;

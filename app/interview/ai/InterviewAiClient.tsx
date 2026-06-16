@@ -12,6 +12,7 @@ import {
   kickoff,
   retryFollowup,
   submitTextAnswer,
+  synthesizeSpeech,
   transcribeVoice,
   type AiSession,
   type AnswerResult,
@@ -110,6 +111,31 @@ export function InterviewAiClient() {
   // handleTranscribe は開始時の値と一致するときだけ結果を反映する（M-3: 編集不可仕様の死守）。
   const transcribeIdRef = useRef(0);
 
+  // ── AI 質問読み上げ（TTS） ──────────────────────────────────────
+  // TTS は「AI 質問テキストの読み上げ」だけを足す機能。テキスト表示は必ず残り、
+  // TTS に失敗しても面接・回答入力は止めない（質問はテキストで続行できる）。
+  //   - 'unavailable' = provider 未設定（読み上げ不可）→ コントロール自体を出さない。
+  //   - 'blocked'     = 自動再生がブラウザにブロックされた → 手動「🔊 読み上げ」で再生。
+  //   - 'ended'/'paused' = 再生済み/停止 → 「🔊 もう一度聞く」で同じ音声を再再生（再生成しない）。
+  //   - 'failed'      = 一時失敗 → 「🔊 読み上げ」で再試行（再生成）。
+  type TtsStage =
+    | 'idle'
+    | 'loading'
+    | 'playing'
+    | 'paused'
+    | 'ended'
+    | 'blocked'
+    | 'failed'
+    | 'unavailable';
+  const [ttsStage, setTtsStage] = useState<TtsStage>('idle');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsUrlRef = useRef<string | null>(null); // 再生用 object URL（破棄対象）
+  // 進行中 TTS を無効化するためのトークン。質問が変わる/解放のたびに ++ し、
+  // 開始時の値と一致するときだけ結果（音声）を反映する（古い質問の音声を鳴らさない）。
+  const ttsReqRef = useRef(0);
+  // provider 未設定が一度わかったら以降は fetch せず即 'unavailable'（無駄な 502 を避ける）。
+  const ttsUnavailableRef = useRef(false);
+
   // 録音リソース（MediaRecorder / MediaStream / chunks）を確実に解放する一元処理。
   // 録音中の切替・中断・リセット・結果遷移・unmount・STT失敗・録り直しなど、
   // 音声経路から離れるすべての地点で呼ぶ（H-1: マイク開きっぱなし防止）。
@@ -140,6 +166,122 @@ export function InterviewAiClient() {
   // unmount 時にマイクを必ず解放する。
   useEffect(() => stopRecordingResources, [stopRecordingResources]);
 
+  // TTS の再生リソース（audio 要素 / object URL / 進行中 fetch）を確実に解放する一元処理。
+  // 質問が変わる・リセット・完了・unmount のたびに呼ぶ。
+  //   - ttsReqRef を ++ して進行中 TTS fetch の結果を破棄させる（古い質問の音声を鳴らさない）。
+  //   - 再生を止め、object URL を revoke する（音声は保存しない・残さない方針）。
+  // refs のみ参照するため deps なしで安定（unmount cleanup から呼べる）。
+  const releaseTtsResources = useCallback(() => {
+    ttsReqRef.current += 1;
+    const a = audioRef.current;
+    if (a) {
+      a.onended = null;
+      a.onpause = null;
+      try {
+        a.pause();
+      } catch {
+        /* already paused */
+      }
+      a.removeAttribute('src');
+      try {
+        a.load();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+    }
+  }, []);
+
+  // unmount 時に再生中の音声を必ず止め、object URL を破棄する。
+  useEffect(() => releaseTtsResources, [releaseTtsResources]);
+
+  // AI 質問テキストを TTS で読み上げる（新規生成）。
+  //   - 成功: 音声を取得 → object URL 化 → 自動再生（ブロックされたら 'blocked' で手動再生に誘導）。
+  //   - 失敗: 面接は止めない。provider 未設定なら 'unavailable'（以降 fetch しない）、
+  //           一時失敗なら 'failed' + 軽い案内（テキストで続行できる）。
+  const speak = useCallback(
+    async (text: string) => {
+      const t = (text || '').trim();
+      if (!t) return;
+      if (ttsUnavailableRef.current) {
+        // provider 未設定が既知 → 無駄な fetch をしない。
+        setTtsStage('unavailable');
+        return;
+      }
+      releaseTtsResources(); // 進行中 fetch を無効化 + 前の音声を解放
+      const reqId = ttsReqRef.current;
+      setTtsStage('loading');
+      const r = await synthesizeSpeech(t);
+      // 質問が変わった/解放された後の結果は破棄（古い質問の音声を鳴らさない）。
+      if (reqId !== ttsReqRef.current) return;
+      if (r.kind === 'error') {
+        if (r.error === 'tts-unavailable') {
+          ttsUnavailableRef.current = true;
+          setTtsStage('unavailable');
+        } else {
+          // 一時失敗。console.error は残しつつ、画面は軽い案内だけ（面接は続行）。
+          console.error('[interview-ai] tts failed', r.error);
+          setTtsStage('failed');
+          setErrorMsg('音声読み上げに失敗しました。テキストで続行できます。');
+        }
+        return;
+      }
+      const url = URL.createObjectURL(r.audio);
+      ttsUrlRef.current = url;
+      // 毎回新しい Audio を作り、全プロパティを設定してから ref に格納する
+      // （ref 格納後の mutation を避ける / 前の要素は release 済みなので GC される）。
+      const audio = new Audio();
+      audio.src = url;
+      audio.onended = () => setTtsStage('ended');
+      audioRef.current = audio;
+      try {
+        await audio.play();
+        if (reqId !== ttsReqRef.current) return; // 再生開始直前に切り替わっていたら反映しない
+        setTtsStage('playing');
+      } catch {
+        // ブラウザの自動再生制限（iPhone Safari 等）。音声は取得済みなので手動再生できる。
+        setTtsStage('blocked');
+      }
+    },
+    [releaseTtsResources],
+  );
+
+  // 取得済みの音声を頭から再生する（再生成しない）。無ければ作り直す。
+  const replaySpeech = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio && ttsUrlRef.current) {
+      try {
+        audio.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
+      audio.onended = () => setTtsStage('ended');
+      audio
+        .play()
+        .then(() => setTtsStage('playing'))
+        .catch(() => setTtsStage('blocked'));
+      return;
+    }
+    if (currentQuestion) void speak(currentQuestion);
+  }, [currentQuestion, speak]);
+
+  // 再生を止める（位置はリセット。「もう一度聞く」で頭から再生できる）。
+  const stopSpeech = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
+    }
+    setTtsStage('paused');
+  }, []);
+
   // Preview 検証用デバッグログ。sourceTypesEnabled（= env true または vercel.app Preview の
   // ?sourceTypes=1）のときだけ出す。本番 passai.jp では常に false なので一切出ない。
   function debugLog(...args: unknown[]) {
@@ -159,6 +301,8 @@ export function InterviewAiClient() {
   }
 
   // 新しい質問を表示するときの入力状態リセット（入力方法を既定に戻す）。
+  // テキスト表示は必ず行い（setCurrentQuestion）、その後に TTS で自動読み上げを試みる。
+  // TTS は失敗しても面接を止めない（質問はテキストで続行できる）。
   function showQuestion(q: string) {
     stopRecordingResources();
     setCurrentQuestion(q);
@@ -166,11 +310,14 @@ export function InterviewAiClient() {
     setAnswerText('');
     setVoiceStage('idle');
     setInputMode(defaultInputMode());
+    void speak(q); // 自動再生（ブロック時は手動「🔊 読み上げ」に誘導）
   }
 
   // 最初（= 大学・学部選択の setup）まで戻す。タイプ選択は setup の後段なので、戻り先は常に setup。
   function resetToStart(message?: string) {
     stopRecordingResources();
+    releaseTtsResources();
+    setTtsStage('idle');
     setPhase('setup');
     setGuidance(null);
     setSession(null);
@@ -331,6 +478,8 @@ export function InterviewAiClient() {
       if (answeredQuestion) {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
       }
+      releaseTtsResources(); // 回答済み質問の読み上げを止める
+      setTtsStage('idle');
       setCurrentQuestion(null);
       setAnswerText('');
       setVoiceStage('idle');
@@ -339,6 +488,8 @@ export function InterviewAiClient() {
       if (answeredQuestion && r.kind === 'done') {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
       }
+      releaseTtsResources(); // 面接終了 → 読み上げを止める
+      setTtsStage('idle');
       setCurrentQuestion(null);
       setAnswerText('');
       setVoiceStage('idle');
@@ -463,6 +614,8 @@ export function InterviewAiClient() {
   async function handleComplete() {
     if (!session) return;
     stopRecordingResources();
+    releaseTtsResources();
+    setTtsStage('idle');
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -731,7 +884,51 @@ export function InterviewAiClient() {
             ) : currentQuestion ? (
               <div>
                 <p className="text-xs font-semibold text-gray-500 mb-1">面接官からの質問</p>
-                <p className="text-base text-gray-800 mb-4">{currentQuestion}</p>
+                {/* 質問テキストは必ず表示。TTS はこの下の読み上げコントロールで追加する。 */}
+                <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
+
+                {/* AI 質問読み上げ（TTS）。provider 未設定（unavailable）時はコントロールを出さない。
+                    自動再生がブロックされた場合は「🔊 読み上げ」ボタンで手動再生できる。 */}
+                {ttsStage !== 'unavailable' && (
+                  <div className="flex flex-wrap items-center gap-2 mb-4">
+                    {ttsStage === 'loading' ? (
+                      <span className="text-xs text-gray-500">🔊 読み上げ準備中…</span>
+                    ) : ttsStage === 'playing' ? (
+                      <button
+                        type="button"
+                        onClick={stopSpeech}
+                        className="text-sm text-gray-700 border border-gray-300 hover:border-gray-400 font-semibold px-3 py-1.5 rounded-lg"
+                      >
+                        ⏸ 停止
+                      </button>
+                    ) : ttsStage === 'ended' || ttsStage === 'paused' ? (
+                      <button
+                        type="button"
+                        onClick={replaySpeech}
+                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
+                      >
+                        🔊 もう一度聞く
+                      </button>
+                    ) : ttsStage === 'blocked' ? (
+                      <button
+                        type="button"
+                        onClick={replaySpeech}
+                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
+                      >
+                        🔊 読み上げ
+                      </button>
+                    ) : (
+                      // 'idle' / 'failed' → 読み上げ（再生成）。
+                      <button
+                        type="button"
+                        onClick={() => void speak(currentQuestion)}
+                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
+                      >
+                        🔊 読み上げ
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {inputMode === 'voice' ? (
                   <div className="flex flex-col gap-2">
