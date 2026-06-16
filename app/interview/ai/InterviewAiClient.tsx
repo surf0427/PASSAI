@@ -365,6 +365,15 @@ export function InterviewAiClient() {
   // ── 描画 ────────────────────────────────────────────────────
   return (
     <div>
+      {/* 診断用: flag が build に反映されているかを Preview で目視確認するための debug 表示。
+          SOURCE_TYPES_ENABLED が true のときだけ描画されるため、本番（flag 未設定 = false）では
+          一切表示されない。表示されなければ env が build 時に反映されていない（再デプロイ要）。 */}
+      {SOURCE_TYPES_ENABLED && (
+        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          debug: SOURCE_TYPES_ENABLED = true / phase = {phase}
+        </div>
+      )}
+
       {errorMsg && (
         <AlertBox variant="warning" className="mb-6">
           <p>{errorMsg}</p>
@@ -396,8 +405,8 @@ export function InterviewAiClient() {
         </div>
       )}
 
-      {/* TYPE SELECT（大学選択後に表示。どの内容をもとに面接するか） */}
-      {phase === 'type' && (
+      {/* TYPE SELECT（大学選択後に表示。flag on のみ。どの内容をもとに面接するか） */}
+      {phase === 'type' && SOURCE_TYPES_ENABLED && (
         <div>
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-800">
