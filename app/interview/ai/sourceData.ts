@@ -19,6 +19,7 @@ import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import { loadActivityData } from '@/lib/activityStorage';
 import { loadDraft, loadReviewHistory } from '@/lib/statement/review/statementStorage';
 import { loadEssayWorkspaces } from '@/lib/essayWorkspaceStorage';
+import { getInterviewRecords } from '@/lib/interviewRecordStorage';
 
 const MAX_CONTEXT_CHARS = 6000;
 
@@ -27,7 +28,8 @@ export type SourceGuidance = { message: string; ctaLabel: string; href: string }
 export type ResolvedSource =
   | {
       available: true;
-      sourceType: InterviewType;
+      // 本番モード（free）は横断集約で sourceType=null（特定 1 機能ではない）。他は機能種別。
+      sourceType: InterviewType | null;
       sourceId: string | null;
       sourceContext: string;
     }
@@ -160,9 +162,76 @@ function resolveEssay(): ResolvedSource {
   return { available: true, sourceType: 'essay', sourceId: latest.id ?? null, sourceContext: clip(ctx) };
 }
 
+// 🎯 本番モード（free）: PASSAI 内の各機能の記録を横断的に集約する総合モード。
+//   - 「完全連携」ではなく「利用可能な記録をできる範囲で参照する」。
+//   - 記録が不足していても常に開始可能（available:true / 誘導しない）。記録ゼロなら一般面接。
+//   - interview_type は 'free' のまま。source_type / source_id は null（特定 1 機能ではない）。
+function resolveFree(): ResolvedSource {
+  const sections: string[] = [];
+
+  // 自己分析
+  const sa = loadWallHittingResult();
+  if (sa && (sa.summary || (sa.strengths?.length ?? 0) > 0)) {
+    sections.push(
+      joinNonEmpty([
+        sa.summary ? `【自己分析】${sa.summary}` : '【自己分析】',
+        list('強み', sa.strengths),
+        list('弱み', sa.weaknesses),
+        list('将来への接続', sa.futureConnections),
+      ]),
+    );
+  }
+
+  // 活動整理
+  const actLines = activityLinesFrom(loadActivityData());
+  if (actLines.length) sections.push(`【活動経験】\n${actLines.join('\n')}`);
+
+  // 志望理由書
+  const history = loadReviewHistory();
+  const latest = history[0];
+  const draft = loadDraft();
+  const statementText = (latest?.essay ?? '').trim() || (draft?.statementText ?? '').trim();
+  if (statementText) sections.push(`【志望理由書】\n${statementText}`);
+
+  // 小論文
+  const workspaces = loadEssayWorkspaces();
+  if (Array.isArray(workspaces) && workspaces.length > 0) {
+    const ws = [...workspaces].sort((a, b) =>
+      (b.updatedAt ?? '') < (a.updatedAt ?? '') ? -1 : 1,
+    )[0];
+    const theme = ws.theme?.text ?? '';
+    const body = (ws.body ?? '').trim();
+    if (theme || body) {
+      sections.push(joinNonEmpty([theme ? `【小論文テーマ】${theme}` : '', body ? `本文:\n${body}` : '']));
+    }
+  }
+
+  // 過去の面接練習記録（直近 3 件・弱かった点を中心に）
+  const records = getInterviewRecords();
+  if (Array.isArray(records) && records.length > 0) {
+    const recLines = records
+      .slice(0, 3)
+      .map((r) => {
+        const q = (r.mainQuestion ?? '').trim();
+        const weak = (r.whatWentWrong ?? '').trim();
+        const summary = (r.improvementSummary ?? '').trim().slice(0, 200);
+        return `- ${[q && `質問:${q}`, weak && `課題:${weak}`, summary && `改善:${summary}`]
+          .filter(Boolean)
+          .join(' / ')}`;
+      })
+      .filter((l) => l !== '- ');
+    if (recLines.length) sections.push(`【過去の面接練習で弱かった点】\n${recLines.join('\n')}`);
+  }
+
+  const ctx = clip(sections.filter((s) => s && s.trim() !== '').join('\n\n'));
+  // 記録ゼロでも available:true（一般的な総合型選抜面接として開始）。
+  return { available: true, sourceType: null, sourceId: null, sourceContext: ctx };
+}
+
 /**
  * 選択された interview_type に対して元データを解決する。
- * - free（本番モード）/ pressure（圧迫面接）は常に available（データ連携なし）。
+ * - free（本番モード）: PASSAI 内の記録を横断集約。常に available（記録ゼロでも開始可）。
+ * - pressure（圧迫面接）: データ連携なし。常に available。
  * - data-linked（self_analysis/statement/essay）はデータが無ければ available:false + guidance。
  */
 export function resolveSource(type: InterviewType): ResolvedSource {
@@ -174,7 +243,7 @@ export function resolveSource(type: InterviewType): ResolvedSource {
     case 'essay':
       return resolveEssay();
     case 'free':
-      return { available: true, sourceType: 'free', sourceId: null, sourceContext: '' };
+      return resolveFree();
     case 'pressure':
       return { available: true, sourceType: 'pressure', sourceId: null, sourceContext: '' };
   }

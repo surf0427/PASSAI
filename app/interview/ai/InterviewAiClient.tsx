@@ -59,7 +59,7 @@ const TYPE_CARD_DESC: Record<InterviewType, string> = {
   self_analysis: '自己分析・活動整理をもとに深掘り質問を行います。',
   statement: '志望理由書との一貫性を確認しながら質問します。',
   essay: '小論文の内容を口頭で説明する練習をします。',
-  free: 'データ連携なしで本番を想定した面接を行います。',
+  free: 'PASSAI内の記録を総合して、本番を想定した面接を行います。',
   pressure: '本番より少し厳しめの質問を行います。',
 };
 
