@@ -27,7 +27,8 @@ export const QUOTA_FEATURES = [
   'statement', // 志望理由書添削
   'essay', // 小論文添削
   'self-pr', // 自己PR添削 (route 未実装。quota だけ予約)
-  'interview', // 面接フィードバック
+  'interview', // 面接フィードバック (既存: interview-feedback / interview-questions)
+  'interview-ai', // 面接AI (リアルタイム面接セッション。STEP-INTERVIEW-AI-PR4)
   'tutor', // Tutor
 ] as const;
 
@@ -56,6 +57,7 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     essay: 0,
     'self-pr': 0,
     interview: 0,
+    'interview-ai': 0,
     tutor: 0,
   },
   basic: {
@@ -67,6 +69,9 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     // (STEP-QUOTA-TUNING-01)。matching を独立 feature に分離する案は残課題。
     'self-pr': 100,
     interview: 30,
+    // 面接AI: 1 セッション 1 消費。STT + 逐次ターン生成で原価が面接フィードバックより
+    // 高いため、basic は 10 回/月（pr0_design.md §5.1）。
+    'interview-ai': 10,
     tutor: 500,
   },
   premium: {
@@ -77,6 +82,8 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     // 影響は限定的 (1 件あたり Sonnet 4-6 small input ~$0.005)。
     'self-pr': 300,
     interview: 100,
+    // 面接AI: premium は basic 10 の 3 倍枠で 30 回/月（pr0_design.md §5.1）。
+    'interview-ai': 30,
     tutor: 2000,
   },
 };
@@ -119,6 +126,10 @@ export const FEATURE_ROUTE_KEYS: Record<QuotaFeature, readonly string[]> = {
   ],
   // 面接: フィードバック (-feedback) + 質問生成 (-questions)
   interview: ['interview-feedback', 'interview-questions'],
+  // 面接AI: リアルタイム面接セッション。1 セッション = usage_records.route='interview-ai' の
+  // status='ok' 1 件（usage_recorded compare-and-set による冪等計上）。月次 ok 件数 = 当月
+  // セッション数（pr0_design.md §5.2）。
+  'interview-ai': ['interview-ai'],
   // Tutor は 1 route のみ
   tutor: ['tutor'],
 };

@@ -12,6 +12,7 @@
  *       essay:     { used: number, limit: number | 'unlimited' },
  *       'self-pr': { used: number, limit: number | 'unlimited' },
  *       interview: { used: number, limit: number | 'unlimited' },
+ *       'interview-ai': { used: number, limit: number | 'unlimited' },
  *       tutor:     { used: number, limit: number | 'unlimited' },
  *     },
  *     resetAt: string  // 次回リセット (UTC 月初の翌月) の ISO

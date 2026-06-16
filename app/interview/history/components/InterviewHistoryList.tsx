@@ -1,9 +1,9 @@
-import type { InterviewRecord } from '@/types/interview';
+import type { UnifiedInterviewRecord } from '@/types/interviewHistory';
 import { InterviewHistoryCard } from './InterviewHistoryCard';
 import { InterviewHistoryEmpty } from './InterviewHistoryEmpty';
 
 type Props = {
-  records: InterviewRecord[];
+  records: UnifiedInterviewRecord[];
   onDelete: (id: string) => void;
 };
 

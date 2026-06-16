@@ -53,7 +53,10 @@ export type BackfillFeature =
   | 'activityLog'
   | 'activityLogRestore'
   // 小論文 essay workspace の上り backfill（restore は別 STEP）。
-  | 'essayWorkspaces';
+  | 'essayWorkspaces'
+  // 面接練習記録（interview_records）の上り backfill。restore / delete 伝播は別 STEP
+  // （delete resurrection 回避。STEP-INTERVIEW-AI-PR1/PR2）。
+  | 'interviewPracticeRecords';
 
 // backfill ロジックの世代。ロジックを変えて再 backfill させたいときに +1 する。
 export const BACKFILL_VERSION = 1;

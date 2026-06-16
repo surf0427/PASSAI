@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
+import { useCurrentUserId } from '@/app/components/AuthProvider';
 import type { InterviewRecordFormData } from '../types';
 import type { QuestionAnswerItem } from '@/types/interview';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -53,6 +54,11 @@ export function InterviewRecordForm() {
   // STEP-BILLING-07A: 402 quota-exceeded ハンドラ。
   const { handleResponse: handleQuotaResponse, dialog: quotaDialog } =
     useQuotaDialog();
+
+  // STEP-INTERVIEW-AI-PR2: 保存した練習記録を Supabase interview_practice_records に
+  // 即時 mirror するための auth。未ログイン / userId 未確定では mirror を skip する
+  // （canonical の localStorage 保存・既存 UX は不変）。
+  const currentUserId = useCurrentUserId();
 
   const [formData, setFormData] = useState<InterviewRecordFormData>(INITIAL_FORM_DATA);
   const [questionsAndAnswers, setQuestionsAndAnswers] = useState<QuestionAnswerItem[]>(() => {
@@ -268,7 +274,27 @@ export function InterviewRecordForm() {
       selfNoted: formData.selfNoted,
       feedbackJson,
     };
-    addInterviewRecord(newRecord);
+    const updatedRecords = addInterviewRecord(newRecord);
+    // ── STEP-INTERVIEW-AI-PR2: 保存直後の best-effort 上り mirror（canonical の後段）──
+    //   - canonical（localStorage）保存は addInterviewRecord で先に完了済み。本 dispatch は後段。
+    //   - addInterviewRecord は新規記録を先頭に積んだ一覧を返す。updatedRecords[0] が
+    //     id / createdAt / updatedAt 付与済みの保存実体。
+    //   - userId 未確定 / 未ログインなら no-op。
+    //   - dynamic import で browser-only repository を server bundle に引き込まない
+    //     （statementReviewHistory mirror と同方式）。
+    //   - await しない / catch で握り潰す。mirror 失敗は保存フロー・UI を壊さない。
+    //   - delete は伝播しない（upsert のみ。restore は別 STEP / schema preview §8）。
+    const savedRecord = updatedRecords[0];
+    if (currentUserId && savedRecord) {
+      void import('@/lib/repository/interviewPracticeRecordRepository')
+        .then((mod) =>
+          mod.mirrorInterviewPracticeRecordOnce({
+            userId: currentUserId,
+            record: savedRecord,
+          }),
+        )
+        .catch(() => {});
+    }
     clearInterviewDraft();
     setSavedMessage('練習記録を保存しました。');
     setFormData(INITIAL_FORM_DATA);

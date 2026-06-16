@@ -40,6 +40,7 @@ const FEATURE_LABELS: Record<QuotaFeature, string> = {
   essay: '小論文添削',
   'self-pr': '自己PR添削',
   interview: '面接フィードバック',
+  'interview-ai': '面接AI',
   tutor: 'Tutor',
 };
 

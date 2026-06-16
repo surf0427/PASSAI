@@ -1,13 +1,18 @@
 import Link from 'next/link';
-import type { InterviewRecord } from '@/types/interview';
+import type { UnifiedInterviewRecord } from '@/types/interviewHistory';
 import type { StatementInterviewInsights } from '@/types/statementInterviewInsights';
 import { isInterviewFeedback } from '@/lib/interview/isInterviewFeedback';
 import { buildStatementImprovementHints } from '@/lib/interview/buildStatementImprovementHints';
+import {
+  INTERVIEW_TYPE_LABELS,
+  isInterviewType,
+} from '@/lib/interviewAi/interviewTypes';
+import { isInterviewSourceTypesEnabled } from '@/lib/interviewAi/featureFlag';
 
 type Props = {
-  // feedbackJson は storage の StoredInterviewRecord 由来。display 型に optional で
-  // 足すだけで上流（List / Client）の型を広げずに済む。未存在のときは CTA 非表示。
-  record: InterviewRecord & { feedbackJson?: string };
+  // STEP-INTERVIEW-AI-PR8: 対人記録 + AI 面接の統合表示型。source で UI を分岐する。
+  // feedbackJson は InterviewFeedback の JSON 文字列（human/ai 双方が持ちうる）。未存在で CTA 非表示。
+  record: UnifiedInterviewRecord;
   onDelete: (id: string) => void;
 };
 
@@ -124,34 +129,51 @@ export function InterviewHistoryCard({ record, onDelete }: Props) {
   // 旧記録（feedbackJson なし）や schema 不一致は null。null のとき CTA は描画しない。
   const insights = deriveInsightsForRecord(record.feedbackJson);
 
+  // STEP-INTERVIEW-AI-PR8: AI 面接（音声）は対人前提 UI（入試方式バッジ / 練習相手 / 主な質問 /
+  // 削除）を出さない。AI 履歴の削除は別経路（本 Card からは行わない）。
+  const isAi = record.source === 'ai_voice';
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-6">
 
-      {/* 上段：練習日・入試方式バッジ */}
+      {/* 上段：練習日・種別バッジ（human=入試方式 / ai_voice=AI面接バッジ） */}
       <div className="flex items-center gap-3 mb-3">
         <span className="text-sm font-semibold text-gray-800">
           {formatDate(record.practiceDate)}
         </span>
-        <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
-          {record.examType}
-        </span>
+        {isAi ? (
+          <span className="bg-violet-100 text-violet-700 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
+            {/* flag off では type を出さず従来どおり「AI面接」表示 */}
+            {isInterviewSourceTypesEnabled() && isInterviewType(record.interviewType)
+              ? INTERVIEW_TYPE_LABELS[record.interviewType]
+              : 'AI面接'}
+          </span>
+        ) : (
+          <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full shrink-0">
+            {record.examType}
+          </span>
+        )}
       </div>
 
       {/* 大学・学部 */}
       <p className="text-base font-semibold text-gray-800 mb-1">{record.universityName}</p>
       <p className="text-sm text-gray-500 mb-4">{record.facultyName}</p>
 
-      {/* 練習相手 */}
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-gray-400">練習相手：</span>
-        <span className="text-xs text-gray-700">{record.partner}</span>
-      </div>
+      {/* 練習相手（対人記録のみ） */}
+      {!isAi && (
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-gray-400">練習相手：</span>
+          <span className="text-xs text-gray-700">{record.partner}</span>
+        </div>
+      )}
 
-      {/* 主な質問 */}
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-gray-500 mb-1">主な質問</p>
-        <p className="text-sm text-gray-700 leading-relaxed">{record.mainQuestion}</p>
-      </div>
+      {/* 主な質問（対人記録のみ。AI 面接は逐次ターン構成のため出さない） */}
+      {!isAi && (
+        <div className="mb-4">
+          <p className="text-xs font-semibold text-gray-500 mb-1">主な質問</p>
+          <p className="text-sm text-gray-700 leading-relaxed">{record.mainQuestion}</p>
+        </div>
+      )}
 
       {/* AIからの改善アドバイス */}
       {record.improvementSummary && (
@@ -232,13 +254,16 @@ export function InterviewHistoryCard({ record, onDelete }: Props) {
         >
           詳細を見る
         </button>
-        <button
-          type="button"
-          onClick={() => onDelete(record.id)}
-          className="text-sm text-gray-500 hover:text-red-600 border border-gray-300 hover:border-red-300 font-semibold px-5 py-2 rounded-lg transition-colors"
-        >
-          削除
-        </button>
+        {/* 削除は対人記録（localStorage）のみ。AI 履歴の削除は本 Card からは行わない。 */}
+        {!isAi && (
+          <button
+            type="button"
+            onClick={() => onDelete(record.id)}
+            className="text-sm text-gray-500 hover:text-red-600 border border-gray-300 hover:border-red-300 font-semibold px-5 py-2 rounded-lg transition-colors"
+          >
+            削除
+          </button>
+        )}
       </div>
 
     </div>

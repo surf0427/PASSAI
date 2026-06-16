@@ -257,6 +257,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .catch(() => {});
       }
 
+      // ── STEP-INTERVIEW-AI-PR2: interview_practice_records の初回 backfill（上りのみ）──
+      //
+      // 先行 backfill（tutor / selfAnalysisLogs / selfPRs / statementReviewHistory）と
+      // 同形・同じ場所で起動する独立した fire-and-forget。create-site mirror 配線前に
+      // localStorage（key='interview_records'）に蓄積された既存の面接練習記録を Supabase
+      // interview_practice_records へ一括同期し durable replica を作る
+      // （STEP-INTERVIEW-AI-PR2 backfillInterviewPracticeRecordsOnce）。
+      //
+      // selfPRs / statementReviewHistory と同じく restore（下り）はチェーンしない:
+      //   面接練習記録は delete を伴う feature（deleteInterviewRecord）であり、down-sync は
+      //   delete resurrection を招く。restore / tombstone は別 STEP（schema preview §8）。
+      //
+      // 契約（先行 backfill と同一）:
+      //   - await しない。認証 / profile フローをブロックしない。
+      //   - 例外は握りつぶす。backfill 失敗を auth / profile の失敗にしない。
+      //   - dynamic import で browser-only な repository / Supabase client を server bundle に
+      //     引き込まない（boundary 安全）。cancelled guard: アンマウント後は起動しない。
+      //   - backfillInterviewPracticeRecordsOnce 自身が flag（supabaseBackfill の
+      //     'interviewPracticeRecords'）で冪等・1 回限り。再マウント / 再ログインでも
+      //     二重実行されない。
+      if (!cancelled) {
+        const backfillUserId = session.userId;
+        void import('@/lib/repository/interviewPracticeRecordRepository')
+          .then((mod) =>
+            mod.backfillInterviewPracticeRecordsOnce({ userId: backfillUserId }),
+          )
+          .catch(() => {});
+      }
+
       // ── STEP-TUTOR-CONTEXT-PHASE2-REPOSITORY-01: basic_info / diagnosis / activity の
       //    snapshot 型 durable の同期（各 feature 上り backfill → 下り restore）──
       //

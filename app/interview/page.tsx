@@ -23,23 +23,35 @@ const subscribeMount = () => () => {};
 const getMountedSnapshot = () => true;
 const getMountedServerSnapshot = () => false;
 
+// STEP-INTERVIEW-AI-PR10: ハブ導線の最終整理。
+//   - 実践（AI面接）を主導線として先頭に。
+//   - 予想質問は「面接前の準備」ツールとして残置・位置づけを明確化（旧機能の扱い）。
+//   - 履歴は対人練習 + AI面接を統合表示（PR8）する旨を文言に反映。
 const MENU_ITEMS = [
   {
-    title: '予想質問を作る',
-    description: '志望大学・活動内容をもとに、面接で聞かれそうな質問を作ります。',
-    buttonLabel: '予想質問を作る',
+    title: 'AI面接を受ける（実践）',
+    description:
+      'AIが面接官役になり、質問と深掘りを行います。音声またはテキストで回答でき、終了後にフィードバックが出ます。',
+    buttonLabel: 'AI面接を始める',
+    href: '/interview/ai',
+  },
+  {
+    title: '予想質問を作る（事前準備）',
+    description:
+      'AI面接や対人練習の前に。志望大学・活動内容から、聞かれそうな質問を確認できます。',
+    buttonLabel: '予想質問を見る',
     href: '/interview/questions',
   },
   {
-    title: '練習結果を記録する',
+    title: '対人練習を記録する',
     description: '先生や友達との面接練習後に、質問内容や回答を記録します。',
     buttonLabel: '練習結果を記録する',
     href: '/interview/record',
   },
   {
-    title: '過去の練習記録を見る',
-    description: 'これまでの面接練習の記録と改善点を確認します。',
-    buttonLabel: '練習記録を見る',
+    title: '過去の記録を見る',
+    description: '対人練習とAI面接の記録・改善点をまとめて確認します。',
+    buttonLabel: '記録を見る',
     href: '/interview/history',
   },
 ];
