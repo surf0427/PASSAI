@@ -24,6 +24,7 @@ import {
   INTERVIEW_TYPE_LABELS,
   type InterviewType,
 } from '@/lib/interviewAi/interviewTypes';
+import { INTERVIEW_AI_MAX_ANSWER_TURNS } from '@/lib/interviewAi/limits';
 import {
   isInterviewSourceTypesEnabledByEnv,
   isInterviewSourceTypesEnabledByQuery,
@@ -92,6 +93,10 @@ export function InterviewAiClient() {
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState('');
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  // これまでに受理（保存）された回答数。質問番号表示（= answeredCount + 1）と残り数の算出に使う。
+  // 通常フローは exchanges と同期して増えるが、再開時は exchanges を復元しないため
+  // server の answerCount から seed する（再開後も正しい番号を出すため別 state にする）。
+  const [answeredCount, setAnsweredCount] = useState(0);
   const [done, setDone] = useState(false);
   const [questionError, setQuestionError] = useState(false);
 
@@ -331,6 +336,7 @@ export function InterviewAiClient() {
     setCurrentQuestion(null);
     setAnswerText('');
     setExchanges([]);
+    setAnsweredCount(0);
     setDone(false);
     setQuestionError(false);
     setVoiceStage('idle');
@@ -456,6 +462,8 @@ export function InterviewAiClient() {
       setSession(resume);
       setResume(null);
       setPhase('interviewing');
+      // 再開時は exchanges を復元しないため、server の answerCount から質問番号を seed する。
+      setAnsweredCount(st.state.answerCount);
       if (st.state.done) {
         setDone(true);
         setCurrentQuestion(null);
@@ -479,11 +487,13 @@ export function InterviewAiClient() {
     if (r.kind === 'next') {
       if (answeredQuestion) {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
+        setAnsweredCount((n) => n + 1); // 回答が受理された（server で保存・課金確定）
       }
       showQuestion(r.question);
     } else if (r.kind === 'question-error') {
       if (answeredQuestion) {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
+        setAnsweredCount((n) => n + 1); // 回答は保存済み（followup 生成のみ失敗）
       }
       releaseTtsResources(); // 回答済み質問の読み上げを止める
       setTtsStage('idle');
@@ -494,6 +504,7 @@ export function InterviewAiClient() {
     } else if (r.kind === 'done' || r.kind === 'limit') {
       if (answeredQuestion && r.kind === 'done') {
         setExchanges((prev) => [...prev, { question: answeredQuestion, transcript: r.transcript }]);
+        setAnsweredCount((n) => n + 1); // 最後の回答が受理された
       }
       releaseTtsResources(); // 面接終了 → 読み上げを止める
       setTtsStage('idle');
@@ -656,6 +667,12 @@ export function InterviewAiClient() {
       setLoading(false);
     }
   }
+
+  // 質問数 / 残り表示用の派生値。現在表示中の質問の番号 = 受理済み回答数 + 1（上限でクランプ）。
+  // 残り = 上限 − 現在番号（この質問より後に出る質問数）。0 なら最後の質問。
+  const totalQuestions = INTERVIEW_AI_MAX_ANSWER_TURNS;
+  const questionNumber = Math.min(answeredCount + 1, totalQuestions);
+  const remainingAfter = Math.max(totalQuestions - questionNumber, 0);
 
   // ── 描画 ────────────────────────────────────────────────────
   return (
@@ -890,7 +907,14 @@ export function InterviewAiClient() {
               </div>
             ) : currentQuestion ? (
               <div>
-                <p className="text-xs font-semibold text-gray-500 mb-1">面接官からの質問</p>
+                {/* 質問番号 / 全質問数 / 残り質問数。answeredCount から算出し、再開時も正しく出る。 */}
+                <div className="flex items-center justify-between mb-1 gap-2">
+                  <p className="text-xs font-semibold text-gray-500">面接官からの質問</p>
+                  <span className="shrink-0 text-xs font-semibold text-gray-500 bg-gray-100 rounded-full px-2.5 py-0.5">
+                    質問 {questionNumber} / {totalQuestions}
+                    {remainingAfter > 0 ? `・残り${remainingAfter}問` : '・最後の質問'}
+                  </span>
+                </div>
                 {/* 質問テキストは必ず表示。TTS はこの下の読み上げコントロールで追加する。 */}
                 <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
 

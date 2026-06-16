@@ -32,7 +32,8 @@ export const INTERVIEW_AI_COMPLETE_LOG_ROUTE = 'api/interview-ai/complete';
 
 // MVP のターン上限（PR6 必須条件 §7。3〜5）。role='answer' の件数でカウントする。
 // 無限 followup を禁止するため、answer がこの件数に達したら followup を生成しない。
-export const INTERVIEW_AI_MAX_ANSWER_TURNS = 5;
+// 値の単一情報源は lib/interviewAi/limits.ts（client UI からも参照するため切り出し）。
+export { INTERVIEW_AI_MAX_ANSWER_TURNS } from './limits';
 
 // 入力サイズガード（暴走 payload 防止）。
 export const INTERVIEW_AI_MAX_ANSWER_CHARS = 8000;
