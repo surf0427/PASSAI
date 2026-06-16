@@ -46,16 +46,14 @@ const TYPE_CARD_DESC: Record<InterviewType, string> = {
 };
 
 export function InterviewAiClient() {
-  // flag off では type 選択を出さず、従来どおり setup（フリー面接）から始める。
-  const [phase, setPhase] = useState<Phase>(SOURCE_TYPES_ENABLED ? 'type' : 'setup');
+  // 常に setup（大学・学部選択）から始める。タイプ選択は setup 完了後（flag on のみ）。
+  const [phase, setPhase] = useState<Phase>('setup');
   const [mode, setMode] = useState<'voice' | 'text'>('text');
   const [university, setUniversity] = useState('');
   const [faculty, setFaculty] = useState('');
   const [examType, setExamType] = useState('');
 
-  // 面接タイプ + 解決済み元データ。
-  const [selectedType, setSelectedType] = useState<InterviewType>('free');
-  const [resolved, setResolved] = useState<AvailableSource | null>(null);
+  // 元データ欠如の誘導カード（タイプ選択時に解決した結果。解決済みデータは startSession へ引数で渡す）。
   const [guidance, setGuidance] = useState<(SourceGuidance & { type: InterviewType }) | null>(null);
 
   const [session, setSession] = useState<AiSession | null>(null);
@@ -76,11 +74,9 @@ export function InterviewAiClient() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // 最初まで戻す。flag on→タイプ選択 / flag off→setup（フリー面接）。
+  // 最初（= 大学・学部選択の setup）まで戻す。タイプ選択は setup の後段なので、戻り先は常に setup。
   function resetToStart(message?: string) {
-    setPhase(SOURCE_TYPES_ENABLED ? 'type' : 'setup');
-    setSelectedType('free');
-    setResolved(null);
+    setPhase('setup');
     setGuidance(null);
     setSession(null);
     setCurrentQuestion(null);
@@ -94,7 +90,20 @@ export function InterviewAiClient() {
     setErrorMsg(message ?? null);
   }
 
-  // タイプ選択 → 元データ解決。あれば setup へ、無ければ誘導カードを出す。
+  // setup（大学・学部選択）完了 → 次へ。
+  //   - flag off: そのままフリー面接を開始（タイプ選択を出さない / 既存導線）。
+  //   - flag on:  タイプ選択 phase へ進む。
+  function handleSetupNext() {
+    if (!SOURCE_TYPES_ENABLED) {
+      void startSession('free', null);
+      return;
+    }
+    setErrorMsg(null);
+    setGuidance(null);
+    setPhase('type');
+  }
+
+  // タイプ選択（flag on, 大学選択後）→ 元データ解決。あれば即開始、無ければ誘導カード。
   function handleSelectType(type: InterviewType) {
     setErrorMsg(null);
     setGuidance(null);
@@ -103,9 +112,7 @@ export function InterviewAiClient() {
       setGuidance({ ...r.guidance, type });
       return;
     }
-    setSelectedType(type);
-    setResolved(r);
-    setPhase('setup');
+    void startSession(type, r);
   }
 
   function buildTargetRef(): Record<string, unknown> {
@@ -117,7 +124,12 @@ export function InterviewAiClient() {
   }
 
   // ── セッション開始 ───────────────────────────────────────────
-  async function handleStart() {
+  //   大学情報（buildTargetRef）+ interview_type / source 情報を両方入れて作成する。
+  //   type / resolvedSrc は引数で受け取り、setState の非同期反映を待たずに確定値を使う。
+  async function startSession(
+    type: InterviewType,
+    resolvedSrc: AvailableSource | null,
+  ) {
     setLoading(true);
     setErrorMsg(null);
     setSttGuidance(false);
@@ -125,10 +137,10 @@ export function InterviewAiClient() {
       const res = await createSession({
         source: mode,
         targetRef: buildTargetRef(),
-        interviewType: selectedType,
-        sourceType: resolved ? resolved.sourceType : null,
-        sourceId: resolved ? resolved.sourceId : null,
-        sourceContext: resolved ? resolved.sourceContext : '',
+        interviewType: type,
+        sourceType: resolvedSrc ? resolvedSrc.sourceType : null,
+        sourceId: resolvedSrc ? resolvedSrc.sourceId : null,
+        sourceContext: resolvedSrc ? resolvedSrc.sourceContext : '',
       });
       if (res.kind === 'created') {
         setSession(res.session);
@@ -384,12 +396,24 @@ export function InterviewAiClient() {
         </div>
       )}
 
-      {/* TYPE SELECT（どの内容をもとに面接するか） */}
+      {/* TYPE SELECT（大学選択後に表示。どの内容をもとに面接するか） */}
       {phase === 'type' && (
         <div>
-          <h2 className="text-base font-semibold text-gray-800 mb-1">
-            どの内容をもとに面接練習しますか？
-          </h2>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-base font-semibold text-gray-800">
+              どの内容をもとに面接練習しますか？
+            </h2>
+            <button
+              type="button"
+              onClick={() => {
+                setGuidance(null);
+                setPhase('setup');
+              }}
+              className="text-xs text-gray-500 hover:text-gray-800 border border-gray-300 rounded-lg px-3 py-1"
+            >
+              ← 大学・学部選択へ戻る
+            </button>
+          </div>
           <p className="text-sm text-gray-500 mb-4">
             選んだ機能のデータをもとに、面接AIが深掘り質問を行います。
           </p>
@@ -437,26 +461,10 @@ export function InterviewAiClient() {
       {/* SETUP */}
       {phase === 'setup' && (
         <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-gray-700">面接の設定</h2>
-            {SOURCE_TYPES_ENABLED && (
-              <button
-                type="button"
-                onClick={() => resetToStart()}
-                className="text-xs text-gray-500 hover:text-gray-800 border border-gray-300 rounded-lg px-3 py-1"
-              >
-                ← タイプ選択へ
-              </button>
-            )}
-          </div>
-
-          {SOURCE_TYPES_ENABLED && (
-            <div className="mb-5">
-              <span className="inline-block bg-violet-100 text-violet-700 text-xs font-bold px-2.5 py-1 rounded-full">
-                {INTERVIEW_TYPE_LABELS[selectedType]}
-              </span>
-            </div>
-          )}
+          <h2 className="text-base font-semibold text-gray-700 mb-1">面接の設定</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            面接対象の大学・学部・受験方式を選んでください（任意）。
+          </p>
 
           <div className="mb-5">
             <span className="block text-sm font-semibold text-gray-700 mb-2">回答方法</span>
@@ -512,8 +520,13 @@ export function InterviewAiClient() {
             />
           </div>
 
-          <Button onClick={handleStart} disabled={loading}>
-            {loading ? '準備中…' : '面接を始める'}
+          {/* flag off: そのままフリー面接を開始 / flag on: 大学選択後にタイプ選択へ進む */}
+          <Button onClick={handleSetupNext} disabled={loading}>
+            {loading
+              ? '準備中…'
+              : SOURCE_TYPES_ENABLED
+                ? '次へ（面接タイプを選ぶ）'
+                : '面接を始める'}
           </Button>
         </div>
       )}
