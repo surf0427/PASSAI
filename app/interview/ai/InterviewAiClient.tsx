@@ -663,13 +663,18 @@ export function InterviewAiClient() {
                     ) : answerText ? (
                       <>
                         <label className="block text-xs font-semibold text-gray-500 mb-1">
-                          文字起こし結果（送信前に確認・編集できます）
+                          文字起こし結果（編集できません）
                         </label>
+                        {/* 音声モードは本番再現のため編集不可（readonly 表示）。手動編集 / 言い換え不可。 */}
                         <textarea
-                          className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1`}
+                          readOnly
+                          aria-readonly="true"
+                          className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1 bg-slate-50 text-slate-700`}
                           value={answerText}
-                          onChange={(e) => setAnswerText(e.target.value)}
                         />
+                        <p className="text-xs text-amber-700 mb-2">
+                          音声回答は本番の面接を想定しているため、文字起こし結果の編集はできません。
+                        </p>
                         <div className="flex flex-wrap gap-2">
                           <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
                             この内容で送信
