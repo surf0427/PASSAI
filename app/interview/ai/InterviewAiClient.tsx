@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/Button';
 import { AlertBox } from '@/components/ui/AlertBox';
@@ -104,7 +104,41 @@ export function InterviewAiClient() {
   // 音声入力のサブ状態。idle: 録音前 or 文字起こし結果待ち / recording: 録音中 / transcribing: STT 中。
   const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // 進行中 STT を無効化するためのトークン。録音リソース解放のたびに ++ し、
+  // handleTranscribe は開始時の値と一致するときだけ結果を反映する（M-3: 編集不可仕様の死守）。
+  const transcribeIdRef = useRef(0);
+
+  // 録音リソース（MediaRecorder / MediaStream / chunks）を確実に解放する一元処理。
+  // 録音中の切替・中断・リセット・結果遷移・unmount・STT失敗・録り直しなど、
+  // 音声経路から離れるすべての地点で呼ぶ（H-1: マイク開きっぱなし防止）。
+  //   - transcribeIdRef を ++ して進行中 STT の結果を破棄させる。
+  //   - 解放専用なので onstop/ondataavailable を外してから stop する（handleTranscribe を誤発火させない）。
+  //   - tracks.stop() でマイク（録音インジケータ）を確実に解放する。
+  // refs のみを参照するため deps なしで安定（unmount cleanup から呼べる）。
+  const stopRecordingResources = useCallback(() => {
+    transcribeIdRef.current += 1;
+    const rec = recorderRef.current;
+    if (rec) {
+      rec.ondataavailable = null;
+      rec.onstop = null;
+      if (rec.state !== 'inactive') {
+        try {
+          rec.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    recorderRef.current = null;
+    streamRef.current = null;
+    chunksRef.current = [];
+  }, []);
+
+  // unmount 時にマイクを必ず解放する。
+  useEffect(() => stopRecordingResources, [stopRecordingResources]);
 
   // MediaRecorder / getUserMedia 対応判定（非対応なら最初からテキスト回答）。
   // mounted を噛ませて SSR/hydration では false に固定（hydration mismatch 回避）。client mount 後に確定。
@@ -120,6 +154,7 @@ export function InterviewAiClient() {
 
   // 新しい質問を表示するときの入力状態リセット（入力方法を既定に戻す）。
   function showQuestion(q: string) {
+    stopRecordingResources();
     setCurrentQuestion(q);
     setQuestionError(false);
     setAnswerText('');
@@ -129,6 +164,7 @@ export function InterviewAiClient() {
 
   // 最初（= 大学・学部選択の setup）まで戻す。タイプ選択は setup の後段なので、戻り先は常に setup。
   function resetToStart(message?: string) {
+    stopRecordingResources();
     setPhase('setup');
     setGuidance(null);
     setSession(null);
@@ -313,6 +349,7 @@ export function InterviewAiClient() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       // mimeType は決め打ちしない（Safari/iOS は audio/mp4、Chrome は audio/webm）。
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
@@ -320,15 +357,19 @@ export function InterviewAiClient() {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
         const type = recorder.mimeType || 'audio/webm';
         const blob = new Blob(chunksRef.current, { type });
+        // この録音ぶんのマイクは即解放（transcribe は blob のみで進む）。
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
         void handleTranscribe(blob);
       };
       recorderRef.current = recorder;
       recorder.start();
       setVoiceStage('recording');
     } catch {
+      // getUserMedia 後に MediaRecorder 生成で失敗しても stream を取りこぼさない。
+      stopRecordingResources();
       setInputMode('text');
       setErrorMsg('マイクへのアクセスが許可されませんでした。テキストで回答してください。');
     }
@@ -340,22 +381,32 @@ export function InterviewAiClient() {
     setVoiceStage('transcribing');
   }
 
-  // 録音 blob を STT API でテキスト化。成功で answerText にセット（ユーザーが確認・編集して送信）。
-  // 失敗時は保存も課金もせず、テキスト入力にフォールバック。音声 blob はここで破棄。
+  // 録音 blob を STT API でテキスト化。成功で answerText にセット（音声モードは読み取り専用で確認のみ）。
+  // 失敗時は保存も課金もしない。STT 中にリソース解放（切替/中断/unmount 等）が起きたら結果は破棄する（M-3）。
+  // 音声 blob はここで破棄。
   async function handleTranscribe(blob: Blob) {
+    const reqId = (transcribeIdRef.current += 1);
     setVoiceStage('transcribing');
     const r = await transcribeVoice(blob);
+    // 解放（切替/リセット/中断/unmount）で無効化された STT の結果は反映しない。
+    if (reqId !== transcribeIdRef.current) return;
     if (r.kind === 'ok') {
+      // inputMode は voice のまま（編集不可の readonly 欄に表示）。
       setAnswerText(r.transcript);
       setVoiceStage('idle');
-    } else {
+      return;
+    }
+    // 失敗時は録音リソースを解放（マイクを残さない）。
+    stopRecordingResources();
+    if (r.error === 'stt-unavailable') {
+      // provider 無効 → 録り直しても無駄なのでテキスト入力へ誘導。
       setVoiceStage('idle');
       setInputMode('text');
-      setErrorMsg(
-        r.error === 'stt-unavailable'
-          ? '音声認識が利用できません。テキストで回答してください。'
-          : '音声認識に失敗しました。もう一度お試しいただくか、テキストで回答してください。',
-      );
+      setErrorMsg('音声認識が利用できません。テキストで回答してください。');
+    } else {
+      // 一時失敗 → 音声モードのまま idle に戻し「録音し直す / テキストで回答」の二択を残す（M-2）。
+      setVoiceStage('idle');
+      setErrorMsg('音声認識に失敗しました。録音し直すか、テキストで回答に切り替えてください。');
     }
   }
 
@@ -384,6 +435,7 @@ export function InterviewAiClient() {
   // ── 完了 ────────────────────────────────────────────────────
   async function handleComplete() {
     if (!session) return;
+    stopRecordingResources();
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -404,6 +456,7 @@ export function InterviewAiClient() {
   // ── 中断（明示キャンセル） ──────────────────────────────────
   async function handleAbandon(sessionId: string) {
     if (!window.confirm('この面接を中断しますか？（再開できなくなります）')) return;
+    stopRecordingResources();
     setLoading(true);
     try {
       const r = await abandonSession(sessionId);
@@ -682,6 +735,7 @@ export function InterviewAiClient() {
                           <button
                             type="button"
                             onClick={() => {
+                              stopRecordingResources();
                               setAnswerText('');
                               setVoiceStage('idle');
                             }}
@@ -697,16 +751,22 @@ export function InterviewAiClient() {
                         🎤 録音開始
                       </Button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInputMode('text');
-                        setVoiceStage('idle');
-                      }}
-                      className="text-xs text-blue-600 hover:text-blue-700 underline self-start mt-1"
-                    >
-                      テキストで回答に切り替え
-                    </button>
+                    {/* 文字起こし中は切替を出さない（編集不可仕様の死守 / M-3）。
+                        切替時は録音リソースを解放してマイクを止める（H-1）。 */}
+                    {voiceStage !== 'transcribing' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          stopRecordingResources();
+                          setInputMode('text');
+                          setAnswerText('');
+                          setVoiceStage('idle');
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-700 underline self-start mt-1"
+                      >
+                        テキストで回答に切り替え
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <>
