@@ -204,6 +204,13 @@ export function InterviewAiClient() {
   //           一時失敗なら 'failed' + 軽い案内（テキストで続行できる）。
   const speak = useCallback(
     async (text: string) => {
+      // 正式公開まで TTS は flag ON（env true / vercel.app Preview の ?sourceTypes=1）限定。
+      // flag false（= 本番 passai.jp / env 未設定）では provider env が設定されていても
+      // 一切 fetch せず、従来どおりテキスト質問のみで進める。
+      if (!sourceTypesEnabled) {
+        setTtsStage('unavailable');
+        return;
+      }
       const t = (text || '').trim();
       if (!t) return;
       if (ttsUnavailableRef.current) {
@@ -246,7 +253,7 @@ export function InterviewAiClient() {
         setTtsStage('blocked');
       }
     },
-    [releaseTtsResources],
+    [releaseTtsResources, sourceTypesEnabled],
   );
 
   // 取得済みの音声を頭から再生する（再生成しない）。無ければ作り直す。
@@ -887,9 +894,11 @@ export function InterviewAiClient() {
                 {/* 質問テキストは必ず表示。TTS はこの下の読み上げコントロールで追加する。 */}
                 <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
 
-                {/* AI 質問読み上げ（TTS）。provider 未設定（unavailable）時はコントロールを出さない。
+                {/* AI 質問読み上げ（TTS）。正式公開まで flag ON 限定で表示する
+                    （flag false の本番導線では一切出さず、従来どおりテキスト質問のみ）。
+                    provider 未設定（unavailable）時もコントロールを出さない。
                     自動再生がブロックされた場合は「🔊 読み上げ」ボタンで手動再生できる。 */}
-                {ttsStage !== 'unavailable' && (
+                {sourceTypesEnabled && ttsStage !== 'unavailable' && (
                   <div className="flex flex-wrap items-center gap-2 mb-4">
                     {ttsStage === 'loading' ? (
                       <span className="text-xs text-gray-500">🔊 読み上げ準備中…</span>
