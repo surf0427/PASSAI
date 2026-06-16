@@ -140,6 +140,12 @@ export function InterviewAiClient() {
   // unmount 時にマイクを必ず解放する。
   useEffect(() => stopRecordingResources, [stopRecordingResources]);
 
+  // Preview 検証用デバッグログ。sourceTypesEnabled（= env true または vercel.app Preview の
+  // ?sourceTypes=1）のときだけ出す。本番 passai.jp では常に false なので一切出ない。
+  function debugLog(...args: unknown[]) {
+    if (sourceTypesEnabled) console.log(...args);
+  }
+
   // MediaRecorder / getUserMedia 対応判定（非対応なら最初からテキスト回答）。
   // mounted を噛ませて SSR/hydration では false に固定（hydration mismatch 回避）。client mount 後に確定。
   const mediaSupported =
@@ -193,15 +199,27 @@ export function InterviewAiClient() {
   }
 
   // タイプ選択（flag on, 大学選択後）→ 元データ解決。あれば即開始、無ければ誘導カード。
+  //   - free（本番モード）/ pressure（圧迫面接）は常に available（sourceType=null 許容）。
+  //   - resolveSource は localStorage 読み込みを伴うため、万一の例外でも「無反応」にせず
+  //     必ずエラーを画面に出す（クリックして何も起きない状態を禁止 / req #4）。
   function handleSelectType(type: InterviewType) {
     setErrorMsg(null);
     setGuidance(null);
-    const r = resolveSource(type);
-    if (!r.available) {
-      setGuidance({ ...r.guidance, type });
-      return;
+    try {
+      debugLog('[interview-ai] selected type', type);
+      const r = resolveSource(type);
+      debugLog('[interview-ai] resolved source', r);
+      if (!r.available) {
+        // 連携データが必要なタイプ（self_analysis / statement / essay）だけ誘導する。
+        setGuidance({ ...r.guidance, type });
+        return;
+      }
+      // free / pressure を含む available なタイプは即セッション開始へ。
+      void startSession(type, r);
+    } catch (err) {
+      console.error('[interview-ai] handleSelectType failed', err);
+      setErrorMsg('面接の開始に失敗しました。もう一度お試しください。');
     }
-    void startSession(type, r);
   }
 
   function buildTargetRef(): Record<string, unknown> {
@@ -221,16 +239,19 @@ export function InterviewAiClient() {
   ) {
     setLoading(true);
     setErrorMsg(null);
+    // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
+    // free / pressure は sourceType=null / sourceId=null をそのまま許容して送る。
+    const payload = {
+      source: 'text' as const,
+      targetRef: buildTargetRef(),
+      interviewType: type,
+      sourceType: resolvedSrc ? resolvedSrc.sourceType : null,
+      sourceId: resolvedSrc ? resolvedSrc.sourceId : null,
+      sourceContext: resolvedSrc ? resolvedSrc.sourceContext : '',
+    };
+    debugLog('[interview-ai] create session request', payload);
     try {
-      const res = await createSession({
-        // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
-        source: 'text',
-        targetRef: buildTargetRef(),
-        interviewType: type,
-        sourceType: resolvedSrc ? resolvedSrc.sourceType : null,
-        sourceId: resolvedSrc ? resolvedSrc.sourceId : null,
-        sourceContext: resolvedSrc ? resolvedSrc.sourceContext : '',
-      });
+      const res = await createSession(payload);
       if (res.kind === 'created') {
         setSession(res.session);
         await runKickoff(res.session);
@@ -241,8 +262,14 @@ export function InterviewAiClient() {
       } else if (res.kind === 'unauthenticated') {
         setErrorMsg('ログインが必要です。');
       } else {
-        setErrorMsg('面接の開始に失敗しました。時間をおいて再試行してください。');
+        // 500 等（route の session-create-failed など）。握りつぶさず明示する（req #4）。
+        console.error('[interview-ai] createSession failed', res);
+        setErrorMsg('面接の開始に失敗しました。もう一度お試しください。');
       }
+    } catch (err) {
+      // fetch 例外 / runKickoff 例外などの想定外。unhandled rejection で無反応にしない（req #4）。
+      console.error('[interview-ai] startSession threw', err);
+      setErrorMsg('面接の開始に失敗しました。もう一度お試しください。');
     } finally {
       setLoading(false);
     }
@@ -564,13 +591,18 @@ export function InterviewAiClient() {
             </div>
           )}
 
+          {loading && <p className="text-sm text-gray-500 mb-3">面接を準備中…</p>}
+
           <div className="grid gap-3 sm:grid-cols-2">
             {INTERVIEW_TYPES.map((type) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => handleSelectType(type)}
-                className="text-left bg-white border border-gray-200 hover:border-blue-400 rounded-xl p-5 transition-colors"
+                disabled={loading}
+                className={`text-left bg-white border border-gray-200 hover:border-blue-400 rounded-xl p-5 transition-colors ${
+                  loading ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
               >
                 <p className="text-sm font-bold text-gray-800 mb-1">
                   <span className="mr-1">{TYPE_CARD_EMOJI[type]}</span>
