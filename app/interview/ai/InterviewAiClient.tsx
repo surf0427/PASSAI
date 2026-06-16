@@ -54,14 +54,22 @@ type AvailableSource = Extract<ResolvedSource, { available: true }>;
 const INPUT_CLASS =
   'w-full border border-slate-300 rounded-lg px-4 py-2 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-400';
 
-// タイプ選択カードの説明文（item 2）。
+// タイプ選択カードの説明文（2026-06 方針）。
 const TYPE_CARD_DESC: Record<InterviewType, string> = {
-  self_analysis: '自己分析で整理した価値観・強み・経験をもとに深掘りします。',
-  activity: '入力済みの活動内容をもとに、行動・困難・工夫・学びを質問します。',
-  statement: '作成した志望理由書をもとに、面接官が突っ込みそうな点を質問します。',
-  matching: '志望校・学部との相性や選択理由を深掘りします。',
-  essay: '小論文で扱ったテーマについて、考え方や意見を口頭で説明する練習をします。',
-  free: 'データ連動なしで、一般的な総合型選抜の面接練習をします。',
+  self_analysis: '自己分析・活動整理をもとに深掘り質問を行います。',
+  statement: '志望理由書との一貫性を確認しながら質問します。',
+  essay: '小論文の内容を口頭で説明する練習をします。',
+  free: 'データ連携なしで本番を想定した面接を行います。',
+  pressure: '本番より少し厳しめの質問を行います。',
+};
+
+// カード見出しの emoji。
+const TYPE_CARD_EMOJI: Record<InterviewType, string> = {
+  self_analysis: '⭐',
+  statement: '⭐',
+  essay: '📝',
+  free: '🎯',
+  pressure: '😈',
 };
 
 export function InterviewAiClient() {
@@ -488,6 +496,7 @@ export function InterviewAiClient() {
                 className="text-left bg-white border border-gray-200 hover:border-blue-400 rounded-xl p-5 transition-colors"
               >
                 <p className="text-sm font-bold text-gray-800 mb-1">
+                  <span className="mr-1">{TYPE_CARD_EMOJI[type]}</span>
                   {INTERVIEW_TYPE_LABELS[type]}
                 </p>
                 <p className="text-xs text-gray-600 leading-relaxed">{TYPE_CARD_DESC[type]}</p>

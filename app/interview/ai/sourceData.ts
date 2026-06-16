@@ -2,18 +2,22 @@
 
 // STEP-INTERVIEW-AI-TYPE: 面接タイプ別の元データ取得（canonical localStorage から）。
 //
+// 2026-06 方針:
+//   - self_analysis: 自己分析 + 活動整理を統合（活動整理は自己分析の一部という PASSAI 思想）。
+//   - statement / essay: それぞれ最新データ。
+//   - free（本番モード）/ pressure（圧迫面接）: データ連携なし（常に開始可・誘導不要）。
+//   - activity / matching は廃止（self_analysis へ統合 / 価値が弱いため削除）。
+//
 // 方針:
-//   - 元データは localStorage が canonical（docs / 既存 interview-feedback と同じく client 集約）。
-//     ここで「最新データ」を読み、compact な sourceContext（テキスト要約）に落とす。
-//   - source データが無いタイプは available=false + 誘導（guidance）を返す。free は常に available。
-//   - 実在する storage loader のみ使用。未確定の形は defensive に（optional chaining / fallback ''）。
+//   - 元データは localStorage が canonical（既存 interview-feedback と同じく client 集約）。
+//   - データが無い data-linked タイプ（self_analysis/statement/essay）は available=false + 誘導。
 //   - sourceContext は session.target_ref.sourceContext に保存され、server 側の質問/評価生成で使う。
+//   - 実在する storage loader のみ使用。未確定の形は defensive に（optional chaining / fallback ''）。
 
 import type { InterviewType } from '@/lib/interviewAi/interviewTypes';
 import { loadWallHittingResult } from '@/lib/wallHittingStorage';
 import { loadActivityData } from '@/lib/activityStorage';
 import { loadDraft, loadReviewHistory } from '@/lib/statement/review/statementStorage';
-import { loadAiMatchAdviceCache } from '@/lib/admissionMatchingStorage';
 import { loadEssayWorkspaces } from '@/lib/essayWorkspaceStorage';
 
 const MAX_CONTEXT_CHARS = 6000;
@@ -29,29 +33,19 @@ export type ResolvedSource =
     }
   | { available: false; guidance: SourceGuidance };
 
-const GUIDANCE: Record<Exclude<InterviewType, 'free'>, SourceGuidance> = {
+// データ連携が必要なタイプのみ誘導を持つ（free / pressure は常に available）。
+const GUIDANCE: Record<'self_analysis' | 'statement' | 'essay', SourceGuidance> = {
   self_analysis: {
     message:
       '自己分析データがまだありません。先に自己分析を完了すると、あなた専用の面接練習ができます。',
     ctaLabel: '自己分析を始める',
     href: '/self-analysis',
   },
-  activity: {
-    message: '活動データがまだありません。先に活動整理を入力してください。',
-    ctaLabel: '活動整理を入力する',
-    href: '/input/activity',
-  },
   statement: {
     message:
       '志望理由書データがまだありません。先に志望理由書を作成すると、内容に基づいた面接練習ができます。',
     ctaLabel: '志望理由書を作成する',
     href: '/statement',
-  },
-  matching: {
-    message:
-      '志望校マッチングの結果がまだありません。先にマッチングを行うと、志望校に合わせた面接練習ができます。',
-    ctaLabel: '志望校マッチングを行う',
-    href: '/admission-matching',
   },
   essay: {
     message:
@@ -86,24 +80,9 @@ function stringFieldsOf(obj: unknown): string {
   return vals.join(' / ');
 }
 
-function resolveSelfAnalysis(): ResolvedSource {
-  const r = loadWallHittingResult();
-  if (!r || (!r.summary && (r.strengths?.length ?? 0) === 0)) {
-    return { available: false, guidance: GUIDANCE.self_analysis };
-  }
-  const ctx = joinNonEmpty([
-    r.summary ? `自己分析の要約: ${r.summary}` : '',
-    list('強み', r.strengths),
-    list('弱み', r.weaknesses),
-    list('将来への接続', r.futureConnections),
-    list('深めたい問い', r.questions),
-  ]);
-  return { available: true, sourceType: 'self_analysis', sourceId: null, sourceContext: clip(ctx) };
-}
-
-function resolveActivity(): ResolvedSource {
-  const data = loadActivityData();
-  if (!data) return { available: false, guidance: GUIDANCE.activity };
+// 活動整理（ActivityData）を防御的にテキスト化する。
+function activityLinesFrom(data: unknown): string[] {
+  if (!data || typeof data !== 'object') return [];
   const lines: string[] = [];
   for (const arr of Object.values(data as Record<string, unknown>)) {
     if (!Array.isArray(arr)) continue;
@@ -112,15 +91,28 @@ function resolveActivity(): ResolvedSource {
       if (s) lines.push(`- ${s}`);
     }
   }
-  if (lines.length === 0) return { available: false, guidance: GUIDANCE.activity };
-  return {
-    available: true,
-    sourceType: 'activity',
-    sourceId: null,
-    sourceContext: clip(`活動経験:\n${lines.join('\n')}`),
-  };
+  return lines;
 }
 
+// ⭐ 自己分析ベース: 自己分析 + 活動整理を統合。
+function resolveSelfAnalysis(): ResolvedSource {
+  const r = loadWallHittingResult();
+  if (!r || (!r.summary && (r.strengths?.length ?? 0) === 0)) {
+    return { available: false, guidance: GUIDANCE.self_analysis };
+  }
+  const activityLines = activityLinesFrom(loadActivityData());
+  const ctx = joinNonEmpty([
+    r.summary ? `自己分析の要約: ${r.summary}` : '',
+    list('強み', r.strengths),
+    list('弱み', r.weaknesses),
+    list('将来への接続', r.futureConnections),
+    list('深めたい問い', r.questions),
+    activityLines.length ? `活動経験:\n${activityLines.join('\n')}` : '',
+  ]);
+  return { available: true, sourceType: 'self_analysis', sourceId: null, sourceContext: clip(ctx) };
+}
+
+// ⭐ 志望理由書ベース。
 function resolveStatement(): ResolvedSource {
   const history = loadReviewHistory();
   const latest = history[0];
@@ -141,32 +133,12 @@ function resolveStatement(): ResolvedSource {
   };
 }
 
-function resolveMatching(): ResolvedSource {
-  const cache = loadAiMatchAdviceCache();
-  const results = cache?.results;
-  if (!cache || !Array.isArray(results) || results.length === 0) {
-    return { available: false, guidance: GUIDANCE.matching };
-  }
-  const lines = results.slice(0, 5).map((r) => {
-    const u = r as { university?: { name?: string }; matchSummary?: string; reason?: string };
-    const name = u.university?.name ?? '';
-    const summary = u.matchSummary || u.reason || '';
-    return `- ${[name, summary].filter(Boolean).join('：')}`;
-  });
-  return {
-    available: true,
-    sourceType: 'matching',
-    sourceId: null,
-    sourceContext: clip(`志望校マッチング結果:\n${lines.join('\n')}`),
-  };
-}
-
+// 📝 小論文ベース。
 function resolveEssay(): ResolvedSource {
   const workspaces = loadEssayWorkspaces();
   if (!Array.isArray(workspaces) || workspaces.length === 0) {
     return { available: false, guidance: GUIDANCE.essay };
   }
-  // 最新更新の workspace を採用。
   const latest = [...workspaces].sort((a, b) =>
     (b.updatedAt ?? '') < (a.updatedAt ?? '') ? -1 : 1,
   )[0];
@@ -189,23 +161,21 @@ function resolveEssay(): ResolvedSource {
 }
 
 /**
- * 選択された interview_type に対して、canonical localStorage から元データを解決する。
- * - free は常に available（sourceContext 空 / sourceType/source_id null 扱いは呼び出し側）。
- * - データが無ければ available:false + guidance。
+ * 選択された interview_type に対して元データを解決する。
+ * - free（本番モード）/ pressure（圧迫面接）は常に available（データ連携なし）。
+ * - data-linked（self_analysis/statement/essay）はデータが無ければ available:false + guidance。
  */
 export function resolveSource(type: InterviewType): ResolvedSource {
   switch (type) {
     case 'self_analysis':
       return resolveSelfAnalysis();
-    case 'activity':
-      return resolveActivity();
     case 'statement':
       return resolveStatement();
-    case 'matching':
-      return resolveMatching();
     case 'essay':
       return resolveEssay();
     case 'free':
       return { available: true, sourceType: 'free', sourceId: null, sourceContext: '' };
+    case 'pressure':
+      return { available: true, sourceType: 'pressure', sourceId: null, sourceContext: '' };
   }
 }

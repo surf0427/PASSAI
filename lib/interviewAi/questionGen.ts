@@ -11,6 +11,7 @@ import {
 import {
   questionGuidanceFor,
   QUESTION_QUALITY_RULES,
+  toneGuidanceFor,
   type InterviewType,
 } from './interviewTypes';
 
@@ -41,6 +42,7 @@ function buildSystem(type: InterviewType, kind: 'seed' | 'followup'): string {
   return [
     intro,
     `【方針】${questionGuidanceFor(type)}`,
+    toneGuidanceFor(type),
     QUESTION_QUALITY_RULES,
     '出力は質問文そのものだけ。前置き・解説・番号・記号・引用符は付けない。1文・日本語。',
   ].join('\n');
