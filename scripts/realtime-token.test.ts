@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- mock harness（Supabase admin / fetch のモック）で any を許容する */
 /*
  * scripts/realtime-token.test.ts
  *
@@ -108,11 +109,17 @@ function makeFetch(result: {
   json?: unknown;
 }): { fn: typeof fetch; calls: Array<{ url: any; init: any }> } {
   const calls: Array<{ url: any; init: any }> = [];
+  const bodyText =
+    typeof result.json === 'string'
+      ? result.json
+      : JSON.stringify(result.json ?? {});
   const fn = (async (url: any, init: any) => {
     calls.push({ url, init });
     return {
       ok: result.ok,
       status: result.status ?? (result.ok ? 200 : 500),
+      // route は body を text() で 1 度読む（診断のため）。json() も互換で残す。
+      text: async () => bodyText,
       json: async () => result.json ?? {},
     };
   }) as unknown as typeof fetch;

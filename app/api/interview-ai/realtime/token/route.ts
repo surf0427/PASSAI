@@ -289,6 +289,16 @@ export async function handleRealtimeToken(
   });
 
   if (!minted.ok) {
+    // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: OpenAI の実 status/body をログ＋応答に出す。
+    //   - devWarn は production(=Vercel Preview) で DCE 除去されるため console.error を使う。
+    //   - 原因切り分け後に削除する（diagnostic フィールド / console.error / model 出力）。
+    const diagnostic = {
+      reason: minted.reason,
+      openaiStatus: minted.openaiStatus,
+      openaiBody: minted.openaiBody,
+      model,
+    };
+    console.error('[interview-ai/realtime/token] MINT FAILED (temporary diagnostic)', diagnostic);
     // one_in_progress を解放するため abandoned に倒す（best-effort）。
     const { error: abErr } = await deps.updateSessionStatus(admin, {
       sessionId,
@@ -304,7 +314,10 @@ export async function handleRealtimeToken(
       model,
       status: 'failed',
     });
-    return NextResponse.json({ error: 'token-mint-failed' }, { status: 502 });
+    return NextResponse.json(
+      { error: 'token-mint-failed', diagnostic },
+      { status: 502 },
+    );
   }
 
   // 7. 観測ログのみ。recordUsage は呼ばない（課金は最初の有効発話で CAS 計上＝STEP7）。
@@ -354,9 +367,17 @@ async function respondWithExistingInProgress(
   );
 }
 
+// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: mint 失敗時に OpenAI の実 status/body を持ち回る。
+// 原因切り分け後に削除予定（reason / openaiStatus / openaiBody）。
+type MintFailure = {
+  ok: false;
+  reason: 'fetch-error' | 'http-error' | 'parse-error' | 'missing-value';
+  openaiStatus: number | null;
+  openaiBody: string | null;
+};
 type MintResult =
   | { ok: true; value: string; expiresAt: number | null }
-  | { ok: false };
+  | MintFailure;
 
 async function mintClientSecret(args: {
   apiKey: string;
@@ -400,31 +421,54 @@ async function mintClientSecret(args: {
       signal: controller.signal,
     });
   } catch (err) {
-    devWarn('[interview-ai/realtime/token] mint fetch failed', err);
-    return { ok: false };
+    return {
+      ok: false,
+      reason: 'fetch-error',
+      openaiStatus: null,
+      openaiBody: String((err as Error)?.message ?? err).slice(0, 500),
+    };
   } finally {
     clearTimeout(timer);
   }
 
+  // body は 1 度だけ text で読み、診断に使い回す（失敗時も OpenAI の本文を残す）。
+  let bodyText = '';
+  try {
+    bodyText = await res.text();
+  } catch {
+    /* 本文取得失敗時は空文字のまま */
+  }
+
   if (!res.ok) {
-    devWarn('[interview-ai/realtime/token] mint provider error', {
-      status: res.status,
-    });
-    return { ok: false };
+    return {
+      ok: false,
+      reason: 'http-error',
+      openaiStatus: res.status,
+      openaiBody: bodyText.slice(0, 2000),
+    };
   }
 
   let json: unknown;
   try {
-    json = await res.json();
+    json = JSON.parse(bodyText);
   } catch {
-    return { ok: false };
+    return {
+      ok: false,
+      reason: 'parse-error',
+      openaiStatus: res.status,
+      openaiBody: bodyText.slice(0, 2000),
+    };
   }
 
   const obj = (json ?? {}) as Record<string, unknown>;
   const value = typeof obj.value === 'string' ? obj.value : '';
   if (!value) {
-    devWarn('[interview-ai/realtime/token] mint response missing value');
-    return { ok: false };
+    return {
+      ok: false,
+      reason: 'missing-value',
+      openaiStatus: res.status,
+      openaiBody: bodyText.slice(0, 2000),
+    };
   }
   const expiresAt =
     typeof obj.expires_at === 'number' && Number.isFinite(obj.expires_at)
