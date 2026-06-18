@@ -65,6 +65,10 @@ const SELECT_COLS =
 
 const ENABLED_VALUES: ReadonlySet<string> = new Set(['true', '1', 'yes']);
 
+// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: 最新 route が live かを判定する build marker。
+// 診断版を出すたびに数字を上げる。原因特定後に GET ハンドラごと削除する。
+const ROUTE_BUILD_MARKER = 'realtime-token-diag-3';
+
 function isServerFlagEnabled(): boolean {
   const raw = process.env.REALTIME_INTERVIEW_ENABLED;
   return typeof raw === 'string' && ENABLED_VALUES.has(raw.trim().toLowerCase());
@@ -144,6 +148,35 @@ export async function POST(req: Request): Promise<Response> {
   return handleRealtimeToken(req, defaultDeps);
 }
 
+// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: GET ?debug=1 で最新 route が live か / env が runtime に
+// 見えているかを判定する。値（sk-... 等）は返さず presence(boolean) のみ。flag OFF（本番）では 404。
+// 原因特定後に削除する。
+export async function GET(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  if (url.searchParams.get('debug') !== '1') {
+    return NextResponse.json({ error: 'method-not-allowed' }, { status: 405 });
+  }
+  if (!isServerFlagEnabled()) {
+    return NextResponse.json({ error: 'realtime-disabled' }, { status: 403 });
+  }
+  return NextResponse.json(
+    {
+      marker: ROUTE_BUILD_MARKER,
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      env: {
+        realtimeEnabled: isServerFlagEnabled(),
+        hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+        hasSalt: Boolean(process.env.REALTIME_SAFETY_ID_SALT),
+        allowlistConfigured: Boolean(
+          (process.env.REALTIME_DEV_USER_IDS ?? '').trim(),
+        ),
+        model: process.env.INTERVIEW_AI_REALTIME_MODEL || DEFAULT_REALTIME_MODEL,
+      },
+    },
+    { status: 200 },
+  );
+}
+
 export async function handleRealtimeToken(
   req: Request,
   deps: RealtimeTokenDeps,
@@ -200,10 +233,24 @@ export async function handleRealtimeToken(
   const voice = process.env.INTERVIEW_AI_REALTIME_VOICE || DEFAULT_REALTIME_VOICE;
 
   // OPENAI_API_KEY 欠落は config エラー。session を作る前に弾く（orphan を作らない）。
+  // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: ここも diagnostic を返す。
+  //   この分岐に来る = Preview runtime に OPENAI_API_KEY が見えていない（scope/redeploy 漏れ）。
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    devWarn('[interview-ai/realtime/token] OPENAI_API_KEY missing');
-    return NextResponse.json({ error: 'token-mint-failed' }, { status: 502 });
+    const diagnostic = {
+      reason: 'missing-openai-key' as const,
+      openaiStatus: null,
+      openaiBody: null,
+      model,
+    };
+    console.error(
+      '[interview-ai/realtime/token] MINT FAILED (temporary diagnostic)',
+      diagnostic,
+    );
+    return NextResponse.json(
+      { error: 'token-mint-failed', diagnostic },
+      { status: 502 },
+    );
   }
 
   const admin = deps.getAdmin();
