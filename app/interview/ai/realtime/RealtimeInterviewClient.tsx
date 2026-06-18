@@ -106,6 +106,8 @@ export function RealtimeInterviewClient() {
   const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false); // 多重 start 防止
   const sentInitialRef = useRef(false); // 初回 response.create の二重送信防止
+  const sessionIdRef = useRef<string | null>(null); // turn 保存 / complete 用
+  const assistantBufferRef = useRef(''); // AI 発話 delta の蓄積（done で確定保存）
   // connected 判定用の最新値（state は非同期のため ref で確実に評価）。
   const pcStateRef = useRef<RTCPeerConnectionState>('new');
   const dcOpenRef = useRef(false);
@@ -220,51 +222,75 @@ export function RealtimeInterviewClient() {
     }
   }, []);
 
-  // oai-events を UI 表示用に取り込む（STEP4: transcript と主要質問の進捗のみ。保存・課金は STEP5+）。
-  const handleEvent = useCallback((raw: string) => {
-    const ev = parseRealtimeEvent(raw);
-    switch (ev.kind) {
-      case 'assistant-delta':
-        setTranscripts((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.role === 'ai' && !last.final) {
-            const copy = prev.slice();
-            copy[copy.length - 1] = { ...last, text: last.text + ev.text };
-            return copy;
-          }
-          return [...prev, { role: 'ai', text: ev.text, final: false }];
-        });
-        break;
-      case 'assistant-done':
-        setTranscripts((prev) => {
-          for (let i = prev.length - 1; i >= 0; i -= 1) {
-            if (prev[i].role === 'ai' && !prev[i].final) {
+  // transcript を interview_ai_turns に逐次保存（fire-and-forget。失敗は会話を止めない）。
+  // 音声は送らない（transcript テキストのみ）。AI 発話=question / ユーザー発話=answer。
+  const saveTurn = useCallback((role: 'question' | 'answer', content: string) => {
+    const sessionId = sessionIdRef.current;
+    const text = content.trim();
+    if (!sessionId || !text) return;
+    void fetch('/api/interview-ai/realtime/turn', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, role, content: text }),
+    }).catch(() => {
+      /* 保存失敗は会話を止めない（次ターンで継続） */
+    });
+  }, []);
+
+  // oai-events を取り込む（STEP4: transcript / 進捗の表示, STEP5: 確定発話を turn 保存。課金は STEP7）。
+  const handleEvent = useCallback(
+    (raw: string) => {
+      const ev = parseRealtimeEvent(raw);
+      switch (ev.kind) {
+        case 'assistant-delta':
+          assistantBufferRef.current += ev.text;
+          setTranscripts((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'ai' && !last.final) {
               const copy = prev.slice();
-              copy[i] = { ...copy[i], final: true, text: ev.text ?? copy[i].text };
+              copy[copy.length - 1] = { ...last, text: last.text + ev.text };
               return copy;
             }
-          }
-          return ev.text
-            ? [...prev, { role: 'ai', text: ev.text, final: true }]
-            : prev;
-        });
-        break;
-      case 'user-final':
-        setTranscripts((prev) => [
-          ...prev,
-          { role: 'user', text: ev.text, final: true },
-        ]);
-        break;
-      case 'question-complete':
-        setCompletedQuestions((n) => {
-          const next = ev.questionNumber ?? n + 1;
-          return Math.min(Math.max(next, n), INTERVIEW_AI_MAX_ANSWER_TURNS);
-        });
-        break;
-      default:
-        break;
-    }
-  }, []);
+            return [...prev, { role: 'ai', text: ev.text, final: false }];
+          });
+          break;
+        case 'assistant-done': {
+          const finalText = ev.text ?? assistantBufferRef.current;
+          assistantBufferRef.current = '';
+          setTranscripts((prev) => {
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              if (prev[i].role === 'ai' && !prev[i].final) {
+                const copy = prev.slice();
+                copy[i] = { ...copy[i], final: true, text: finalText || copy[i].text };
+                return copy;
+              }
+            }
+            return finalText
+              ? [...prev, { role: 'ai', text: finalText, final: true }]
+              : prev;
+          });
+          saveTurn('question', finalText);
+          break;
+        }
+        case 'user-final':
+          setTranscripts((prev) => [
+            ...prev,
+            { role: 'user', text: ev.text, final: true },
+          ]);
+          saveTurn('answer', ev.text);
+          break;
+        case 'question-complete':
+          setCompletedQuestions((n) => {
+            const next = ev.questionNumber ?? n + 1;
+            return Math.min(Math.max(next, n), INTERVIEW_AI_MAX_ANSWER_TURNS);
+          });
+          break;
+        default:
+          break;
+      }
+    },
+    [saveTurn],
+  );
 
   const start = useCallback(async () => {
     if (startingRef.current) return;
@@ -275,6 +301,8 @@ export function RealtimeInterviewClient() {
     }
     startingRef.current = true;
     sentInitialRef.current = false;
+    sessionIdRef.current = null;
+    assistantBufferRef.current = '';
     setErrorKind(null);
     setEndedReason(null);
     setEventsReceived(0);
@@ -312,12 +340,14 @@ export function RealtimeInterviewClient() {
     }
     const clientSecret = String(body.clientSecret ?? '');
     const callUrl = String(body.callUrl ?? '');
+    const sessionId = String(body.sessionId ?? '');
     const maxDurationMs =
       typeof body.maxDurationMs === 'number' ? body.maxDurationMs : 12 * 60 * 1000;
-    if (!clientSecret || !callUrl) {
+    if (!clientSecret || !callUrl || !sessionId) {
       startingRef.current = false;
       return fail('token-failed');
     }
+    sessionIdRef.current = sessionId;
 
     // 2. マイク許可（SDP の前に取得 → 送出 track を確保）。
     setPhaseSafe('requesting-mic');
