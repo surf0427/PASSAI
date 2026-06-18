@@ -99,6 +99,7 @@ export function RealtimeInterviewClient() {
   const [phase, setPhase] = useState<ConnPhase>('idle');
   const [errorKind, setErrorKind] = useState<ErrorKind | null>(null);
   const [micPermission, setMicPermission] = useState<'prompt' | 'granted' | 'denied'>('prompt');
+  const [micRecheckFailed, setMicRecheckFailed] = useState(false);
   const [pcState, setPcState] = useState<RTCPeerConnectionState>('new');
   const [iceState, setIceState] = useState<RTCIceConnectionState>('new');
   const [dcOpen, setDcOpen] = useState(false);
@@ -230,6 +231,22 @@ export function RealtimeInterviewClient() {
     );
   }, []);
 
+  // マイク許可の再確認（Safari は一度拒否すると自動再プロンプトしないため明示ボタンで再試行）。
+  // ユーザー操作起点でのみ getUserMedia を呼ぶ。成功したら即 track.stop()（接続はしない）。
+  const recheckMic = useCallback(async () => {
+    setMicRecheckFailed(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop()); // 許可確認のみ → 即解放
+      setMicPermission('granted');
+      setErrorKind(null);
+      setPhaseSafe('idle'); // 「面接を始める」を再度使える状態に戻す
+    } catch {
+      setMicPermission('denied');
+      setMicRecheckFailed(true);
+    }
+  }, [setPhaseSafe]);
+
   // 接続成立後に 1 度だけ response.create を送り、AI 面接官の挨拶〜1問目を起動する。
   const maybeSendInitial = useCallback(() => {
     if (sentInitialRef.current) return;
@@ -330,6 +347,7 @@ export function RealtimeInterviewClient() {
     sessionIdRef.current = null;
     assistantBufferRef.current = '';
     setErrorKind(null);
+    setMicRecheckFailed(false);
     setEndedReason(null);
     setEventsReceived(0);
     setTranscripts([]);
@@ -637,10 +655,34 @@ export function RealtimeInterviewClient() {
           </p>
         )}
 
-        {phase === 'error' && errorKind && (
+        {phase === 'error' && errorKind && errorKind !== 'mic-denied' && (
           <p className="mt-3 text-sm text-rose-700 bg-rose-50 px-3 py-2 rounded-lg">
             {ERROR_TEXT[errorKind]}
           </p>
+        )}
+
+        {/* マイク拒否からの復帰 Alert（黄色）。realtime flag 有効時のみ表示（本コンポーネントは
+            enabled=false で無効カードを返すため、ここに来る時点で flag は有効）。 */}
+        {phase === 'error' && errorKind === 'mic-denied' && (
+          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-semibold text-amber-800">
+              マイクへのアクセスが許可されませんでした
+            </p>
+            <p className="mt-1 text-xs text-amber-700 leading-relaxed">
+              Safari をお使いの場合: アドレスバー左の「ぁあ」/ サイト設定アイコンをタップ →
+              「Webサイトの設定」→「マイク」を「許可」に変更してください。変更後、下のボタンで再確認できます。
+            </p>
+            <div className="mt-2">
+              <Button variant="secondary" size="sm" onClick={recheckMic}>
+                マイク許可を再確認する
+              </Button>
+            </div>
+            {micRecheckFailed && (
+              <p className="mt-2 text-xs text-amber-800 leading-relaxed">
+                Safariのアドレスバー左の設定からマイクを許可に変更して、ページを再読み込みしてください。
+              </p>
+            )}
+          </div>
         )}
 
         {phase === 'error' && errorKind === 'in-progress-exists' && staleSessionId && (

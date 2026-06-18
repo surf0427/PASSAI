@@ -145,6 +145,11 @@ export function InterviewAiClient() {
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('text');
   // 音声入力のサブ状態。idle: 録音前 or 文字起こし結果待ち / recording: 録音中 / transcribing: STT 中。
   const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  // マイク許可拒否（NotAllowedError 等）からの復帰 UI 用。Safari は一度拒否すると getUserMedia が
+  // 自動で再プロンプトしないため、明示的な「再確認」導線を出す。ページ表示時に自動取得はしない
+  // （ユーザーが「音声で回答」or「マイク許可を再確認する」を押した時だけ getUserMedia を呼ぶ）。
+  const [micDenied, setMicDenied] = useState(false);
+  const [micRecheckFailed, setMicRecheckFailed] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -653,7 +658,9 @@ export function InterviewAiClient() {
       return;
     }
     try {
+      // ユーザー操作（録音開始）起点でのみ getUserMedia を呼ぶ（自動取得はしない）。
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicDenied(false);
       streamRef.current = stream;
       // mimeType は決め打ちしない（Safari/iOS は audio/mp4、Chrome は audio/webm）。
       const recorder = new MediaRecorder(stream);
@@ -672,11 +679,42 @@ export function InterviewAiClient() {
       recorderRef.current = recorder;
       recorder.start();
       setVoiceStage('recording');
-    } catch {
+    } catch (err) {
       // getUserMedia 後に MediaRecorder 生成で失敗しても stream を取りこぼさない。
       stopRecordingResources();
       setInputMode('text');
-      setErrorMsg('マイクへのアクセスが許可されませんでした。テキストで回答してください。');
+      const name = (err as { name?: string })?.name ?? '';
+      if (
+        name === 'NotAllowedError' ||
+        name === 'PermissionDeniedError' ||
+        name === 'SecurityError'
+      ) {
+        // マイク拒否 → 復帰用 Alert（黄色）を出す。汎用 errorMsg は出さない（Alert 側で案内）。
+        setMicDenied(true);
+        setMicRecheckFailed(false);
+        setErrorMsg(null);
+      } else {
+        setErrorMsg('マイクへのアクセスが許可されませんでした。テキストで回答してください。');
+      }
+    }
+  }
+
+  // マイク許可の再確認（Safari は一度拒否すると自動再プロンプトしないため、明示ボタンで再試行）。
+  // ユーザー操作起点でのみ getUserMedia を呼ぶ。成功したら即 track.stop()（録音はしない）。
+  async function recheckMic() {
+    setMicRecheckFailed(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 許可確認のためだけに取得 → 即解放。
+      stream.getTracks().forEach((t) => t.stop());
+      setMicDenied(false);
+      setErrorMsg(null);
+      // 音声回答ボタンを再度使える状態に戻す。
+      setInputMode('voice');
+      setVoiceStage('idle');
+    } catch {
+      // まだ拒否のまま → Safari の再設定＋再読み込みを案内する。
+      setMicRecheckFailed(true);
     }
   }
 
@@ -1106,6 +1144,34 @@ export function InterviewAiClient() {
                       <span className="text-xs text-gray-500">
                         音声読み上げに失敗しました。質問文を読んで回答してください。
                       </span>
+                    )}
+                  </div>
+                )}
+
+                {/* マイク拒否からの復帰 Alert（黄色）。sttAvailable（= SOURCE_TYPES_ENABLED かつ録音対応）
+                    のときだけ表示。ページ表示時に自動 getUserMedia はしない（ボタン押下時のみ）。 */}
+                {micDenied && sttAvailable && (
+                  <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                    <p className="text-sm font-semibold text-amber-800">
+                      マイクへのアクセスが許可されませんでした
+                    </p>
+                    <p className="mt-1 text-xs text-amber-700 leading-relaxed">
+                      Safari をお使いの場合: アドレスバー左の「ぁあ」/ サイト設定アイコンをタップ →
+                      「Webサイトの設定」→「マイク」を「許可」に変更してください。変更後、下のボタンで再確認できます。
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={recheckMic}
+                        className="text-sm text-amber-800 border border-amber-400 hover:border-amber-500 hover:bg-amber-100 font-semibold px-4 py-2 rounded-lg transition-colors"
+                      >
+                        マイク許可を再確認する
+                      </button>
+                    </div>
+                    {micRecheckFailed && (
+                      <p className="mt-2 text-xs text-amber-800 leading-relaxed">
+                        Safariのアドレスバー左の設定からマイクを許可に変更して、ページを再読み込みしてください。
+                      </p>
                     )}
                   </div>
                 )}
