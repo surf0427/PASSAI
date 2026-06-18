@@ -48,6 +48,10 @@ import {
   REALTIME_MAX_DURATION_MS,
   REALTIME_TOKEN_TTL_SECONDS,
 } from '@/lib/interviewAi/realtime/constants';
+import {
+  buildRealtimeInstructions,
+  REALTIME_TOOLS,
+} from '@/lib/interviewAi/realtime/instructions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -268,12 +272,20 @@ export async function handleRealtimeToken(
     );
   }
 
-  // 6. OpenAI client_secret を mint。失敗時は作成済み session を abandoned に戻す。
+  // 6. OpenAI client_secret を mint。session 設定（instructions / tools）は server で固定する
+  //    （client は改竄不可）。失敗時は作成済み session を abandoned に戻す。
+  const instructions = buildRealtimeInstructions({
+    interviewType,
+    targetRef,
+    sourceContext,
+  });
   const minted = await mintClientSecret({
     apiKey,
     model,
     voice,
     safetyId: safetyIdentifier(userId),
+    instructions,
+    tools: REALTIME_TOOLS,
   });
 
   if (!minted.ok) {
@@ -346,24 +358,23 @@ type MintResult =
   | { ok: true; value: string; expiresAt: number | null }
   | { ok: false };
 
-// STEP1 ベースライン instructions（STEP3 で 5 問アーク/プロンプトに差し替え）。
-const BASELINE_INSTRUCTIONS =
-  'あなたは大学入試の面接官です。日本語で、落ち着いた丁寧な口調で面接を進めてください。' +
-  '雑談はせず、面接官として質問を行います。受験生が話している間は遮らず、軽い相槌のみ可とします。';
-
 async function mintClientSecret(args: {
   apiKey: string;
   model: string;
   voice: string;
   safetyId: string;
+  instructions: string;
+  tools: unknown[];
 }): Promise<MintResult> {
-  // session 設定は mint 時に server で固定する（client は改竄不可）。STEP3 で instructions/tools を拡充。
+  // session 設定は mint 時に server で固定する（client は改竄不可）。
+  // instructions（5 問アーク面接官）/ tools（mark_main_question_complete）は STEP3 で注入。
   const payload = {
     expires_after: { anchor: 'created_at', seconds: REALTIME_TOKEN_TTL_SECONDS },
     session: {
       type: 'realtime',
       model: args.model,
-      instructions: BASELINE_INSTRUCTIONS,
+      instructions: args.instructions,
+      tools: args.tools,
       audio: {
         input: {
           transcription: { model: 'whisper-1', language: 'ja' },
