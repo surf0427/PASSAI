@@ -42,6 +42,8 @@ type ConnPhase =
   | 'connecting'
   | 'connected'
   | 'closing'
+  | 'completing'
+  | 'result'
   | 'ended'
   | 'error';
 
@@ -54,9 +56,17 @@ type ErrorKind =
   | 'token-failed'
   | 'mic-denied'
   | 'mic-unavailable'
-  | 'connect-failed';
+  | 'connect-failed'
+  | 'complete-failed';
 
 type RemoteAudio = 'none' | 'playing' | 'autoplay-blocked';
+
+type RealtimeResult = {
+  overall: string;
+  strengths: string[];
+  improvements: string[];
+  nextPractice: string[];
+};
 
 const CONNECT_TIMEOUT_MS = 15_000;
 
@@ -70,6 +80,7 @@ const ERROR_TEXT: Record<ErrorKind, string> = {
   'mic-denied': 'マイクの使用が許可されませんでした。ブラウザの設定でマイクを許可してください。',
   'mic-unavailable': 'マイクが見つからない、または使用中です。接続を確認して再度お試しください。',
   'connect-failed': '接続に失敗しました。ネットワークを確認して再度お試しください。',
+  'complete-failed': '結果の生成に失敗しました。もう一度お試しください。',
 };
 
 // flag 判定（hydration 安全）: SSR は env のみ、client は env || ?realtime=1。
@@ -96,6 +107,7 @@ export function RealtimeInterviewClient() {
   const [endedReason, setEndedReason] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [completedQuestions, setCompletedQuestions] = useState(0);
+  const [result, setResult] = useState<RealtimeResult | null>(null);
 
   // 接続リソース（render に依存しない可変参照）。
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -108,6 +120,7 @@ export function RealtimeInterviewClient() {
   const sentInitialRef = useRef(false); // 初回 response.create の二重送信防止
   const sessionIdRef = useRef<string | null>(null); // turn 保存 / complete 用
   const assistantBufferRef = useRef(''); // AI 発話 delta の蓄積（done で確定保存）
+  const pendingSavesRef = useRef<Promise<unknown>[]>([]); // 進行中の turn 保存（complete 前に待つ）
   // connected 判定用の最新値（state は非同期のため ref で確実に評価）。
   const pcStateRef = useRef<RTCPeerConnectionState>('new');
   const dcOpenRef = useRef(false);
@@ -118,51 +131,57 @@ export function RealtimeInterviewClient() {
     setPhase(p);
   }, []);
 
-  // ── teardown（全終了経路で冪等に呼ぶ。マイクを確実に解放する） ──────────────
+  // ── WebRTC リソースを解放する（phase は変えない。冪等。マイクを確実に止める） ──────
+  // complete 生成時にも接続だけ閉じる（DB session は in_progress のまま complete が completed にする）。
+  const closeConnection = useCallback(() => {
+    if (connectTimerRef.current) {
+      clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    }
+    if (maxDurationTimerRef.current) {
+      clearTimeout(maxDurationTimerRef.current);
+      maxDurationTimerRef.current = null;
+    }
+    try {
+      dcRef.current?.close();
+    } catch {
+      /* noop */
+    }
+    try {
+      pcRef.current?.getSenders().forEach((s) => s.track?.stop());
+    } catch {
+      /* noop */
+    }
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* noop */
+    }
+    try {
+      pcRef.current?.close();
+    } catch {
+      /* noop */
+    }
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+    }
+    dcRef.current = null;
+    pcRef.current = null;
+    streamRef.current = null;
+    dcOpenRef.current = false;
+    startingRef.current = false;
+    setDcOpen(false);
+    setRemoteAudio('none');
+  }, []);
+
+  // ── teardown（全終了経路で冪等に呼ぶ）。接続解放 + phase 遷移。 ──────────────
   const teardown = useCallback(
     (next: 'ended' | 'error', reason?: string) => {
-      if (connectTimerRef.current) {
-        clearTimeout(connectTimerRef.current);
-        connectTimerRef.current = null;
-      }
-      if (maxDurationTimerRef.current) {
-        clearTimeout(maxDurationTimerRef.current);
-        maxDurationTimerRef.current = null;
-      }
-      try {
-        dcRef.current?.close();
-      } catch {
-        /* noop */
-      }
-      try {
-        pcRef.current?.getSenders().forEach((s) => s.track?.stop());
-      } catch {
-        /* noop */
-      }
-      try {
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-      } catch {
-        /* noop */
-      }
-      try {
-        pcRef.current?.close();
-      } catch {
-        /* noop */
-      }
-      if (audioRef.current) {
-        audioRef.current.srcObject = null;
-      }
-      dcRef.current = null;
-      pcRef.current = null;
-      streamRef.current = null;
-      dcOpenRef.current = false;
-      startingRef.current = false;
-      setDcOpen(false);
-      setRemoteAudio('none');
+      closeConnection();
       if (reason) setEndedReason(reason);
       setPhaseSafe(next);
     },
-    [setPhaseSafe],
+    [closeConnection, setPhaseSafe],
   );
 
   const fail = useCallback(
@@ -228,12 +247,17 @@ export function RealtimeInterviewClient() {
     const sessionId = sessionIdRef.current;
     const text = content.trim();
     if (!sessionId || !text) return;
-    void fetch('/api/interview-ai/realtime/turn', {
+    const p = fetch('/api/interview-ai/realtime/turn', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, role, content: text }),
     }).catch(() => {
       /* 保存失敗は会話を止めない（次ターンで継続） */
+    });
+    // complete 前に「保存中の最後のターン」を取りこぼさないよう追跡する。
+    pendingSavesRef.current.push(p);
+    void p.finally(() => {
+      pendingSavesRef.current = pendingSavesRef.current.filter((x) => x !== p);
     });
   }, []);
 
@@ -308,6 +332,8 @@ export function RealtimeInterviewClient() {
     setEventsReceived(0);
     setTranscripts([]);
     setCompletedQuestions(0);
+    setResult(null);
+    pendingSavesRef.current = [];
 
     // 1. token 取得（quota は既存 useQuotaDialog で処理）。
     setPhaseSafe('requesting-token');
@@ -434,6 +460,56 @@ export function RealtimeInterviewClient() {
     teardown('ended', 'user');
   }, [setPhaseSafe, teardown]);
 
+  // 面接を終えて結果を見る: 接続を閉じ、保存中の turn を待ってから既存 complete を呼ぶ。
+  // 既存 /api/interview-ai/complete をそのまま再利用（realtime session でも turns から生成可能）。
+  const showResult = useCallback(async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    // 接続だけ閉じる（DB session は in_progress のまま。complete が completed にする）。
+    closeConnection();
+    setPhaseSafe('completing');
+    // 直近の turn 保存（fire-and-forget）が complete の listTurns に間に合うよう待つ。
+    try {
+      await Promise.allSettled(pendingSavesRef.current);
+    } catch {
+      /* noop */
+    }
+    let res: Response;
+    try {
+      res = await fetch('/api/interview-ai/complete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+    } catch {
+      setErrorKind('complete-failed');
+      setPhaseSafe('error');
+      return;
+    }
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (res.ok && body.status === 'completed') {
+      const feedback = (body.feedback ?? {}) as Record<string, unknown>;
+      setResult({
+        overall:
+          typeof feedback.overallEvaluation === 'string'
+            ? feedback.overallEvaluation
+            : '',
+        strengths: Array.isArray(body.strengths) ? (body.strengths as string[]) : [],
+        improvements: Array.isArray(body.improvements)
+          ? (body.improvements as string[])
+          : [],
+        nextPractice: Array.isArray(body.nextPractice)
+          ? (body.nextPractice as string[])
+          : [],
+      });
+      setPhaseSafe('result');
+    } else {
+      // 失敗時は session を in_progress のまま残す（再試行可能）。
+      setErrorKind('complete-failed');
+      setPhaseSafe('error');
+    }
+  }, [closeConnection, setPhaseSafe]);
+
   // unmount / ページ離脱（タブ閉じ・リロード）でも teardown（マイク確実解放）。
   useEffect(() => {
     const onPageHide = () => teardown('ended', 'pagehide');
@@ -470,12 +546,20 @@ export function RealtimeInterviewClient() {
             <p className="text-xs text-slate-500 mt-0.5">{phaseLabel(phase)}</p>
           </div>
           <div className="flex gap-2">
-            {(phase === 'idle' || phase === 'ended' || phase === 'error') && (
-              <Button onClick={start}>面接を始める</Button>
+            {(phase === 'idle' ||
+              phase === 'ended' ||
+              phase === 'error' ||
+              phase === 'result') && (
+              <Button onClick={start}>
+                {phase === 'idle' ? '面接を始める' : 'もう一度面接する'}
+              </Button>
+            )}
+            {phase === 'connected' && (
+              <Button onClick={showResult}>面接を終えて結果を見る</Button>
             )}
             {(connecting || phase === 'connected') && (
               <Button variant="secondary" onClick={endSession}>
-                終了する
+                中断する
               </Button>
             )}
           </div>
@@ -506,9 +590,19 @@ export function RealtimeInterviewClient() {
           </div>
         )}
 
+        {phase === 'connected' && completedQuestions >= INTERVIEW_AI_MAX_ANSWER_TURNS && (
+          <p className="mt-3 text-sm text-amber-700 bg-amber-50 px-3 py-2 rounded-lg">
+            主要質問が一通り終わりました。「面接を終えて結果を見る」で講評を生成できます。
+          </p>
+        )}
+
+        {phase === 'completing' && (
+          <p className="mt-3 text-sm text-slate-600">結果を生成しています…</p>
+        )}
+
         {phase === 'ended' && (
           <p className="mt-3 text-sm text-slate-600">
-            面接を終了しました{endedReason === 'maxduration' ? '（時間上限に達しました）' : ''}。
+            面接を{endedReason === 'maxduration' ? '終了しました（時間上限に達しました）' : '中断しました'}。
           </p>
         )}
 
@@ -518,6 +612,19 @@ export function RealtimeInterviewClient() {
           </p>
         )}
       </Card>
+
+      {/* 結果（既存 complete route の出力を表示） */}
+      {phase === 'result' && result && (
+        <Card padding="md">
+          <p className="text-sm font-bold text-slate-800 mb-2">面接フィードバック</p>
+          {result.overall && (
+            <p className="text-sm text-slate-700 leading-relaxed mb-3">{result.overall}</p>
+          )}
+          <ResultList title="良かった点" items={result.strengths} />
+          <ResultList title="改善点" items={result.improvements} />
+          <ResultList title="次の練習" items={result.nextPractice} />
+        </Card>
+      )}
 
       {/* 文字起こし（live transcript）。STEP4 は表示のみ。保存は STEP5。 */}
       {(transcripts.length > 0 || phase === 'connected') && (
@@ -564,6 +671,20 @@ export function RealtimeInterviewClient() {
   );
 }
 
+function ResultList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-bold text-slate-500 mb-1">{title}</p>
+      <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700">
+        {items.map((it, i) => (
+          <li key={i}>{it}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-2">
@@ -587,6 +708,10 @@ function phaseLabel(phase: ConnPhase): string {
       return '接続済み';
     case 'closing':
       return '終了処理中…';
+    case 'completing':
+      return '結果生成中…';
+    case 'result':
+      return '結果';
     case 'ended':
       return '終了';
     case 'error':
