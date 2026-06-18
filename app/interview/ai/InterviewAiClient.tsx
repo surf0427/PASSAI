@@ -1148,9 +1148,13 @@ export function InterviewAiClient() {
                   </div>
                 )}
 
-                {/* マイク拒否からの復帰 Alert（黄色）。sttAvailable（= SOURCE_TYPES_ENABLED かつ録音対応）
-                    のときだけ表示。ページ表示時に自動 getUserMedia はしない（ボタン押下時のみ）。 */}
-                {micDenied && sttAvailable && (
+                {/* マイク拒否からの復帰 Alert（黄色）。
+                    表示条件は STT API 可否（sttAvailable）ではなく、
+                    SOURCE_TYPES_ENABLED（sourceTypesEnabled）かつブラウザのマイク対応（mediaSupported）に紐づける。
+                    理由: これはブラウザのマイク権限状態に対する復帰 UI であり、sttAvailable が
+                    内部状態 / 一時エラーで false になっても Safari 設定を直す導線を失わせないため。
+                    ページ表示時に自動 getUserMedia はしない（ボタン押下時のみ）。 */}
+                {sourceTypesEnabled && mediaSupported && micDenied && (
                   <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
                     <p className="text-sm font-semibold text-amber-800">
                       マイクへのアクセスが許可されませんでした
