@@ -16,14 +16,16 @@
     "qa:diagnosisTaxonomy": "npx tsx scripts/diagnosis-taxonomy-qa.ts",
     "qa:diagnosisScoring": "npx tsx scripts/diagnosis-scoring-qa.ts",
     "qa:examDiagnosis": "npx tsx scripts/exam-diagnosis-scoring-qa.ts",
-    "qa:diagnosis": "npm run qa:diagnosisScoring && npm run qa:diagnosisTaxonomy && npm run qa:examDiagnosis"
+    "qa:diagnosis": "npm run qa:diagnosisScoring && npm run qa:diagnosisTaxonomy && npm run qa:examDiagnosis",
+    "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
     "@sentry/nextjs": "^10.56.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
-    "next": "16.2.4",
+    "next": "16.2.9",
+    "pdfjs-dist": "^6.0.227",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",

@@ -28,7 +28,9 @@ export const QUOTA_FEATURES = [
   'essay', // 小論文添削
   'self-pr', // 自己PR添削 (route 未実装。quota だけ予約)
   'interview', // 面接フィードバック (既存: interview-feedback / interview-questions)
-  'interview-ai', // 面接AI (リアルタイム面接セッション。STEP-INTERVIEW-AI-PR4)
+  'interview-ai', // 面接AI (ターン制セッション。STEP-INTERVIEW-AI-PR4)
+  'interview-ai-realtime', // リアルタイム音声面接 (WebRTC。Premium 限定。STEP-INTERVIEW-AI-REALTIME-PR1)
+  'presentation', // プレゼン (録画→AI評価→発表後AI質問。Premium 限定。STEP-PRESENTATION-PR1)
   'tutor', // Tutor
 ] as const;
 
@@ -58,6 +60,8 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     'self-pr': 0,
     interview: 0,
     'interview-ai': 0,
+    'interview-ai-realtime': 0,
+    presentation: 0,
     tutor: 0,
   },
   basic: {
@@ -72,6 +76,12 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     // 面接AI: 1 セッション 1 消費。STT + 逐次ターン生成で原価が面接フィードバックより
     // 高いため、basic は 10 回/月（pr0_design.md §5.1）。
     'interview-ai': 10,
+    // リアルタイム音声面接: WebRTC + realtime API は原価が桁違いに高いため Premium 限定。
+    // basic は 0（利用不可）。段階開放方針（realtime pr0_design.md §5 / pr1_token.md §7）。
+    'interview-ai-realtime': 0,
+    // プレゼン: Premium 限定機能のため basic は 0（利用不可）。
+    // 課金単位は 1 セッション 1 消費（初回 AI 評価成功時）。docs/presentation/pr0_design.md §8。
+    presentation: 0,
     tutor: 500,
   },
   premium: {
@@ -84,6 +94,12 @@ export const QUOTAS: Record<EffectivePlan, Record<QuotaFeature, QuotaValue>> = {
     interview: 100,
     // 面接AI: premium は basic 10 の 3 倍枠で 30 回/月（pr0_design.md §5.1）。
     'interview-ai': 30,
+    // リアルタイム音声面接: 初期は保守的に 5 回/月（高原価 + 段階開放）。値改定時は本テーブルと
+    // 料金表記（PricingSection）を同時更新する。realtime pr1_token.md §7。
+    'interview-ai-realtime': 5,
+    // プレゼン: Premium 限定。動画 Storage 原価が乗るため面接AI(30)より控えめに 20 回/月（暫定）。
+    // 値改定時は本テーブルと料金表記（PricingSection）を同時更新する。docs/presentation/pr0_design.md §8。
+    presentation: 20,
     tutor: 2000,
   },
 };
@@ -130,6 +146,16 @@ export const FEATURE_ROUTE_KEYS: Record<QuotaFeature, readonly string[]> = {
   // status='ok' 1 件（usage_recorded compare-and-set による冪等計上）。月次 ok 件数 = 当月
   // セッション数（pr0_design.md §5.2）。
   'interview-ai': ['interview-ai'],
+  // リアルタイム音声面接: 1 セッション = usage_records.route='interview-ai-realtime' の status='ok'
+  // 1 件（interview_ai_sessions.usage_recorded compare-and-set による冪等計上）。計上は最初の有効
+  // ユーザー発話成立時の 1 箇所のみ（realtime pr0_design.md §5 / pr1_token.md §6・STEP7）。
+  // ターン制 'interview-ai' とは別 route key にして枠・原価を分離する。
+  'interview-ai-realtime': ['interview-ai-realtime'],
+  // プレゼン: 録画→AI評価→発表後AI質問の 1 セッション = usage_records.route='presentation' の
+  // status='ok' 1 件（presentation_sessions.usage_recorded compare-and-set による冪等計上）。
+  // 計上は初回 AI 評価成功時の 1 箇所のみ。アップロード/文字起こし/録り直しでは消費しない。
+  // 月次 ok 件数 = 当月セッション数（docs/presentation/pr0_design.md §8）。
+  presentation: ['presentation'],
   // Tutor は 1 route のみ
   tutor: ['tutor'],
 };

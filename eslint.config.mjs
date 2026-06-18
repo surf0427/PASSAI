@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 一時的なデバッグ用スクリプト（.tmp_ 接頭辞）は lint 対象外（リポジトリ管理対象でない）。
+    ".tmp_*",
   ]),
 ]);
 

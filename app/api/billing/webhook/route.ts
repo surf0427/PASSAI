@@ -245,7 +245,10 @@ function mapSyncResult(
       return { kind: 'transient-error', message: result.message };
     default: {
       const _exhaustive: never = result;
-      return { kind: 'transient-error', message: 'unhandled sync result' };
+      return {
+        kind: 'transient-error',
+        message: `unhandled sync result: ${String(_exhaustive)}`,
+      };
     }
   }
 }

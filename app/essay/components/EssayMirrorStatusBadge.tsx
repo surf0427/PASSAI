@@ -29,7 +29,9 @@ export function EssayMirrorStatusBadge() {
   const [status, setStatus] = useState<EssayMirrorStatus>('idle');
 
   useEffect(() => {
-    // マウント時点の現在値に同期してから購読する（取りこぼし防止）。
+    // マウント時点の現在値に同期してから購読する（取りこぼし防止）。外部ストアとの
+    // 同期目的の意図的な初期化（挙動は変更しない）。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStatus(getEssayMirrorStatus());
     return subscribeEssayMirrorStatus(setStatus);
   }, []);
@@ -38,6 +40,8 @@ export function EssayMirrorStatusBadge() {
   const [showSaved, setShowSaved] = useState(false);
   useEffect(() => {
     if (status !== 'saved') {
+      // 'saved' 以外では即座に非表示へ戻す意図的な同期（挙動は変更しない）。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowSaved(false);
       return;
     }

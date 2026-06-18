@@ -28,6 +28,7 @@ import { ScoreLineChart } from './ScoreLineChart';
 import { EmptyState } from './EmptyState';
 import { BillingCard } from './BillingCard';
 import { UsageStatusCard } from './UsageStatusCard';
+import { PresentationGrowthCard } from './PresentationGrowthCard';
 import { LoginNudge } from './LoginNudge';
 import { LogoutButton } from './LogoutButton';
 
@@ -110,6 +111,11 @@ export default function MyPage() {
           BillingCard と同じく empty-state の外。Free ユーザーには内部で
           自動的に何も描画されない。 */}
       <UsageStatusCard />
+
+      {/* ── プレゼン成長レポート ───────────────────────────
+          empty-state 分岐の外側に置く: Premium のプレゼン履歴は localStorage 由来の
+          活動有無とは独立して見せたいため。Premium 以外には内部で何も描画されない。 */}
+      <PresentationGrowthCard />
 
       {showEmptyState ? (
         <div className="mt-8">

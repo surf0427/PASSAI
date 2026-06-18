@@ -77,6 +77,9 @@ export async function GET(req: Request) {
         needsRetry,
         answerCount,
         done,
+        // 回答済みターンの復元用（表示専用）。answerCount は引き続き質問数の単一情報源（client はこれを seed）。
+        // turns は「これまでのやり取り」表示の再構築にのみ使う（STEP2 req ②）。順序は turn_index 昇順。
+        turns: turns.map((t) => ({ role: t.role, content: t.content })),
       },
       200,
     );

@@ -56,7 +56,34 @@ export async function createSession(input: {
   return { kind: 'error', error: String(body.error ?? 'session-create-failed') };
 }
 
+// ── 現在の未完了セッション取得（ページ表示時の再開検出 / STEP2 req ①） ─────────
+//   GET /api/interview-ai/session。in_progress があれば session、無ければ null。
+//   recordUsage も quota 消費もしない read-only。server を単一情報源として復元する。
+export type ActiveSessionResult =
+  | { kind: 'active'; session: AiSession }
+  | { kind: 'none' }
+  | { kind: 'error'; error: string };
+
+export async function getActiveSession(): Promise<ActiveSessionResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/interview-ai/session', { method: 'GET', cache: 'no-store' });
+  } catch {
+    return { kind: 'error', error: 'active-fetch-failed' };
+  }
+  const body = await parseJson(res);
+  if (res.ok) {
+    return body.session
+      ? { kind: 'active', session: body.session as AiSession }
+      : { kind: 'none' };
+  }
+  if (res.status === 401) return { kind: 'none' }; // 未認証はサイレント（再開導線を出さないだけ）
+  return { kind: 'error', error: String(body.error ?? 'active-fetch-failed') };
+}
+
 // ── ターン状態（再開用） ─────────────────────────────────────────
+export type SessionTurn = { role: 'question' | 'answer'; content: string };
+
 export type SessionState = {
   sessionId: string;
   source: 'voice' | 'text';
@@ -67,6 +94,8 @@ export type SessionState = {
   needsRetry: boolean;
   answerCount: number;
   done: boolean;
+  // 回答済みターン（表示専用の復元に使う。質問数の正は answerCount）。
+  turns?: SessionTurn[];
 };
 
 export type StateResult =

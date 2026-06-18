@@ -54,7 +54,10 @@ export default function AccountPage() {
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
 
   useEffect(() => {
+    // profile は非同期ロード。未編集（value===''）のときだけ初期値を一度反映し、
+    // 以後はユーザー入力を尊重する（意図的な同期。挙動は変更しない）。
     if (profile?.displayUserId && value === '') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setValue(profile.displayUserId);
     }
   }, [profile, value]);

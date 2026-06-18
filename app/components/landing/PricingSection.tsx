@@ -203,6 +203,7 @@ export function PricingSection() {
               '面接練習',
             ]}
             extras={[
+              'プレゼン練習（録画 → AI評価 → 発表後Q&A）',
               'AI利用上限を大幅緩和予定',
               '今後の追加機能も優先対応予定',
             ]}

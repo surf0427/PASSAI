@@ -24,6 +24,10 @@ export const metadata: Metadata = {
 };
 
 const ENACTED_AT = '2026年6月2日';
+// プレゼン練習の録画動画・発表資料を原則 90 日で自動削除する旨、および発表後 Q&A
+// 練習（質問・回答・AI フィードバック）をアカウント有効期間 保存する旨の追記に伴う改定。
+// (文字起こし・AI 評価結果はアカウント有効期間の保存を維持。)
+const LAST_REVISED_AT = '2026年6月17日';
 
 export default function PrivacyPage() {
   return (
@@ -38,7 +42,11 @@ export default function PrivacyPage() {
 
         <PageHeader title="プライバシーポリシー" />
 
-        <p className="text-sm text-slate-500 mb-8">制定日: {ENACTED_AT}</p>
+        <p className="text-sm text-slate-500 mb-8">
+          制定日: {ENACTED_AT}
+          <span className="mx-2">/</span>
+          最終改定日: {LAST_REVISED_AT}
+        </p>
 
         <div className="space-y-3 text-slate-700 leading-relaxed mb-10">
           <p className="text-sm">
@@ -99,6 +107,27 @@ export default function PrivacyPage() {
                 </ul>
               </li>
               <li>
+                <strong>プレゼン練習の録画・評価データ</strong> (Premium 限定機能):
+                <ul className="list-disc pl-5 mt-1 space-y-0.5 text-slate-600">
+                  <li>
+                    録画動画 (映像・音声を含む)。発表の見返しおよび AI 評価の補助
+                    データとして保存します。
+                  </li>
+                  <li>録画音声から生成した文字起こしテキスト</li>
+                  <li>
+                    AI によるカテゴリ評価結果 (構成力・説得力・具体性 等)、講評
+                  </li>
+                  <li>
+                    発表後 Q&A 練習における質問、入力した回答内容、および AI による
+                    フィードバック (学習履歴として保存します)
+                  </li>
+                </ul>
+                <span className="text-slate-500">
+                  ※ 文字起こしのために録画音声を外部の音声認識サービスへ送信しますが、
+                  送信した音声ファイル自体は保存せず、文字起こしテキストのみを保存します。
+                </span>
+              </li>
+              <li>
                 <strong>アクセスログ</strong>: IPアドレス、ブラウザ種別、リクエスト日時、
                 参照ページ等 (ホスティング基盤および Web アプリケーションのサーバが
                 技術的に取得する情報)
@@ -144,7 +173,13 @@ export default function PrivacyPage() {
               <li>
                 <strong>Anthropic, PBC</strong> (米国) — AI 推論 (Claude API)。
                 取扱情報: ユーザーが AI 機能に入力した文章 (志望理由書、小論文、
-                自己分析の回答、面接質問・回答、Tutor への質問等)
+                自己分析の回答、面接質問・回答、Tutor への質問、プレゼンの文字起こし・
+                発表内容・発表後 Q&A の回答等)
+              </li>
+              <li>
+                <strong>OpenAI, L.L.C.</strong> (米国) — 音声認識 (文字起こし)。
+                取扱情報: 面接 AI・プレゼン練習の録音／録画から抽出した音声データ
+                (文字起こしのために送信。文字起こし後の音声ファイルは保存しません)
               </li>
               <li>
                 <strong>Supabase, Inc.</strong> (米国) — データベースおよび認証基盤。
@@ -219,6 +254,22 @@ export default function PrivacyPage() {
               <li>
                 <strong>ユーザーが入力した文章</strong>: ユーザーがアカウントを利用して
                 いる期間、ブラウザ側のローカルストレージおよびサーバ側のデータベースに保存
+              </li>
+              <li>
+                <strong>プレゼン練習の録画動画・発表資料</strong>: 録画動画および
+                アップロードされた発表資料 (PDF・画像) は、クラウドストレージに保存され
+                ご本人のみが閲覧できます。これらのファイルは、ストレージ費用および
+                プライバシー保護の観点から、<strong>作成からおおむね 90 日が経過すると
+                自動的に削除されます</strong>。削除後は録画の再生・資料の閲覧はできなくなり、
+                結果画面・履歴ではその旨を表示します。なお、ユーザーは 90 日の経過を待たず
+                履歴等から手動で削除することもできます。
+              </li>
+              <li>
+                <strong>プレゼン練習の文字起こし・AI 評価結果・発表後 Q&A</strong>:
+                録画動画・発表資料が自動削除された後も、文字起こしテキスト、AI 評価結果、
+                および発表後 Q&A 練習の質問・回答・AI フィードバックは、アカウントが有効で
+                ある期間、保存します (結果・履歴・学習の振り返りのため)。ユーザーから
+                第 9 条に基づく削除請求があった場合は、これらも削除します。
               </li>
               <li>
                 <strong>決済情報</strong>: Stripe, Inc. 側で同社のポリシーおよび関連法令

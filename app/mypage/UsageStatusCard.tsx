@@ -22,6 +22,7 @@ import { useEffect, useState } from 'react';
 
 import { useCurrentUserId, useProfile } from '@/app/components/AuthProvider';
 import { Card } from '@/components/ui/Card';
+import { isRealtimeInterviewEnabledClient } from '@/lib/interviewAi/realtimeFeatureFlag';
 import { PLANS } from '@/lib/billing/plans';
 import {
   QUOTAS,
@@ -44,6 +45,8 @@ const FEATURE_LABELS: Record<QuotaFeature, string> = {
   'self-pr': '自己PR',
   interview: '面接',
   'interview-ai': '面接AI',
+  'interview-ai-realtime': 'リアルタイム音声面接',
+  presentation: 'プレゼン',
   tutor: 'Tutor',
 };
 
@@ -86,7 +89,10 @@ export function UsageStatusCard() {
   const plan = summary.plan;
 
   // limit = 'unlimited' / 0 は表示対象外
+  // リアルタイム音声面接は未公開機能のため、flag OFF（本番）では行を出さない（早期露出を防ぐ）。
+  const realtimeVisible = isRealtimeInterviewEnabledClient();
   const rows = QUOTA_FEATURES.flatMap((feature) => {
+    if (feature === 'interview-ai-realtime' && !realtimeVisible) return [];
     const u = summary.quotas[feature];
     if (!u) return [];
     if (u.limit === 'unlimited') return [];

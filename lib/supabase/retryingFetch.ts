@@ -159,7 +159,6 @@ export const retryingFetch: typeof fetch = async (input, init) => {
   const isRequest = input instanceof Request;
 
   let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const started = Date.now();
     try {

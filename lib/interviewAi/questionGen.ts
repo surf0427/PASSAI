@@ -4,6 +4,7 @@ import { anthropic } from '@/lib/ai';
 import { logAiUsage } from '@/lib/aiUsageLog';
 import {
   INTERVIEW_AI_FOLLOWUP_LOG_ROUTE,
+  INTERVIEW_AI_MAX_ANSWER_TURNS,
   INTERVIEW_AI_MAX_TOKENS,
   INTERVIEW_AI_MODEL,
   INTERVIEW_AI_SEED_LOG_ROUTE,
@@ -44,7 +45,9 @@ function buildSystem(type: InterviewType, kind: 'seed' | 'followup'): string {
     `【方針】${questionGuidanceFor(type)}`,
     toneGuidanceFor(type),
     QUESTION_QUALITY_RULES,
-    '出力は質問文そのものだけ。前置き・解説・番号・記号・引用符は付けない。1文・日本語。',
+    '【文体】受験面接として自然な口語の日本語。質問は原則1文、長くても2文まで。' +
+      '採点者目線の説明・長い前置き・箇条書き・番号・記号・引用符は付けない。' +
+      '1つの発話に質問を2つ以上混ぜない。出力は質問文そのものだけ。',
   ].join('\n');
 }
 
@@ -75,6 +78,43 @@ function buildTranscript(turns: PriorTurn[]): string {
   return turns
     .map((t) => (t.role === 'question' ? `面接官: ${t.content}` : `受験生: ${t.content}`))
     .join('\n');
+}
+
+// 5問の観点設計（総合型選抜の目安 / req ③）。観点（論点・切り口）の重複を避け、深さを段階的に上げる。
+// 順番は絶対固定ではなく、面接タイプの方針・受験生のデータ・直前回答に合わせて調整してよい。
+const QUESTION_ARC: readonly string[] = [
+  '志望理由の核心。なぜその分野・学問なのか、関心の源にある具体的な経験まで掘り下げる。',
+  '自己分析・強み。強みや価値観を抽象論で終わらせず、具体的な場面・行動で語らせる。',
+  '活動実績・経験の深掘り。取り組んだ活動の中での判断・困難・工夫など一段深い部分を問う。',
+  '大学・学部との接続。その大学・学部だからこそ学べること / 志望との結びつきを確認する。',
+  '将来像と学びの活用。学んだことを将来どう活かすか、面接の総仕上げとして問う。',
+];
+
+// PriorTurn[] の answer 件数 = 回答済みの質問数。次に作る質問の番号 = これ + 1。
+function countAnswers(turns: PriorTurn[]): number {
+  return turns.filter((t) => t.role === 'answer').length;
+}
+
+// 今回の質問（questionNumber: 1-based / total: 全問数）の観点ガイドを組む（req ③④）。
+function buildArcGuidance(questionNumber: number, total: number): string {
+  const idx = Math.min(Math.max(questionNumber, 1), QUESTION_ARC.length) - 1;
+  return [
+    `【全${total}問の設計】各質問は観点（論点・切り口）を変え、重複させない。問が進むほど深さを上げる。`,
+    '総合型選抜の目安: 1=志望理由の核 / 2=自己分析・強み / 3=活動・経験の深掘り / 4=大学・学部との接続 / 5=将来像と学びの活用。',
+    `【今回（${questionNumber}問目 / 全${total}問）の主眼】${QUESTION_ARC[idx]}`,
+    '面接タイプの方針を最優先し、それに沿って観点を調整してよい。既に十分聞いた観点は繰り返さない。',
+  ].join('\n');
+}
+
+// 同一セッションで既に出した質問一覧（重複回避用 / req ⑤）。直近のやり取りに加えて明示提示する。
+function askedQuestionsSection(turns: PriorTurn[]): string {
+  const asked = turns
+    .filter((t) => t.role === 'question')
+    .map((t) => t.content.trim())
+    .filter(Boolean);
+  if (asked.length === 0) return '';
+  const list = asked.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  return `\n\n【既に聞いた質問（論点も聞き方も繰り返さない）】\n${list}`;
 }
 
 // anthropic response から text を取り出す。
@@ -140,7 +180,8 @@ export async function generateSeedQuestion(args: {
   const userPrompt =
     `${buildTargetContext(args.targetRef)}` +
     `${sourceSection(args.sourceContext)}\n\n` +
-    `上記を踏まえ、最初の質問を1つ出してください。`;
+    `${buildArcGuidance(1, INTERVIEW_AI_MAX_ANSWER_TURNS)}\n\n` +
+    `上記を踏まえ、1問目の質問を1つ出してください。`;
   return generateQuestion({
     logRoute: INTERVIEW_AI_SEED_LOG_ROUTE,
     system: buildSystem(args.interviewType, 'seed'),
@@ -158,11 +199,17 @@ export async function generateFollowupQuestion(args: {
   turns: PriorTurn[];
   sourceContext?: string;
 }): Promise<string> {
+  const total = INTERVIEW_AI_MAX_ANSWER_TURNS;
+  // 次に作る質問の番号 = これまでの回答数 + 1（上限でクランプ）。観点設計（arc）に使う。
+  const questionNumber = Math.min(countAnswers(args.turns) + 1, total);
   const userPrompt =
     `${buildTargetContext(args.targetRef)}` +
     `${sourceSection(args.sourceContext)}\n\n` +
-    `これまでのやり取り:\n${buildTranscript(args.turns)}\n\n` +
-    `受験生の直前の回答を踏まえ、深掘りする質問を1つ出してください。`;
+    `これまでのやり取り:\n${buildTranscript(args.turns)}` +
+    `${askedQuestionsSection(args.turns)}\n\n` +
+    `${buildArcGuidance(questionNumber, total)}\n\n` +
+    `受験生の直前の回答を自然に踏まえつつ、${questionNumber}問目の質問を1つ出してください` +
+    `（毎回深掘りに寄せすぎず、上記の主眼に沿って観点を進める）。`;
   return generateQuestion({
     logRoute: INTERVIEW_AI_FOLLOWUP_LOG_ROUTE,
     system: buildSystem(args.interviewType, 'followup'),

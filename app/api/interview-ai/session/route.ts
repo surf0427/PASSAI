@@ -31,7 +31,7 @@ import { NextResponse } from 'next/server';
 
 import { devWarn } from '@/lib/devLog';
 import { captureRouteException } from '@/lib/sentry/capture';
-import { ensurePlanQuota } from '@/lib/billing/planGate';
+import { authenticateRequest, ensurePlanQuota } from '@/lib/billing/planGate';
 import { getServiceRoleSupabaseClient } from '@/lib/supabase/serviceRoleClient';
 import { isInterviewType, type InterviewType } from '@/lib/interviewAi/interviewTypes';
 
@@ -173,6 +173,40 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+}
+
+// GET: 現在ユーザーの未完了（in_progress）セッションを返す（ページ表示時の再開検出 / STEP2 req ①）。
+//   - read-only。recordUsage も quota 消費もしない（認証のみ。quota gate は作成時だけ）。
+//   - 復元の単一情報源は server（古い localStorage には依存しない）。in_progress 以外
+//     （completed / abandoned）は返さない → 評価済み / 中断済みは再開対象にならない（req ④・⑤）。
+//   - in_progress は user ごと 1 件まで（§57 部分 unique index）なので maybeSingle で取れる。
+export async function GET() {
+  const auth = await authenticateRequest();
+  if (auth.kind === 'reject') return auth.response;
+  const userId = auth.userId;
+
+  const admin = getServiceRoleSupabaseClient();
+  const { data, error } = await admin
+    .from(TABLE)
+    .select(SELECT_COLS)
+    .eq('user_id', userId)
+    .eq('status', 'in_progress')
+    .maybeSingle();
+
+  if (error) {
+    devWarn('[interview-ai/session] active fetch error', { message: error.message });
+    captureRouteException(
+      error,
+      { route: 'interview-ai/session', feature: 'interview-ai', status: 500 },
+      { status: 500, code: 'active-fetch-failed' },
+    );
+    return NextResponse.json({ error: 'active-fetch-failed' }, { status: 500 });
+  }
+
+  return NextResponse.json(
+    { session: data ? toCreatedSession(data) : null },
+    { status: 200 },
+  );
 }
 
 // 既存の in_progress セッションを取得して「続きから」用に返す。

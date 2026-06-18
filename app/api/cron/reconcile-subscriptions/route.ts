@@ -62,7 +62,7 @@ import {
   syncSubscriptionFromStripe,
   type EffectivePlan,
 } from '@/lib/billing/syncSubscription';
-import { isPlanId, type PlanId } from '@/lib/billing/plans';
+import { type PlanId } from '@/lib/billing/plans';
 import { devWarn } from '@/lib/devLog';
 import { captureRouteException } from '@/lib/sentry/capture';
 import { getPlanFromPriceId, getStripeClient } from '@/lib/stripe/server';

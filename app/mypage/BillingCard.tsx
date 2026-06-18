@@ -50,6 +50,8 @@ export function BillingCard() {
     const supabase = getBrowserSupabaseClient();
     if (!supabase) {
       // env 無しで live 取得不可。これ以上待たせず profile.plan の fallback 判定へ。
+      // 取得不能を即時確定する意図的な同期（挙動は変更しない）。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSubLoaded(true);
       return;
     }

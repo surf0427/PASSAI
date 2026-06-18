@@ -41,6 +41,8 @@ const FEATURE_LABELS: Record<QuotaFeature, string> = {
   'self-pr': '自己PR添削',
   interview: '面接フィードバック',
   'interview-ai': '面接AI',
+  'interview-ai-realtime': 'リアルタイム音声面接',
+  presentation: 'プレゼン',
   tutor: 'Tutor',
 };
 

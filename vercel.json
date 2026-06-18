@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/reconcile-subscriptions",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/presentation-cleanup",
+      "schedule": "0 17 * * *"
+    }
+  ]
+}

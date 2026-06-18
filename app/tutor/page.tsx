@@ -225,6 +225,8 @@ export default function TutorPage() {
   const [remoteThreads, setRemoteThreads] = useState<SupabaseTutorThread[]>([]);
   useEffect(() => {
     if (!isMounted || !currentUserId) {
+      // 未マウント / 未ログイン時は remote thread を空に保つ意図的な同期（挙動は変更しない）。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRemoteThreads([]);
       return;
     }

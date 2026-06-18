@@ -13,6 +13,9 @@
  *   して既存の `NodeJS.ProcessEnv` 宣言を augment する。
  */
 
+// NodeJS.ProcessEnv の augment 専用宣言。namespace 名は型拡張のためのもので
+// 直接参照しないため no-unused-vars の対象外とする（実行時 import なし）。
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare namespace NodeJS {
   interface ProcessEnv {
     // Anthropic
@@ -40,6 +43,26 @@ declare namespace NodeJS {
     readonly NEXT_PUBLIC_APP_URL?: string;
     readonly NEXT_PUBLIC_APP_COMMIT?: string;
     readonly NEXT_PUBLIC_VERCEL_ENV?: string;
+
+    // OpenAI (STT/TTS provider 境界。リアルタイム面接でも流用)
+    readonly OPENAI_API_KEY?: string;
+
+    // Interview AI — リアルタイム音声面接 (STEP-INTERVIEW-AI-REALTIME-PR1)
+    /**
+     * server-only 最終ゲート。'true' のときだけ token route が client_secret を発行する。
+     * NEXT_PUBLIC_ prefix なし = browser bundle に出ない。本番 passai.jp は未設定運用。
+     */
+    readonly REALTIME_INTERVIEW_ENABLED?: string;
+    /** client UI 表示 flag（'true'/'1'/'yes'）。表示と発行は別軸（発行は server flag が最終）。 */
+    readonly NEXT_PUBLIC_ENABLE_REALTIME_INTERVIEW?: string;
+    /** 開発者 allowlist（カンマ区切り user id）。非空なら対象 user のみ発行可。未設定=skip。 */
+    readonly REALTIME_DEV_USER_IDS?: string;
+    /** realtime モデル ID。既定 'gpt-realtime-mini'（コスト優先）。 */
+    readonly INTERVIEW_AI_REALTIME_MODEL?: string;
+    /** realtime 音声。既定 'alloy'。 */
+    readonly INTERVIEW_AI_REALTIME_VOICE?: string;
+    /** OpenAI-Safety-Identifier ハッシュ用 salt（sha256(userId+salt)）。本番必須。 */
+    readonly REALTIME_SAFETY_ID_SALT?: string;
   }
 }
 

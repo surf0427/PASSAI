@@ -8,6 +8,7 @@ import {
   abandonSession,
   completeSession,
   createSession,
+  getActiveSession,
   getSessionState,
   kickoff,
   retryFollowup,
@@ -56,6 +57,10 @@ type AvailableSource = Extract<ResolvedSource, { available: true }>;
 const INPUT_CLASS =
   'w-full border border-slate-300 rounded-lg px-4 py-2 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-400';
 
+// req ④: 質問生成（kickoff / followup）再試行の上限。これを超えたら同じ API を叩かせず、
+// 中断してやり直す導線に切り替える（無限再試行・無限ループの防止）。
+const MAX_QUESTION_RETRIES = 3;
+
 // タイプ選択カードの説明文（2026-06 方針）。
 const TYPE_CARD_DESC: Record<InterviewType, string> = {
   self_analysis: '自己分析・活動整理をもとに深掘り質問を行います。',
@@ -73,6 +78,26 @@ const TYPE_CARD_EMOJI: Record<InterviewType, string> = {
   free: '🎯',
   pressure: '😈',
 };
+
+// 保存済みターン（turn_index 昇順 [Q, A, Q, A, …]）を「質問→回答」ペアの表示用 Exchange[] に畳む。
+// 再開時に「これまでのやり取り」を復元するための表示専用変換（STEP2 req ②）。
+// 末尾の未回答質問（= currentQuestion）はペアにしない（回答が来て初めて確定する）。
+function buildExchangesFromTurns(
+  turns?: { role: 'question' | 'answer'; content: string }[],
+): Exchange[] {
+  if (!turns || turns.length === 0) return [];
+  const out: Exchange[] = [];
+  let pendingQuestion: string | null = null;
+  for (const t of turns) {
+    if (t.role === 'question') {
+      pendingQuestion = t.content;
+    } else {
+      out.push({ question: pendingQuestion ?? '', transcript: t.content });
+      pendingQuestion = null;
+    }
+  }
+  return out;
+}
 
 export function InterviewAiClient() {
   // env または Preview query override で有効化（client mount 後に query を含めて確定）。
@@ -92,20 +117,31 @@ export function InterviewAiClient() {
   const [session, setSession] = useState<AiSession | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState('');
+  // exchanges は「画面に出す過去のやり取り」の表示専用バッファ。質問数のカウントには使わない（req ②）。
+  // 質問数の唯一の正は server 側の countAnswerTurns（= answer ターン件数）であり、その client ミラーが
+  // answeredCount。質問番号 / 残り数の算出は answeredCount だけから行う（exchanges.length では数えない）。
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
-  // これまでに受理（保存）された回答数。質問番号表示（= answeredCount + 1）と残り数の算出に使う。
-  // 通常フローは exchanges と同期して増えるが、再開時は exchanges を復元しないため
-  // server の answerCount から seed する（再開後も正しい番号を出すため別 state にする）。
+  // これまでに受理（保存）された回答数 = 質問数の単一情報源（client ミラー / req ②）。
+  // 質問番号表示（= answeredCount + 1）と残り数の算出に使う。通常フローは server 受理に同期して +1 し、
+  // 再開時は exchanges を復元しないため server の answerCount から seed する（再開後も正しい番号を出す）。
   const [answeredCount, setAnsweredCount] = useState(0);
   const [done, setDone] = useState(false);
   const [questionError, setQuestionError] = useState(false);
+  // req ④: kickoff / followup の再試行回数。MAX_QUESTION_RETRIES で打ち切る。
+  // 新しい質問が出る（showQuestion）/ 最初から（resetToStart）でリセットする。
+  const [retryCount, setRetryCount] = useState(0);
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [resume, setResume] = useState<AiSession | null>(null);
   const [result, setResult] = useState<Extract<CompleteResult, { kind: 'completed' }> | null>(null);
 
-  // 回答の入力方法（ターン単位で切替可）。音声回答も最終的には text answer として保存する。
+  // 回答の入力方法（現在の実効モード）。session 既定（mode）からセッション開始 / 再開時に初期化し、
+  // 以降は質問が変わっても保持する（質問切替で勝手に変わらない / req ①）。変わるのは
+  //   (a) ユーザーの明示トグル（🎤音声で回答 / テキストで回答に切り替え）
+  //   (b) STT 失敗による voice→text 自動フォールバック（req ④。音声モード編集禁止の唯一の例外）
+  // の 2 経路のみ。TTS の成否は inputMode に一切影響しない（補助機能として分離 / req ⑥）。
+  // 音声回答も最終的には STT 後の text answer として保存する（1セッション1課金は不変）。
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('text');
   // 音声入力のサブ状態。idle: 録音前 or 文字起こし結果待ち / recording: 録音中 / transcribing: STT 中。
   const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing'>('idle');
@@ -115,6 +151,19 @@ export function InterviewAiClient() {
   // 進行中 STT を無効化するためのトークン。録音リソース解放のたびに ++ し、
   // handleTranscribe は開始時の値と一致するときだけ結果を反映する（M-3: 編集不可仕様の死守）。
   const transcribeIdRef = useRef(0);
+
+  // req ⑤: 二重送信ガード（連打対策）。送信系アクション（セッション作成 / 回答送信 / 再試行 /
+  // 完了 / 中断 / 再開）は必ず beginSubmit() で開始し、finally で endSubmit() する。
+  // loading（UI 無効化）と二重化することで、setState 反映前の同期連打も同期 ref で確実に弾く。
+  const submittingRef = useRef(false);
+  function beginSubmit(): boolean {
+    if (submittingRef.current) return false;
+    submittingRef.current = true;
+    return true;
+  }
+  function endSubmit() {
+    submittingRef.current = false;
+  }
 
   // ── AI 質問読み上げ（TTS） ──────────────────────────────────────
   // TTS は「AI 質問テキストの読み上げ」だけを足す機能。テキスト表示は必ず残り、
@@ -203,6 +252,26 @@ export function InterviewAiClient() {
   // unmount 時に再生中の音声を必ず止め、object URL を破棄する。
   useEffect(() => releaseTtsResources, [releaseTtsResources]);
 
+  // ── ページ表示時の再開検出（STEP2 req ①） ──────────────────────────
+  // mount 時に server の in_progress セッションを問い合わせ、あれば既存の再開ダイアログを出す。
+  // localStorage 等の古い client 状態には依存しない（server が単一情報源）。
+  // StrictMode の二重 mount でも多重 fetch しないよう ref で 1 回に限定する。
+  const activeCheckedRef = useRef(false);
+  useEffect(() => {
+    if (activeCheckedRef.current) return;
+    activeCheckedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      const r = await getActiveSession();
+      if (cancelled || r.kind !== 'active') return;
+      // 既存の再開ダイアログ（resume）を表示。既にセット済み（create の 409 等）なら上書きしない。
+      setResume((cur) => cur ?? r.session);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // AI 質問テキストを TTS で読み上げる（新規生成）。
   //   - 成功: 音声を取得 → object URL 化 → 自動再生（ブロックされたら 'blocked' で手動再生に誘導）。
   //   - 失敗: 面接は止めない。provider 未設定なら 'unavailable'（以降 fetch しない）、
@@ -234,10 +303,11 @@ export function InterviewAiClient() {
           ttsUnavailableRef.current = true;
           setTtsStage('unavailable');
         } else {
-          // 一時失敗。console.error は残しつつ、画面は軽い案内だけ（面接は続行）。
+          // 一時失敗。TTS は補助機能なので面接は止めない。questionError / retryFollowup / 質問再生成は
+          // 一切行わず、状態は interviewing のまま（req ①）。案内は致命エラー用の共有 errorMsg ではなく、
+          // TTS コントロール脇のインライン軽案内（ttsStage='failed'）で出す＝質問生成失敗と混同しない（req ②）。
           console.error('[interview-ai] tts failed', r.error);
           setTtsStage('failed');
-          setErrorMsg('音声読み上げに失敗しました。テキストで続行できます。');
         }
         return;
       }
@@ -323,20 +393,23 @@ export function InterviewAiClient() {
   //   になってコントロールを隠す（API利用可否は実行時判定）。
   const ttsAvailable = sourceTypesEnabled;
 
+  // セッション開始 / 再開時の実効モード初期値。setup で選んだ既定（mode）が voice かつ STT 利用可
+  // （flag ON + 録音対応）のときだけ voice、それ以外は text（安全側）。質問切替では使わない（req ①）。
   function defaultInputMode(): 'voice' | 'text' {
     return mode === 'voice' && sttAvailable ? 'voice' : 'text';
   }
 
-  // 新しい質問を表示するときの入力状態リセット（入力方法を既定に戻す）。
-  // テキスト表示は必ず行い（setCurrentQuestion）、その後に TTS で自動読み上げを試みる。
-  // TTS は失敗しても面接を止めない（質問はテキストで続行できる）。
+  // 新しい質問を表示するときのリセット。質問固有の状態（回答テキスト・音声サブ状態）だけ初期化し、
+  // inputMode は意図的に保持する（質問切替で実効モードが勝手に変わらない / req ①）。
+  // テキスト表示は必ず行い（setCurrentQuestion）、その後に TTS で自動読み上げを試みる
+  // （TTS は失敗しても面接を止めない / 質問はテキストで続行できる）。
   function showQuestion(q: string) {
     stopRecordingResources();
     setCurrentQuestion(q);
     setQuestionError(false);
+    setRetryCount(0); // 新しい質問が出た → 再試行カウントをリセット（req ④）
     setAnswerText('');
     setVoiceStage('idle');
-    setInputMode(defaultInputMode());
     void speak(q); // 自動再生（ブロック時は手動「🔊 読み上げ」に誘導）
   }
 
@@ -354,7 +427,9 @@ export function InterviewAiClient() {
     setAnsweredCount(0);
     setDone(false);
     setQuestionError(false);
+    setRetryCount(0);
     setVoiceStage('idle');
+    setInputMode('text'); // setup へ戻る → 実効モードも既定（text）に戻す（req ①）
     setResult(null);
     setResume(null);
     setErrorMsg(message ?? null);
@@ -412,8 +487,11 @@ export function InterviewAiClient() {
     type: InterviewType,
     resolvedSrc: AvailableSource | null,
   ) {
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     setLoading(true);
     setErrorMsg(null);
+    // 実効モードをセッション既定で初期化（以降は質問切替で変わらない / req ①）。
+    setInputMode(defaultInputMode());
     // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
     // free / pressure は sourceType=null / sourceId=null をそのまま許容して送る。
     const payload = {
@@ -447,6 +525,7 @@ export function InterviewAiClient() {
       setErrorMsg('面接の開始に失敗しました。もう一度お試しください。');
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
@@ -457,15 +536,21 @@ export function InterviewAiClient() {
       setPhase('interviewing');
       showQuestion(q.question);
     } else {
+      // kickoff 失敗。currentQuestion=null のまま「準備中…」で行き止まりにせず、
+      // 再試行導線（questionError UI）を出す。answeredCount===0 なので handleRetry は
+      // followup ではなく kickoff を再実行する（kickoff のリトライ経路を確保 / req ④・完走保証）。
       setErrorMsg('最初の質問の生成に失敗しました。再試行してください。');
       setPhase('interviewing');
       setSession(s);
+      setDone(false);
+      setQuestionError(true);
     }
   }
 
   // ── 再開（in_progress） ─────────────────────────────────────
   async function handleResume() {
     if (!resume) return;
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -477,8 +562,13 @@ export function InterviewAiClient() {
       setSession(resume);
       setResume(null);
       setPhase('interviewing');
-      // 再開時は exchanges を復元しないため、server の answerCount から質問番号を seed する。
+      // 再開時の実効モード初期化（安全側 / req ⑤）。リロードで mode は既定 text に戻るため
+      // defaultInputMode()=text ＝ 再開後は必ずテキストで回答可能（回答不能状態にしない）。
+      setInputMode(defaultInputMode());
+      // 質問数の単一情報源は server の answerCount（client ミラー = answeredCount）。
       setAnsweredCount(st.state.answerCount);
+      // これまでのやり取りを表示用に復元（質問→回答ペア）。表示専用でカウントには使わない（req ②）。
+      setExchanges(buildExchangesFromTurns(st.state.turns));
       if (st.state.done) {
         setDone(true);
         setCurrentQuestion(null);
@@ -494,6 +584,7 @@ export function InterviewAiClient() {
       }
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
@@ -540,6 +631,7 @@ export function InterviewAiClient() {
     if (!session || !currentQuestion) return;
     const answer = answerText.trim();
     if (!answer) return;
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード（回答の二重保存・二重課金を防ぐ）
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -547,6 +639,7 @@ export function InterviewAiClient() {
       applyAnswerResult(r, currentQuestion);
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
@@ -588,7 +681,11 @@ export function InterviewAiClient() {
   }
 
   function stopRecording() {
-    recorderRef.current?.stop();
+    // 連打 / 二重停止ガード（req ④）。録音中以外で stop() を呼ぶと MediaRecorder が
+    // InvalidStateError を投げるため、state を見てから 1 回だけ停止する。
+    const rec = recorderRef.current;
+    if (!rec || rec.state !== 'recording') return;
+    rec.stop();
     // onstop で handleTranscribe に進む。stage は transcribing へ。
     setVoiceStage('transcribing');
   }
@@ -608,31 +705,54 @@ export function InterviewAiClient() {
       setVoiceStage('idle');
       return;
     }
-    // 失敗時は録音リソースを解放（マイクを残さない）。
+    // STT 失敗時は保存も課金もしない（turn を作らない / answeredCount を増やさない / 次の質問へ進まない）。
+    // 録音リソースを解放（マイクを残さない / req ⑥）し、面接を止めず同じ質問のままテキスト入力へ
+    // フォールバックする（req ①②）。currentQuestion は維持。answerText は空のまま（STT 失敗＝transcript 無し）
+    // → ユーザーがテキストで回答 → 既存の text turn（/turn）に流す＝初回回答として 1 回だけ課金（req ③）。
     stopRecordingResources();
+    setVoiceStage('idle');
+    setAnswerText('');
+    setInputMode('text');
     if (r.error === 'stt-unavailable') {
-      // provider 無効 → 録り直しても無駄なのでテキスト入力へ誘導。
-      setVoiceStage('idle');
-      setInputMode('text');
+      // provider 無効 → 録り直しても無駄。テキスト入力へ誘導。
       setErrorMsg('音声認識が利用できません。テキストで回答してください。');
     } else {
-      // 一時失敗 → 音声モードのまま idle に戻し「録音し直す / テキストで回答」の二択を残す（M-2）。
-      setVoiceStage('idle');
-      setErrorMsg('音声認識に失敗しました。録音し直すか、テキストで回答に切り替えてください。');
+      // 一時失敗（stt-failed / stt-empty 等）→ 同じ質問のままテキスト入力で続行できるようにする。
+      setErrorMsg(
+        '音声の文字起こしに失敗しました。お手数ですが、この質問への回答をテキストで入力してください。',
+      );
     }
   }
 
   // ── followup 再試行 ─────────────────────────────────────────
   async function handleRetry() {
     if (!session) return;
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
+    // req ④: 再試行回数に上限を設ける。上限を超えたら同じ API を叩かせない（無限再試行・無限ループ防止）。
+    if (retryCount >= MAX_QUESTION_RETRIES) {
+      setErrorMsg(
+        '質問の生成を複数回試みましたが失敗しました。お手数ですが面接を中断して、もう一度お試しください。',
+      );
+      endSubmit();
+      return;
+    }
+    setRetryCount((n) => n + 1);
     setLoading(true);
     setErrorMsg(null);
     try {
+      // answeredCount===0 = 「最初の質問（kickoff）すら生成できていない」状態。
+      // この場合は followup ではなく kickoff を再実行する（kickoff 失敗の行き止まり防止）。
+      // 成功時は runKickoff→showQuestion が retryCount をリセットする。
+      if (answeredCount === 0) {
+        await runKickoff(session);
+        return;
+      }
       const r = await retryFollowup(session.id);
       if (r.kind === 'next') {
-        showQuestion(r.question);
+        showQuestion(r.question); // showQuestion が retryCount をリセット
       } else if (r.kind === 'done' || r.kind === 'limit') {
         setQuestionError(false);
+        setRetryCount(0);
         setDone(true);
       } else if (r.kind === 'question-error') {
         setErrorMsg('再試行しましたが、まだ次の質問を生成できませんでした。もう一度お試しください。');
@@ -641,12 +761,14 @@ export function InterviewAiClient() {
       }
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
   // ── 完了 ────────────────────────────────────────────────────
   async function handleComplete() {
     if (!session) return;
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     stopRecordingResources();
     releaseTtsResources();
     setTtsStage('idle');
@@ -664,12 +786,14 @@ export function InterviewAiClient() {
       }
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
   // ── 中断（明示キャンセル） ──────────────────────────────────
   async function handleAbandon(sessionId: string) {
     if (!window.confirm('この面接を中断しますか？（再開できなくなります）')) return;
+    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     stopRecordingResources();
     setLoading(true);
     try {
@@ -681,6 +805,7 @@ export function InterviewAiClient() {
       }
     } finally {
       setLoading(false);
+      endSubmit();
     }
   }
 
@@ -975,6 +1100,13 @@ export function InterviewAiClient() {
                         🔊 読み上げ
                       </button>
                     )}
+                    {/* TTS 一時失敗の軽い案内（req ②）。致命エラー（赤）ではなくグレーの補足。
+                        質問文は有効・回答はそのまま可能で、読み上げ再試行は任意（必須にしない）。 */}
+                    {ttsStage === 'failed' && (
+                      <span className="text-xs text-gray-500">
+                        音声読み上げに失敗しました。質問文を読んで回答してください。
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -1004,7 +1136,7 @@ export function InterviewAiClient() {
                           value={answerText}
                         />
                         <p className="text-xs text-amber-700 mb-2">
-                          音声回答は本番の面接を想定しているため、文字起こし結果の編集はできません。
+                          音声回答は文字起こし後、そのまま保存されます（本番の面接を想定し、編集はできません）。
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
@@ -1049,7 +1181,7 @@ export function InterviewAiClient() {
                 ) : (
                   <>
                     <label className="block text-xs font-semibold text-gray-500 mb-1">
-                      回答（送信前に確認・編集できます）
+                      回答（送信前に自由に編集できます）
                     </label>
                     <textarea
                       className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1`}

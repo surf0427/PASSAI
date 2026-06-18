@@ -78,8 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   // retryProfile が常に最新の userId を参照できるよう ref に保持。
+  // ref の更新は commit 後（effect 内）に行う。retryProfile は event/effect から
+  // 呼ばれ render 中には参照しないため、同期更新と挙動は等価（react-hooks/refs 準拠）。
   const currentUserIdRef = useRef<string | null>(null);
-  currentUserIdRef.current = currentUserId;
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
 
   useEffect(() => {
     let cancelled = false;
