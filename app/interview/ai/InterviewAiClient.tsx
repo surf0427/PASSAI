@@ -30,6 +30,7 @@ import {
   isInterviewSourceTypesEnabledByEnv,
   isInterviewSourceTypesEnabledByQuery,
   isInterviewSourceTypesEnabledClient,
+  isInterviewSourceTypesDebugVisible,
 } from '@/lib/interviewAi/featureFlag';
 
 // 機能別データ連動面接の有効化判定（env または Preview query override）。
@@ -856,10 +857,11 @@ export function InterviewAiClient() {
   // ── 描画 ────────────────────────────────────────────────────
   return (
     <div>
-      {/* 診断用 debug 表示。sourceTypesEnabled が true のとき（= env true または Preview query
-          override）だけ描画。本番 passai.jp では query override が効かず env も未設定のため
-          常に false → 一切表示されない。env / query / hostname / phase を内訳表示する。 */}
-      {mounted && sourceTypesEnabled && (
+      {/* 診断用 debug 表示。**本番ホスト（passai.jp / www.passai.jp）では常に非表示**
+          （isInterviewSourceTypesDebugVisible が本番ホストで false を返す）。
+          本番で NEXT_PUBLIC_ENABLE_INTERVIEW_SOURCE_TYPES=true にしても本番ユーザーには出ない。
+          localhost / vercel.app Preview の sourceTypes 有効時のみ env/query/hostname/phase を内訳表示する。 */}
+      {mounted && isInterviewSourceTypesDebugVisible() && (
         <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 break-all">
           <div>debug: SOURCE_TYPES_ENABLED = {String(sourceTypesEnabled)}</div>
           <div>env flag = {String(isInterviewSourceTypesEnabledByEnv())}</div>

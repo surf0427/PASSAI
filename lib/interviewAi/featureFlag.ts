@@ -54,3 +54,15 @@ export function isInterviewSourceTypesEnabledClient(): boolean {
 export function isInterviewSourceTypesEnabled(): boolean {
   return isInterviewSourceTypesEnabledByEnv();
 }
+
+/**
+ * デバッグ表示（緑のデバッグボックス等）の可否（client 専用）。
+ *   - 本番ホスト（passai.jp / www.passai.jp）では **常に false**（本番ユーザーにデバッグ情報を出さない）。
+ *   - それ以外（localhost / vercel.app Preview）で sourceTypes 有効なときだけ true。
+ * env で本番に sourceTypes を ON にしても、本番ホストではこの gate により非表示になる。
+ */
+export function isInterviewSourceTypesDebugVisible(): boolean {
+  if (typeof window === 'undefined') return false; // SSR は出さない
+  if (PRODUCTION_HOSTS.has(window.location.hostname)) return false; // 本番は絶対非表示
+  return isInterviewSourceTypesEnabledClient();
+}
