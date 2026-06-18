@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
+import { INTERVIEW_AI_MAX_ANSWER_TURNS } from '@/lib/interviewAi/limits';
 import {
   isRealtimeInterviewEnabled,
   isRealtimeInterviewEnabledClient,
@@ -30,6 +31,9 @@ import {
   openRealtimeConnection,
   type RealtimeConnection,
 } from './connection';
+import { parseRealtimeEvent } from './events';
+
+type TranscriptEntry = { role: 'ai' | 'user'; text: string; final: boolean };
 
 type ConnPhase =
   | 'idle'
@@ -90,6 +94,8 @@ export function RealtimeInterviewClient() {
   const [remoteAudio, setRemoteAudio] = useState<RemoteAudio>('none');
   const [eventsReceived, setEventsReceived] = useState(0);
   const [endedReason, setEndedReason] = useState<string | null>(null);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [completedQuestions, setCompletedQuestions] = useState(0);
 
   // 接続リソース（render に依存しない可変参照）。
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -99,6 +105,7 @@ export function RealtimeInterviewClient() {
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false); // 多重 start 防止
+  const sentInitialRef = useRef(false); // 初回 response.create の二重送信防止
   // connected 判定用の最新値（state は非同期のため ref で確実に評価）。
   const pcStateRef = useRef<RTCPeerConnectionState>('new');
   const dcOpenRef = useRef(false);
@@ -200,6 +207,65 @@ export function RealtimeInterviewClient() {
     );
   }, []);
 
+  // 接続成立後に 1 度だけ response.create を送り、AI 面接官の挨拶〜1問目を起動する。
+  const maybeSendInitial = useCallback(() => {
+    if (sentInitialRef.current) return;
+    const dc = dcRef.current;
+    if (!dc || dc.readyState !== 'open') return;
+    try {
+      dc.send(JSON.stringify({ type: 'response.create' }));
+      sentInitialRef.current = true;
+    } catch {
+      /* 送信失敗は致命ではない（VAD でユーザー発話起点でも会話は始まる） */
+    }
+  }, []);
+
+  // oai-events を UI 表示用に取り込む（STEP4: transcript と主要質問の進捗のみ。保存・課金は STEP5+）。
+  const handleEvent = useCallback((raw: string) => {
+    const ev = parseRealtimeEvent(raw);
+    switch (ev.kind) {
+      case 'assistant-delta':
+        setTranscripts((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === 'ai' && !last.final) {
+            const copy = prev.slice();
+            copy[copy.length - 1] = { ...last, text: last.text + ev.text };
+            return copy;
+          }
+          return [...prev, { role: 'ai', text: ev.text, final: false }];
+        });
+        break;
+      case 'assistant-done':
+        setTranscripts((prev) => {
+          for (let i = prev.length - 1; i >= 0; i -= 1) {
+            if (prev[i].role === 'ai' && !prev[i].final) {
+              const copy = prev.slice();
+              copy[i] = { ...copy[i], final: true, text: ev.text ?? copy[i].text };
+              return copy;
+            }
+          }
+          return ev.text
+            ? [...prev, { role: 'ai', text: ev.text, final: true }]
+            : prev;
+        });
+        break;
+      case 'user-final':
+        setTranscripts((prev) => [
+          ...prev,
+          { role: 'user', text: ev.text, final: true },
+        ]);
+        break;
+      case 'question-complete':
+        setCompletedQuestions((n) => {
+          const next = ev.questionNumber ?? n + 1;
+          return Math.min(Math.max(next, n), INTERVIEW_AI_MAX_ANSWER_TURNS);
+        });
+        break;
+      default:
+        break;
+    }
+  }, []);
+
   const start = useCallback(async () => {
     if (startingRef.current) return;
     if (phaseRef.current === 'connecting' || phaseRef.current === 'connected') return;
@@ -208,9 +274,12 @@ export function RealtimeInterviewClient() {
       return;
     }
     startingRef.current = true;
+    sentInitialRef.current = false;
     setErrorKind(null);
     setEndedReason(null);
     setEventsReceived(0);
+    setTranscripts([]);
+    setCompletedQuestions(0);
 
     // 1. token 取得（quota は既存 useQuotaDialog で処理）。
     setPhaseSafe('requesting-token');
@@ -280,14 +349,15 @@ export function RealtimeInterviewClient() {
           dcOpenRef.current = true;
           setDcOpen(true);
           evaluateConnected(maxDurationMs);
+          maybeSendInitial();
         },
         onDataChannelClose: () => {
           dcOpenRef.current = false;
           setDcOpen(false);
         },
-        onDataChannelMessage: () => {
-          // STEP2: パースしない。受信していることだけ可視化（STEP3+ で event 処理）。
+        onDataChannelMessage: (raw) => {
           setEventsReceived((n) => n + 1);
+          handleEvent(raw);
         },
         onConnectionStateChange: (s) => {
           pcStateRef.current = s;
@@ -311,12 +381,23 @@ export function RealtimeInterviewClient() {
     pcRef.current = conn.pc;
     dcRef.current = conn.dc;
     startingRef.current = false;
+    // dc が return 前に既に open していた場合の取りこぼし防止。
+    maybeSendInitial();
 
     // 一定時間 connected に到達しなければ失敗扱い。
     connectTimerRef.current = setTimeout(() => {
       if (phaseRef.current !== 'connected') fail('connect-failed');
     }, CONNECT_TIMEOUT_MS);
-  }, [attachRemote, evaluateConnected, fail, handleResponse, setPhaseSafe, teardown]);
+  }, [
+    attachRemote,
+    evaluateConnected,
+    fail,
+    handleEvent,
+    handleResponse,
+    maybeSendInitial,
+    setPhaseSafe,
+    teardown,
+  ]);
 
   const endSession = useCallback(() => {
     setPhaseSafe('closing');
@@ -383,7 +464,7 @@ export function RealtimeInterviewClient() {
 
         {phase === 'connected' && (
           <p className="mt-3 text-sm text-emerald-700 bg-emerald-50 px-3 py-2 rounded-lg">
-            接続できました。AI面接官と音声で会話できます（STEP2 は接続確認のみ）。
+            接続できました。AI面接官と音声で会話できます。
           </p>
         )}
 
@@ -407,6 +488,43 @@ export function RealtimeInterviewClient() {
           </p>
         )}
       </Card>
+
+      {/* 文字起こし（live transcript）。STEP4 は表示のみ。保存は STEP5。 */}
+      {(transcripts.length > 0 || phase === 'connected') && (
+        <Card padding="md">
+          <div className="flex items-baseline justify-between mb-3">
+            <p className="text-sm font-bold text-slate-800">会話の文字起こし</p>
+            <p className="text-xs text-slate-500">
+              主要質問 {completedQuestions} / {INTERVIEW_AI_MAX_ANSWER_TURNS}
+            </p>
+          </div>
+          {transcripts.length === 0 ? (
+            <p className="text-xs text-slate-400">
+              話し始めると、ここに文字起こしが表示されます。
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {transcripts.map((t, i) => (
+                <li key={i} className="text-sm">
+                  <span
+                    className={
+                      t.role === 'ai'
+                        ? 'font-semibold text-brand-700'
+                        : 'font-semibold text-slate-700'
+                    }
+                  >
+                    {t.role === 'ai' ? 'AI面接官' : 'あなた'}：
+                  </span>
+                  <span className="text-slate-700">
+                    {t.text}
+                    {!t.final && <span className="text-slate-400">…</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
 
       {/* リモート音声の出力先（保存しない / srcObject のみ） */}
       <audio ref={audioRef} autoPlay playsInline className="hidden" />
