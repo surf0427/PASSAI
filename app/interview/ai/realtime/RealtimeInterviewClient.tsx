@@ -108,6 +108,8 @@ export function RealtimeInterviewClient() {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [completedQuestions, setCompletedQuestions] = useState(0);
   const [result, setResult] = useState<RealtimeResult | null>(null);
+  // in-progress-exists（前回の realtime セッションが残存）時の復旧用。
+  const [staleSessionId, setStaleSessionId] = useState<string | null>(null);
 
   // 接続リソース（render に依存しない可変参照）。
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -333,6 +335,7 @@ export function RealtimeInterviewClient() {
     setTranscripts([]);
     setCompletedQuestions(0);
     setResult(null);
+    setStaleSessionId(null);
     pendingSavesRef.current = [];
 
     // 1. token 取得（quota は既存 useQuotaDialog で処理）。
@@ -361,7 +364,11 @@ export function RealtimeInterviewClient() {
       if (res.status === 401) return fail('unauthenticated');
       if (body.error === 'realtime-disabled') return fail('realtime-disabled');
       if (body.error === 'not-allowlisted') return fail('not-allowlisted');
-      if (body.error === 'in-progress-exists') return fail('in-progress-exists');
+      if (body.error === 'in-progress-exists') {
+        const s = body.session as { id?: string } | undefined;
+        if (s?.id) setStaleSessionId(s.id);
+        return fail('in-progress-exists');
+      }
       return fail('token-failed');
     }
     const clientSecret = String(body.clientSecret ?? '');
@@ -455,10 +462,34 @@ export function RealtimeInterviewClient() {
     teardown,
   ]);
 
+  // 既存 /api/interview-ai/abandon で session を abandoned にし、one-in-progress 枠を解放する。
+  const abandonSession = useCallback(async (id: string) => {
+    try {
+      await fetch('/api/interview-ai/abandon', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: id }),
+      });
+    } catch {
+      /* best-effort（次回の in-progress-exists 復旧で回収可能） */
+    }
+  }, []);
+
+  // 中断: 接続を閉じ、DB session も abandoned にして詰まりを残さない。
   const endSession = useCallback(() => {
+    const sid = sessionIdRef.current;
     setPhaseSafe('closing');
+    if (sid) void abandonSession(sid);
     teardown('ended', 'user');
-  }, [setPhaseSafe, teardown]);
+  }, [abandonSession, setPhaseSafe, teardown]);
+
+  // in-progress-exists 復旧: 残存 session を abandoned にしてから新規開始する。
+  const recoverAndStart = useCallback(async () => {
+    const id = staleSessionId;
+    setStaleSessionId(null);
+    if (id) await abandonSession(id);
+    void start();
+  }, [abandonSession, staleSessionId, start]);
 
   // 面接を終えて結果を見る: 接続を閉じ、保存中の turn を待ってから既存 complete を呼ぶ。
   // 既存 /api/interview-ai/complete をそのまま再利用（realtime session でも turns から生成可能）。
@@ -610,6 +641,14 @@ export function RealtimeInterviewClient() {
           <p className="mt-3 text-sm text-rose-700 bg-rose-50 px-3 py-2 rounded-lg">
             {ERROR_TEXT[errorKind]}
           </p>
+        )}
+
+        {phase === 'error' && errorKind === 'in-progress-exists' && staleSessionId && (
+          <div className="mt-3">
+            <Button variant="secondary" size="sm" onClick={recoverAndStart}>
+              前回の面接を中断して新しく始める
+            </Button>
+          </div>
         )}
       </Card>
 

@@ -30,6 +30,8 @@ import { authenticateRequest } from '@/lib/billing/planGate';
 import { getServiceRoleSupabaseClient } from '@/lib/supabase/serviceRoleClient';
 import { loadInProgressOwnedSession } from '@/lib/interviewAi/sessionGuard';
 import { insertTurn, listTurns } from '@/lib/interviewAi/turnStore';
+import { triggerRealtimeBilling } from '@/lib/interviewAi/realtime/billing';
+import { DEFAULT_REALTIME_MODEL } from '@/lib/interviewAi/realtime/constants';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -98,6 +100,13 @@ export async function POST(req: Request) {
       content: safeContent,
     });
     if (!error) {
+      // 課金: 最初の有効なユーザー発話（role='answer'）で 1 回だけ計上（CAS で冪等）。
+      // AI 発話（question）/ 接続のみ / マイク拒否では計上しない。
+      if (role === 'answer') {
+        const model =
+          process.env.INTERVIEW_AI_REALTIME_MODEL || DEFAULT_REALTIME_MODEL;
+        await triggerRealtimeBilling({ admin, sessionId, userId, model });
+      }
       return NextResponse.json({ turnIndex }, { status: 201 });
     }
     if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
