@@ -89,3 +89,138 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ────────────────────────────────────────────────────────────
+   AI 面接 — Zoom × 2D Phase1（CSS のみの簡易アバター / 音声波形）
+   方針:
+     - 外部ライブラリ不使用。transform / opacity / keyframes / transition のみ。
+     - 状態（thinking / speaking / listening / idle）に応じてクラスを付け替え、
+       瞬き・口パク・表情変化・考える動作・頷きを CSS だけで表現する。
+     - prefers-reduced-motion ではアニメーションを止める（酔い・アクセシビリティ配慮）。
+   ──────────────────────────────────────────────────────────── */
+
+@keyframes iv-blink {
+  0%, 90%, 100% { transform: scaleY(1); }
+  94%, 97%      { transform: scaleY(0.1); }
+}
+@keyframes iv-talk {
+  0%, 100% { transform: scaleY(0.45); }
+  50%      { transform: scaleY(1.3); }
+}
+@keyframes iv-think-bob {
+  0%, 100% { transform: translateY(2px) rotate(-4deg); }
+  50%      { transform: translateY(4px) rotate(-4deg); }
+}
+@keyframes iv-nod {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(6px); }
+}
+@keyframes iv-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+@keyframes iv-wave {
+  0%, 100% { transform: scaleY(0.28); }
+  50%      { transform: scaleY(1); }
+}
+
+/* 顔の土台（円） */
+.iv-avatar {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 50% 38%, #eaf2ff 0%, #d7e6ff 60%, #c2d6f7 100%);
+  box-shadow: 0 10px 24px -8px rgb(37 99 235 / 0.35);
+  transition: box-shadow 0.3s ease;
+}
+.iv-avatar--speaking { box-shadow: 0 0 0 6px rgb(37 99 235 / 0.12), 0 10px 24px -8px rgb(37 99 235 / 0.45); }
+.iv-avatar--listening { box-shadow: 0 0 0 6px rgb(22 163 74 / 0.12), 0 10px 24px -8px rgb(22 163 74 / 0.35); }
+
+/* 顔全体（頷き・浮遊・考える動作はここに付ける） */
+.iv-face { position: relative; width: 100%; height: 100%; transition: transform 0.35s ease; }
+.iv-avatar--thinking .iv-face  { animation: iv-think-bob 2.4s ease-in-out infinite; }
+.iv-avatar--listening .iv-face { animation: iv-nod 1.8s ease-in-out infinite; }
+.iv-avatar--idle .iv-face      { animation: iv-float 4s ease-in-out infinite; }
+
+/* 目（瞬き = scaleY） */
+.iv-eye {
+  position: absolute;
+  top: 56px;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #1f3a5f;
+  transform-origin: center;
+  animation: iv-blink 5s infinite;
+  transition: top 0.3s ease, height 0.3s ease;
+}
+.iv-eye--l { left: 44px; }
+.iv-eye--r { right: 44px; }
+/* thinking: 視線を落として目を細める */
+.iv-avatar--thinking .iv-eye { top: 62px; height: 10px; }
+
+/* 眉（表情変化 = rotate / translate） */
+.iv-brow {
+  position: absolute;
+  top: 44px;
+  width: 18px;
+  height: 4px;
+  border-radius: 3px;
+  background: #2a4a73;
+  transition: transform 0.3s ease;
+}
+.iv-brow--l { left: 40px; transform: rotate(-4deg); }
+.iv-brow--r { right: 40px; transform: rotate(4deg); }
+.iv-avatar--thinking .iv-brow--l  { transform: rotate(9deg) translateY(3px); }
+.iv-avatar--thinking .iv-brow--r  { transform: rotate(-9deg) translateY(-1px); }
+.iv-avatar--listening .iv-brow--l { transform: rotate(-9deg) translateY(-2px); }
+.iv-avatar--listening .iv-brow--r { transform: rotate(9deg) translateY(-2px); }
+
+/* 口（口パク = scaleY、表情で形を変える） */
+.iv-mouth {
+  position: absolute;
+  top: 92px;
+  left: 50%;
+  width: 34px;
+  height: 10px;
+  margin-left: -17px;
+  background: #1f3a5f;
+  border-radius: 0 0 18px 18px;
+  transform-origin: center top;
+  transition: width 0.3s ease, height 0.3s ease, border-radius 0.3s ease, margin-left 0.3s ease;
+}
+.iv-avatar--speaking .iv-mouth  { height: 16px; border-radius: 0 0 16px 16px; animation: iv-talk 0.28s ease-in-out infinite; }
+.iv-avatar--thinking .iv-mouth  { width: 16px; height: 6px; margin-left: -8px; border-radius: 9999px; }
+.iv-avatar--listening .iv-mouth { height: 12px; border-radius: 0 0 20px 20px; }
+
+/* 進捗ドット（● ○ ○ ○ ○） */
+.iv-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: #cbd5e1;
+  transition: transform 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+}
+.iv-dot--done    { background: #2563eb; }
+.iv-dot--current { background: #2563eb; transform: scale(1.25); box-shadow: 0 0 0 3px rgb(37 99 235 / 0.2); }
+
+/* 音声波形（バーの scaleY を時間差で動かす） */
+.iv-wave { display: inline-flex; align-items: flex-end; gap: 3px; height: 26px; }
+.iv-wave__bar {
+  width: 4px;
+  height: 100%;
+  border-radius: 2px;
+  transform-origin: bottom;
+  animation: iv-wave 0.9s ease-in-out infinite;
+}
+.iv-wave--ai .iv-wave__bar   { background: #2563eb; }
+.iv-wave--user .iv-wave__bar { background: #dc2626; }
+
+@media (prefers-reduced-motion: reduce) {
+  .iv-eye,
+  .iv-mouth,
+  .iv-face,
+  .iv-wave__bar { animation: none !important; }
+}

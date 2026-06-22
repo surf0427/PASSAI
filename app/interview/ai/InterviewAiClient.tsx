@@ -152,6 +152,9 @@ export function InterviewAiClient() {
   // 再開時は exchanges を復元しないため server の answerCount から seed する（再開後も正しい番号を出す）。
   const [answeredCount, setAnsweredCount] = useState(0);
   const [done, setDone] = useState(false);
+  // 経過時間（秒）。表示専用（⏱️ 00:42）。面接ロジック・課金・保存には一切関与しない。
+  // interviewing の間だけ 1 秒ごとに進める。開始 / 再開でリセットする。
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [questionError, setQuestionError] = useState(false);
   // req ④: kickoff / followup の再試行回数。MAX_QUESTION_RETRIES で打ち切る。
   // 新しい質問が出る（showQuestion）/ 最初から（resetToStart）でリセットする。
@@ -356,6 +359,14 @@ export function InterviewAiClient() {
 
   // unmount 時に再生中の音声を必ず止め、object URL を破棄する。
   useEffect(() => releaseTtsResources, [releaseTtsResources]);
+
+  // 経過時間カウンタ（表示専用）。interviewing 中かつ未完了のときだけ 1 秒ごとに進める。
+  // result / setup へ抜ける、または done になると停止する。値の初期化は開始 / 再開側で行う。
+  useEffect(() => {
+    if (phase !== 'interviewing' || done) return;
+    const id = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [phase, done]);
 
   // ── ページ表示時の再開検出（STEP2 req ①） ──────────────────────────
   // mount 時に server の in_progress セッションを問い合わせ、あれば既存の再開ダイアログを出す。
@@ -582,6 +593,7 @@ export function InterviewAiClient() {
     setAnswerText('');
     setExchanges([]);
     setAnsweredCount(0);
+    setElapsedSec(0); // 経過時間表示をリセット
     setDone(false);
     setQuestionError(false);
     setRetryCount(0);
@@ -649,6 +661,7 @@ export function InterviewAiClient() {
     if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     setLoading(true);
     setErrorMsg(null);
+    setElapsedSec(0); // 新規セッション → 経過時間表示をリセット
     // 実効モードをセッション既定で初期化（以降は質問切替で変わらない / req ①）。
     setInputMode(defaultInputMode());
     // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
@@ -730,6 +743,7 @@ export function InterviewAiClient() {
       setInputMode(defaultInputMode());
       // 質問数の単一情報源は server の answerCount（client ミラー = answeredCount）。
       setAnsweredCount(st.state.answerCount);
+      setElapsedSec(0); // 再開 → このクライアントセッションの経過時間を 0 から表示（UI 専用）
       // これまでのやり取りを表示用に復元（質問→回答ペア）。表示専用でカウントには使わない（req ②）。
       setExchanges(buildExchangesFromTurns(st.state.turns));
       if (st.state.done) {
@@ -1014,7 +1028,47 @@ export function InterviewAiClient() {
   // 残り = 上限 − 現在番号（この質問より後に出る質問数）。0 なら最後の質問。
   const totalQuestions = INTERVIEW_AI_MAX_ANSWER_TURNS;
   const questionNumber = Math.min(answeredCount + 1, totalQuestions);
-  const remainingAfter = Math.max(totalQuestions - questionNumber, 0);
+
+  // ── アバター状態（Zoom × 2D Phase1） ─────────────────────────────
+  // 既存 state（loading / ttsStage / voiceStage）から「面接官アバターの状態」を導出するだけ。
+  // 新しい状態遷移ロジックは増やさない（req ⑦）。ユーザー操作中（録音 / 文字起こし）を優先表示する。
+  const avatarState: 'thinking' | 'speaking' | 'listening' | 'transcribing' | 'idle' =
+    voiceStage === 'recording'
+      ? 'listening'
+      : voiceStage === 'transcribing'
+        ? 'transcribing'
+        : ttsStage === 'playing'
+          ? 'speaking'
+          : loading || ttsStage === 'loading'
+            ? 'thinking'
+            : 'idle';
+  // 顔の見た目は 4 状態（文字起こし中は処理中＝thinking の顔を流用）。
+  const avatarFace: 'thinking' | 'speaking' | 'listening' | 'idle' =
+    avatarState === 'transcribing' ? 'thinking' : avatarState;
+  // メインの状態テキスト（req ⑦: 「止まった」と感じさせない可視化）。
+  const statusLine =
+    avatarState === 'thinking'
+      ? '🤔 AIが考えています…'
+      : avatarState === 'speaking'
+        ? '🗣️ AIが質問しています…'
+        : avatarState === 'listening'
+          ? '🎤 あなたが回答しています…'
+          : avatarState === 'transcribing'
+            ? '📝 文字起こし中…'
+            : answerText
+              ? '✅ 内容を確認して送信してください'
+              : '⏳ 録音を開始してください';
+  // AI面接官カード内の短いキャプション（req ②）。
+  const avatarCaption =
+    avatarState === 'thinking'
+      ? '🤔 AIが考えています…'
+      : avatarState === 'speaking'
+        ? '🗣️ 質問しています…'
+        : avatarState === 'listening'
+          ? '👂 回答を聞いています…'
+          : avatarState === 'transcribing'
+            ? '📝 文字起こし中…'
+            : '⏳ 録音を開始してください';
 
   // ── 描画 ────────────────────────────────────────────────────
   return (
@@ -1198,8 +1252,9 @@ export function InterviewAiClient() {
       {/* INTERVIEWING */}
       {phase === 'interviewing' && (
         <div>
-          {/* これまでのやり取り */}
-          {exchanges.length > 0 && (
+          {/* これまでのやり取り（チャットログ）は本番面接体験に寄せるため一般ユーザーには出さない。
+              state（exchanges）は維持し、開発者モード（devTextFallback）でのみデバッグ表示する。 */}
+          {devTextFallback && exchanges.length > 0 && (
             <div className="mb-6 flex flex-col gap-3">
               {exchanges.map((ex, i) => (
                 <div key={i} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
@@ -1214,8 +1269,6 @@ export function InterviewAiClient() {
 
           {/* 現在の質問 / 回答 */}
           <div className="bg-white border border-gray-200 rounded-xl p-6 mb-4">
-            {loading && <p className="text-sm text-gray-500 mb-3">🤖 AIが考えています…</p>}
-
             {questionError ? (
               <div>
                 <p className="text-sm text-gray-700 mb-3">
@@ -1233,65 +1286,84 @@ export function InterviewAiClient() {
                 </Button>
               </div>
             ) : currentQuestion ? (
-              <div>
-                {/* 質問番号 / 全質問数 / 残り質問数。answeredCount から算出し、再開時も正しく出る。 */}
-                <div className="flex items-center justify-between mb-1 gap-2">
-                  <p className="text-xs font-semibold text-gray-500">面接官からの質問</p>
-                  <span className="shrink-0 text-xs font-semibold text-gray-500 bg-gray-100 rounded-full px-2.5 py-0.5">
-                    質問 {questionNumber} / {totalQuestions}
-                    {remainingAfter > 0 ? `・残り${remainingAfter}問` : '・最後の質問'}
+              // Zoom × 2D Phase1 レイアウト: 上=AI面接官 / 中=進捗・状態 / 下=録音エリア。
+              // 横長 PC でも中央寄せ（mx-auto max-w-md）。
+              <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
+                {/* ① + ② + ③(2D) + ④(波形): AI面接官エリア（上部・大きめ） */}
+                <div className="flex w-full flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 px-6 py-6">
+                  <span className="text-xs font-semibold tracking-wide text-slate-500">
+                    👨‍🏫 AI面接官
                   </span>
+                  <AvatarFace state={avatarFace} />
+                  {/* ④ 音声波形: AIが話す時 / ユーザーが録音する時だけ出す（簡易アニメ） */}
+                  {avatarState === 'speaking' && <Waveform variant="ai" />}
+                  {avatarState === 'listening' && <Waveform variant="user" />}
+                  <p className="min-h-[20px] text-sm font-semibold text-slate-700">{avatarCaption}</p>
                 </div>
-                {/* 通常は質問文を見せず音声で聞かせる（本番面接に近づける）。音声で聞けない/聞き直せない
-                    状況（showQuestionText）では質問文を自動表示する（フォールバック）。 */}
-                {showQuestionText ? (
-                  <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
-                ) : (
-                  <p className="text-base font-medium text-gray-600 mb-2">
-                    🗣️{' '}
-                    {ttsStage === 'playing' || ttsStage === 'loading'
-                      ? '面接官が質問しています…'
-                      : '質問は音声で流れます（「もう一度聞く」で再生できます）'}
-                  </p>
+
+                {/* ⑥ 進捗（中央）: ● ○ ○ ○ ○ / 質問 X / Y / ⏱️ 経過時間 */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    {Array.from({ length: totalQuestions }, (_, i) => {
+                      const n = i + 1;
+                      const cls =
+                        n < questionNumber
+                          ? 'iv-dot iv-dot--done'
+                          : n === questionNumber
+                            ? 'iv-dot iv-dot--current'
+                            : 'iv-dot';
+                      return <span key={n} className={cls} aria-hidden />;
+                    })}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-semibold text-slate-500">
+                    <span>
+                      質問 {questionNumber} / {totalQuestions}
+                    </span>
+                    <span>⏱️ {formatElapsed(elapsedSec)}</span>
+                  </div>
+                </div>
+
+                {/* ⑦ 状態遷移の可視化（「止まった」と感じさせないステータス行） */}
+                <p className="text-sm font-semibold text-slate-700">{statusLine}</p>
+
+                {/* ⑤ 質問文: 通常は非表示。音声で聞けない / 聞き直せない状況（showQuestionText）のみ表示。
+                    state（currentQuestion）は常に保持しており、評価・履歴・DB保存には一切影響しない。 */}
+                {showQuestionText && (
+                  <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+                    <p className="mb-1 text-[11px] font-semibold text-slate-400">
+                      質問文（音声が使えないため表示しています）
+                    </p>
+                    <p className="text-sm text-slate-800">{currentQuestion}</p>
+                  </div>
                 )}
 
-                {/* AI 質問読み上げ（TTS）。正式公開まで flag ON 限定で表示する
-                    （flag false の本番導線では一切出さず、従来どおりテキスト質問のみ）。
-                    provider 未設定（unavailable）時もコントロールを出さない。
-                    自動再生がブロックされた場合は「🔊 読み上げ」ボタンで手動再生できる。 */}
+                {/* AI 質問読み上げ（TTS）コントロール。flag ON 限定 / provider 未設定時は非表示。
+                    再生中の「話しています」表記はステータス行に集約したため、ここは操作ボタンのみ。 */}
                 {ttsAvailable && ttsStage !== 'unavailable' && (
-                  <div className="flex flex-wrap items-center gap-2 mb-4">
-                    {ttsStage === 'loading' ? (
-                      <span className="text-xs text-gray-500">🔊 読み上げ準備中…</span>
-                    ) : ttsStage === 'playing' ? (
-                      <>
-                        <span className="text-xs font-semibold text-blue-700">
-                          🔊 AIが話しています…
-                        </span>
-                        <button
-                          type="button"
-                          onClick={stopSpeech}
-                          className="text-sm text-gray-700 border border-gray-300 hover:border-gray-400 font-semibold px-3 py-1.5 rounded-lg"
-                        >
-                          ⏸ 停止
-                        </button>
-                      </>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    {ttsStage === 'loading' ? null : ttsStage === 'playing' ? (
+                      <button
+                        type="button"
+                        onClick={stopSpeech}
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold text-gray-700 hover:border-gray-400"
+                      >
+                        ⏸ 停止
+                      </button>
                     ) : ttsStage === 'ended' || ttsStage === 'paused' ? (
                       <button
                         type="button"
                         onClick={replaySpeech}
-                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
+                        className="rounded-lg border border-blue-300 px-3 py-1.5 text-sm font-semibold text-blue-600 hover:border-blue-400"
                       >
                         🔊 もう一度聞く
                       </button>
                     ) : ttsStage === 'blocked' ? (
-                      // 自動再生がブラウザにブロックされた（iOS Safari 等）。タップ起点で再生できる。
-                      // 質問文も showQuestionText により自動表示されるため、読めない行き止まりにはならない。
-                      <div className="flex flex-col gap-1">
+                      // 自動再生ブロック（iOS Safari 等）。タップ起点で再生。質問文も showQuestionText で自動表示。
+                      <div className="flex flex-col items-center gap-1">
                         <button
                           type="button"
                           onClick={replaySpeech}
-                          className="self-start text-sm text-white bg-blue-600 hover:bg-blue-700 font-semibold px-4 py-2 rounded-lg"
+                          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
                         >
                           🔊 質問を再生する（タップ）
                         </button>
@@ -1304,13 +1376,11 @@ export function InterviewAiClient() {
                       <button
                         type="button"
                         onClick={() => void speak(currentQuestion)}
-                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
+                        className="rounded-lg border border-blue-300 px-3 py-1.5 text-sm font-semibold text-blue-600 hover:border-blue-400"
                       >
                         🔊 読み上げ
                       </button>
                     )}
-                    {/* TTS 一時失敗の軽い案内（req ②）。致命エラー（赤）ではなくグレーの補足。
-                        質問文は有効・回答はそのまま可能で、読み上げ再試行は任意（必須にしない）。 */}
                     {ttsStage === 'failed' && (
                       <span className="text-xs text-gray-500">
                         音声読み上げに失敗しました。質問文を読んで回答してください。
@@ -1319,18 +1389,13 @@ export function InterviewAiClient() {
                   </div>
                 )}
 
-                {/* マイク拒否からの復帰 Alert（黄色）。
-                    表示条件は STT API 可否（sttAvailable）ではなく、
-                    SOURCE_TYPES_ENABLED（sourceTypesEnabled）かつブラウザのマイク対応（mediaSupported）に紐づける。
-                    理由: これはブラウザのマイク権限状態に対する復帰 UI であり、sttAvailable が
-                    内部状態 / 一時エラーで false になっても Safari 設定を直す導線を失わせないため。
-                    ページ表示時に自動 getUserMedia はしない（ボタン押下時のみ）。 */}
+                {/* マイク拒否からの復帰 Alert（黄色）。表示条件・挙動は従来どおり（変更なし）。 */}
                 {sourceTypesEnabled && mediaSupported && micDenied && (
-                  <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                  <div className="w-full rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-left">
                     <p className="text-sm font-semibold text-amber-800">
                       マイクへのアクセスが許可されませんでした
                     </p>
-                    <p className="mt-1 text-xs text-amber-700 leading-relaxed">
+                    <p className="mt-1 text-xs leading-relaxed text-amber-700">
                       Safari をお使いの場合: アドレスバー左の「ぁあ」/ サイト設定アイコンをタップ →
                       「Webサイトの設定」→「マイク」を「許可」に変更してください。変更後、下のボタンで再確認できます。
                     </p>
@@ -1338,130 +1403,130 @@ export function InterviewAiClient() {
                       <button
                         type="button"
                         onClick={recheckMic}
-                        className="text-sm text-amber-800 border border-amber-400 hover:border-amber-500 hover:bg-amber-100 font-semibold px-4 py-2 rounded-lg transition-colors"
+                        className="rounded-lg border border-amber-400 px-4 py-2 text-sm font-semibold text-amber-800 transition-colors hover:border-amber-500 hover:bg-amber-100"
                       >
                         マイク許可を再確認する
                       </button>
                     </div>
                     {micRecheckFailed && (
-                      <p className="mt-2 text-xs text-amber-800 leading-relaxed">
+                      <p className="mt-2 text-xs leading-relaxed text-amber-800">
                         Safariのアドレスバー左の設定からマイクを許可に変更して、ページを再読み込みしてください。
                       </p>
                     )}
                   </div>
                 )}
 
-                {/* sttAvailable を必ず併せて判定（Production では録音 UI を絶対に出さない）。 */}
-                {inputMode === 'voice' && sttAvailable ? (
-                  <div className="flex flex-col gap-2">
-                    {voiceStage === 'recording' ? (
-                      <button
-                        type="button"
-                        onClick={stopRecording}
-                        className="px-5 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white animate-pulse"
-                      >
-                        ⏹ 録音停止
-                      </button>
-                    ) : voiceStage === 'transcribing' ? (
-                      <p className="text-sm text-gray-500">文字起こし中…</p>
-                    ) : answerText ? (
-                      <>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">
-                          文字起こし結果（編集できません）
-                        </label>
-                        {/* 音声モードは本番再現のため編集不可（readonly 表示）。手動編集 / 言い換え不可。 */}
-                        <textarea
-                          readOnly
-                          aria-readonly="true"
-                          className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1 bg-slate-50 text-slate-700`}
-                          value={answerText}
-                        />
-                        <p className="text-xs text-amber-700 mb-2">
-                          音声回答は文字起こし後、そのまま保存されます（本番の面接を想定し、編集はできません）。
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
-                            この内容で送信
-                          </Button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              stopRecordingResources();
-                              setAnswerText('');
-                              setVoiceStage('idle');
-                            }}
-                            disabled={loading}
-                            className="text-sm text-gray-600 border border-gray-300 hover:border-gray-400 font-semibold px-4 py-2 rounded-lg"
-                          >
-                            録音し直す
-                          </button>
+                {/* ③ 録音エリア（下部）。sttAvailable を併せて判定（Production では録音 UI を出さない）。 */}
+                <div className="flex w-full flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-5">
+                  <span className="text-xs font-semibold text-slate-500">🎤 あなたが回答します</span>
+                  {inputMode === 'voice' && sttAvailable ? (
+                    <div className="flex w-full flex-col items-center gap-2">
+                      {voiceStage === 'recording' ? (
+                        <button
+                          type="button"
+                          onClick={stopRecording}
+                          className="animate-pulse rounded-lg bg-red-600 px-5 py-2 text-sm font-semibold text-white"
+                        >
+                          ⏹ 録音停止
+                        </button>
+                      ) : voiceStage === 'transcribing' ? (
+                        <p className="text-sm text-gray-500">📝 文字起こし中…</p>
+                      ) : answerText ? (
+                        <div className="w-full text-left">
+                          <label className="mb-1 block text-xs font-semibold text-gray-500">
+                            文字起こし結果（編集できません）
+                          </label>
+                          {/* 音声モードは本番再現のため編集不可（readonly 表示）。 */}
+                          <textarea
+                            readOnly
+                            aria-readonly="true"
+                            className={`${INPUT_CLASS} mb-1 min-h-[120px] resize-y bg-slate-50 text-slate-700`}
+                            value={answerText}
+                          />
+                          <p className="mb-2 text-xs text-amber-700">
+                            音声回答は文字起こし後、そのまま保存されます（本番の面接を想定し、編集はできません）。
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              onClick={handleSubmitText}
+                              disabled={loading || !answerText.trim()}
+                            >
+                              この内容で送信
+                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                stopRecordingResources();
+                                setAnswerText('');
+                                setVoiceStage('idle');
+                              }}
+                              disabled={loading}
+                              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-600 hover:border-gray-400"
+                            >
+                              録音し直す
+                            </button>
+                          </div>
                         </div>
-                      </>
-                    ) : (
-                      <Button onClick={startRecording} disabled={loading}>
-                        🎤 録音開始
-                      </Button>
-                    )}
-                    {/* 一般ユーザーには音声→テキストの自発切替を出さない（2026-06 方針: 逃げ道を作らない）。
-                        開発者用 flag（devTextFallback）ON のときだけ表示する。
-                        文字起こし中は出さない（編集不可仕様の死守 / M-3）。切替時はマイクを止める（H-1）。 */}
-                    {devTextFallback && voiceStage !== 'transcribing' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          stopRecordingResources();
-                          setInputMode('text');
-                          setAnswerText('');
-                          setVoiceStage('idle');
-                        }}
-                        className="text-xs text-blue-600 hover:text-blue-700 underline self-start mt-1"
-                      >
-                        テキストで回答に切り替え（開発用）
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    {/* テキスト入力は「内部フォールバック」。一般ユーザーには音声が使えない例外時
-                        （マイク拒否 / Safari 不具合 / STT 障害 / 非対応ブラウザ）にだけ自動で出る。
-                        この案内は sourceTypes ON（= 音声面接が有効な環境）かつ開発者 flag OFF の
-                        フォールバック時にだけ出す。flag OFF の旧テキスト面接 / 開発者 flag ON では出さない。 */}
-                    {sourceTypesEnabled && !devTextFallback && (
-                      <AlertBox variant="warning" className="mb-3">
-                        <p>音声が利用できないため、テキスト回答に切り替えました。</p>
-                      </AlertBox>
-                    )}
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">
-                      回答（送信前に自由に編集できます）
-                    </label>
-                    <textarea
-                      className={`${INPUT_CLASS} min-h-[120px] resize-y mb-1`}
-                      value={answerText}
-                      onChange={(e) => setAnswerText(e.target.value)}
-                      placeholder="回答を入力してください"
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
-                        次へ
-                      </Button>
-                      {/* 音声への切替は一般ユーザーには出さない（2026-06 方針）。
-                          開発者用 flag（devTextFallback）ON かつ STT 利用可のときだけ表示する。 */}
-                      {devTextFallback && sttAvailable && (
+                      ) : (
+                        <Button onClick={startRecording} disabled={loading}>
+                          🎤 録音開始
+                        </Button>
+                      )}
+                      {/* 一般ユーザーには音声→テキストの自発切替を出さない（開発者 flag ON のときだけ）。 */}
+                      {devTextFallback && voiceStage !== 'transcribing' && (
                         <button
                           type="button"
                           onClick={() => {
-                            setInputMode('voice');
+                            stopRecordingResources();
+                            setInputMode('text');
                             setAnswerText('');
                             setVoiceStage('idle');
                           }}
-                          className="text-sm text-blue-600 hover:text-blue-700 border border-blue-300 hover:border-blue-400 font-semibold px-4 py-2 rounded-lg"
+                          className="mt-1 text-xs text-blue-600 underline hover:text-blue-700"
                         >
-                          🎤 音声で回答（開発用）
+                          テキストで回答に切り替え（開発用）
                         </button>
                       )}
                     </div>
-                  </>
-                )}
+                  ) : (
+                    <div className="w-full text-left">
+                      {/* テキスト入力は内部フォールバック。音声が使えない例外時にだけ自動で出る。 */}
+                      {sourceTypesEnabled && !devTextFallback && (
+                        <AlertBox variant="warning" className="mb-3">
+                          <p>音声が利用できないため、テキスト回答に切り替えました。</p>
+                        </AlertBox>
+                      )}
+                      <label className="mb-1 block text-xs font-semibold text-gray-500">
+                        回答（送信前に自由に編集できます）
+                      </label>
+                      <textarea
+                        className={`${INPUT_CLASS} mb-1 min-h-[120px] resize-y`}
+                        value={answerText}
+                        onChange={(e) => setAnswerText(e.target.value)}
+                        placeholder="回答を入力してください"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
+                          次へ
+                        </Button>
+                        {/* 音声への切替は開発者 flag ON かつ STT 利用可のときだけ。 */}
+                        {devTextFallback && sttAvailable && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInputMode('voice');
+                              setAnswerText('');
+                              setVoiceStage('idle');
+                            }}
+                            className="rounded-lg border border-blue-300 px-4 py-2 text-sm font-semibold text-blue-600 hover:border-blue-400 hover:text-blue-700"
+                          >
+                            🎤 音声で回答（開発用）
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <p className="text-sm text-gray-500">準備中…</p>
@@ -1509,6 +1574,43 @@ export function InterviewAiClient() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// 経過時間（秒）を mm:ss に整形（表示専用）。
+function formatElapsed(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+// 2D Phase1 アバター（CSS のみ / 外部ライブラリ不使用）。状態クラスに応じて globals.css の
+// keyframes（瞬き・口パク・考える動作・頷き）と transition（表情変化）が効く。
+function AvatarFace({ state }: { state: 'thinking' | 'speaking' | 'listening' | 'idle' }) {
+  return (
+    <div className={`iv-avatar iv-avatar--${state}`} role="img" aria-label="AI面接官">
+      <div className="iv-face">
+        <span className="iv-brow iv-brow--l" />
+        <span className="iv-brow iv-brow--r" />
+        <span className="iv-eye iv-eye--l" />
+        <span className="iv-eye iv-eye--r" />
+        <span className="iv-mouth" />
+      </div>
+    </div>
+  );
+}
+
+// 簡易音声波形（CSS のみ）。バーの scaleY を時間差アニメで動かすだけ（SVG 不要）。
+function Waveform({ variant }: { variant: 'ai' | 'user' }) {
+  // バーごとに animation-delay をずらして波打たせる（値は見た目調整のための固定配列）。
+  const delays = [0, 0.18, 0.36, 0.12, 0.3, 0.06, 0.24, 0.42, 0.15];
+  return (
+    <div className={`iv-wave iv-wave--${variant}`} aria-hidden>
+      {delays.map((d, i) => (
+        <span key={i} className="iv-wave__bar" style={{ animationDelay: `${d}s` }} />
+      ))}
     </div>
   );
 }
