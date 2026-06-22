@@ -37,11 +37,39 @@ import { devWarn } from '@/lib/devLog';
 import { captureRouteException } from '@/lib/sentry/capture';
 import { ensurePlanQuota } from '@/lib/billing/planGate';
 import { getServiceRoleSupabaseClient } from '@/lib/supabase/serviceRoleClient';
+import { getSupabaseServiceRoleKey, getSupabaseUrl } from '@/lib/supabase/env';
+import { PRESENTATION_MATERIAL_BUCKET } from '@/lib/presentation/material';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const TABLE = 'presentation_sessions';
+
+// 500 時の診断ペイロード。値そのもの（URL/キー）は出さず boolean のみ返す。
+// marker / commit でデプロイ済みコードと環境構成の取り違えを切り分ける。
+function buildDiagnostic(marker: string) {
+  return {
+    marker,
+    commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    hasSupabase: Boolean(getSupabaseUrl() && getSupabaseServiceRoleKey()),
+    hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+    hasStorageBucket: Boolean(PRESENTATION_MATERIAL_BUCKET),
+  };
+}
+
+// 500 レスポンスの共通整形。既存契約 `error: 'session-create-failed'` は残し、
+// ok=false / reason / diagnostic を追加（クライアントは status のみで分岐するため破壊なし）。
+function fail500(reason: string, marker: string): Response {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'session-create-failed',
+      reason,
+      diagnostic: buildDiagnostic(marker),
+    },
+    { status: 500 },
+  );
+}
 // in_progress 部分 unique index 違反の Postgres SQLSTATE。
 const UNIQUE_VIOLATION = '23505';
 
@@ -86,6 +114,10 @@ type CreatedSession = {
 };
 
 export async function POST(req: Request) {
+  // 外側 try/catch: gate（ensurePlanQuota）や service_role client 構築は env 欠落時に
+  // throw し得る。従来はこれらが try 外で raw 500（診断なし）になっていたため、
+  // ハンドラ全体を包んで console.error + diagnostic に必ず倒す。
+  try {
   // 1. gate（auth + quota）。reject なら 401 / 402 をそのまま返す（Basic/Free は presentation:0 で 402）。
   const gate = await ensurePlanQuota('presentation');
   if (gate.kind === 'reject') return gate.response;
@@ -160,62 +192,66 @@ export async function POST(req: Request) {
 
   // 3. in_progress セッションを insert（usage_recorded=false 初期値）。
   //    課金は本 route では行わない（消費は evaluate route の初回 AI 評価成功時のみ）。
-  try {
-    const { data, error } = await admin
-      .from(TABLE)
-      .insert({
-        user_id: userId,
-        status: 'in_progress',
-        usage_recorded: false,
-        university_name: universityName,
-        faculty_name: facultyName,
-        department_name: departmentName || null,
-        admission_type: admissionType || null,
-        presentation_format: presentationFormat || null,
-        presentation_limit_sec: presentationLimitSec,
-        university_notes: universityNotes || null,
-        theme,
-        time_limit_sec: timeLimitSec,
-        script,
-        theme_mode: themeMode,
-        generated_conditions: generatedConditions,
-        generated_questions: generatedQuestions,
-      })
-      .select(SELECT_COLS)
-      .single();
+  const { data, error } = await admin
+    .from(TABLE)
+    .insert({
+      user_id: userId,
+      status: 'in_progress',
+      usage_recorded: false,
+      university_name: universityName,
+      faculty_name: facultyName,
+      department_name: departmentName || null,
+      admission_type: admissionType || null,
+      presentation_format: presentationFormat || null,
+      presentation_limit_sec: presentationLimitSec,
+      university_notes: universityNotes || null,
+      theme,
+      time_limit_sec: timeLimitSec,
+      script,
+      theme_mode: themeMode,
+      generated_conditions: generatedConditions,
+      generated_questions: generatedQuestions,
+    })
+    .select(SELECT_COLS)
+    .single();
 
-    if (error) {
-      // 3a. in_progress 重複（§64 部分 unique index）→ 既存セッションを返す（続きから）。
-      if (error.code === UNIQUE_VIOLATION) {
-        return await respondWithExistingInProgress(admin, userId);
-      }
-      devWarn('[presentation/session] insert error', {
-        code: error.code,
-        message: error.message,
-      });
-      captureRouteException(
-        error,
-        { route: 'presentation/session', feature: 'presentation', status: 500 },
-        { status: 500, code: 'session-create-failed' },
-      );
-      return NextResponse.json(
-        { error: 'session-create-failed' },
-        { status: 500 },
-      );
+  if (error) {
+    // 3a. in_progress 重複（§64 部分 unique index）→ 既存セッションを返す（続きから）。
+    if (error.code === UNIQUE_VIOLATION) {
+      return await respondWithExistingInProgress(admin, userId);
     }
+    // DB 返却エラー（throw ではなく { error }）。スキーマ未適用・型不一致などが該当。
+    // 秘密情報は出さず、message / code のみログ。
+    console.error('PRESENTATION SESSION ERROR', {
+      message: error.message,
+      stack: undefined,
+      code: error.code,
+    });
+    devWarn('[presentation/session] insert error', {
+      code: error.code,
+      message: error.message,
+    });
+    captureRouteException(
+      error,
+      { route: 'presentation/session', feature: 'presentation', status: 500 },
+      { status: 500, code: 'session-create-failed' },
+    );
+    return fail500('insert-failed', 'presentation-session-diag-1');
+  }
 
-    return NextResponse.json({ session: toCreatedSession(data) }, { status: 201 });
+  return NextResponse.json({ session: toCreatedSession(data) }, { status: 201 });
   } catch (err) {
-    devWarn('[presentation/session] insert threw', err);
+    // 想定外 throw（env 欠落で gate / service_role client 構築が失敗、ネットワーク等）。
+    // 従来はここが未捕捉で診断なしの raw 500 になっていた経路。
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error('PRESENTATION SESSION ERROR', { message, stack });
     captureRouteException(
       err,
       { route: 'presentation/session', feature: 'presentation', status: 500 },
       { status: 500, code: 'session-create-failed' },
     );
-    return NextResponse.json(
-      { error: 'session-create-failed' },
-      { status: 500 },
-    );
+    return fail500('unexpected', 'presentation-session-diag-1');
   }
 }
 
@@ -234,13 +270,15 @@ async function respondWithExistingInProgress(
     .maybeSingle();
 
   if (error || !data) {
+    console.error('PRESENTATION SESSION ERROR', {
+      message: error?.message ?? 'existing in_progress not found',
+      stack: undefined,
+      code: error?.code,
+    });
     devWarn('[presentation/session] existing in_progress fetch failed', {
       message: error?.message,
     });
-    return NextResponse.json(
-      { error: 'session-create-failed' },
-      { status: 500 },
-    );
+    return fail500('existing-fetch-failed', 'presentation-session-diag-1');
   }
 
   return NextResponse.json(
