@@ -29,10 +29,7 @@ import {
 import { INTERVIEW_AI_MAX_ANSWER_TURNS } from '@/lib/interviewAi/limits';
 import {
   isInterviewSourceTypesEnabledByEnv,
-  isInterviewSourceTypesEnabledByQuery,
   isInterviewSourceTypesEnabledClient,
-  isInterviewSourceTypesDebugVisible,
-  isInterviewPrefetchEnabled,
   isPrefetchAllowedForInterviewType,
   isInterviewTextFallbackEnabledByEnv,
   isInterviewTextFallbackEnabledClient,
@@ -270,7 +267,8 @@ export function InterviewAiClient() {
   // 失敗 / 未生成なら候補 null のまま送信 → server が従来どおり生成（フォールバック）。
   // flag OFF（既定）では prefetchNext が即 return し、候補は常に null ＝ 従来挙動と完全同一。
   const [nextQuestionCandidate, setNextQuestionCandidate] = useState<string | null>(null);
-  const [isPreloading, setIsPreloading] = useState(false);
+  // 先読み中フラグの setter のみ保持（表示には使わない。prefetch のライフサイクル管理用）。
+  const [, setIsPreloading] = useState(false);
   // 進行中 prefetch を無効化するトークン。質問が変わる/リセットのたびに ++ し、古い候補を捨てる。
   const prefetchReqRef = useRef(0);
 
@@ -1073,32 +1071,6 @@ export function InterviewAiClient() {
   // ── 描画 ────────────────────────────────────────────────────
   return (
     <div>
-      {/* 診断用 debug 表示。**本番ホスト（passai.jp / www.passai.jp）では常に非表示**
-          （isInterviewSourceTypesDebugVisible が本番ホストで false を返す）。
-          本番で NEXT_PUBLIC_ENABLE_INTERVIEW_SOURCE_TYPES=true にしても本番ユーザーには出ない。
-          localhost / vercel.app Preview の sourceTypes 有効時のみ env/query/hostname/phase を内訳表示する。 */}
-      {mounted && isInterviewSourceTypesDebugVisible() && (
-        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 break-all">
-          <div>debug: SOURCE_TYPES_ENABLED = {String(sourceTypesEnabled)}</div>
-          <div>env flag = {String(isInterviewSourceTypesEnabledByEnv())}</div>
-          <div>query override = {String(isInterviewSourceTypesEnabledByQuery())}</div>
-          <div>
-            hostname ={' '}
-            {typeof window !== 'undefined' ? window.location.hostname : '(ssr)'}
-          </div>
-          <div>phase = {phase}</div>
-          {/* 先読み（prefetch）の状態。本番ホストでは debug box ごと非表示なので出ない。 */}
-          <div>prefetch flag = {String(isInterviewPrefetchEnabled())}</div>
-          <div>
-            prefetch allowed({session?.interviewType ?? '-'}) ={' '}
-            {String(isPrefetchAllowedForInterviewType(session?.interviewType))}
-          </div>
-          <div>
-            prefetch = {isPreloading ? 'loading…' : nextQuestionCandidate ? 'candidate ready' : 'none'}
-          </div>
-        </div>
-      )}
-
       {errorMsg && (
         <AlertBox variant="warning" className="mb-6">
           <p>{errorMsg}</p>
