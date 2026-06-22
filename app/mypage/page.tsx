@@ -28,6 +28,7 @@ import { ScoreLineChart } from './ScoreLineChart';
 import { EmptyState } from './EmptyState';
 import { BillingCard } from './BillingCard';
 import { UsageStatusCard } from './UsageStatusCard';
+import { InterviewGrowthCard } from './InterviewGrowthCard';
 import { PresentationGrowthCard } from './PresentationGrowthCard';
 import { LoginNudge } from './LoginNudge';
 import { LogoutButton } from './LogoutButton';
@@ -111,6 +112,12 @@ export default function MyPage() {
           BillingCard と同じく empty-state の外。Free ユーザーには内部で
           自動的に何も描画されない。 */}
       <UsageStatusCard />
+
+      {/* ── AI面接 成長記録 ────────────────────────────────
+          empty-state 分岐の外側に置く: AI 面接履歴は Supabase（RLS owner SELECT）由来で
+          localStorage の活動有無とは独立して見せたいため。未ログイン時は内部で何も描画されない。
+          配置: プレゼン成長レポートの直前（仕様の表示順）。 */}
+      <InterviewGrowthCard />
 
       {/* ── プレゼン成長レポート ───────────────────────────
           empty-state 分岐の外側に置く: Premium のプレゼン履歴は localStorage 由来の
