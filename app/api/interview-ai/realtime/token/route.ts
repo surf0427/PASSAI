@@ -65,28 +65,9 @@ const SELECT_COLS =
 
 const ENABLED_VALUES: ReadonlySet<string> = new Set(['true', '1', 'yes']);
 
-// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: 最新 route が live かを判定する build marker。
-// 診断版を出すたびに数字を上げる。原因特定後に GET ハンドラごと削除する。
-const ROUTE_BUILD_MARKER = 'realtime-token-diag-4';
-
 function isServerFlagEnabled(): boolean {
   const raw = process.env.REALTIME_INTERVIEW_ENABLED;
   return typeof raw === 'string' && ENABLED_VALUES.has(raw.trim().toLowerCase());
-}
-
-// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: POST/GET 共通の marker + runtime env presence。
-// 値（sk-... 等）は出さず boolean のみ。原因特定後に削除する。
-function diagPayload(extra: Record<string, unknown> = {}) {
-  return {
-    marker: ROUTE_BUILD_MARKER,
-    commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-    env: {
-      realtimeEnabled: isServerFlagEnabled(),
-      hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
-      hasSalt: Boolean(process.env.REALTIME_SAFETY_ID_SALT),
-    },
-    ...extra,
-  };
 }
 
 // REALTIME_DEV_USER_IDS が非空のとき allowlist として機能する。未設定/空 → 制限なし（skip）。
@@ -163,48 +144,13 @@ export async function POST(req: Request): Promise<Response> {
   return handleRealtimeToken(req, defaultDeps);
 }
 
-// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: GET ?debug=1 で最新 route が live か / env が runtime に
-// 見えているかを判定する。値（sk-... 等）は返さず presence(boolean) のみ。flag OFF（本番）では 404。
-// 原因特定後に削除する。
-export async function GET(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  if (url.searchParams.get('debug') !== '1') {
-    return NextResponse.json({ error: 'method-not-allowed' }, { status: 405 });
-  }
-  if (!isServerFlagEnabled()) {
-    return NextResponse.json({ error: 'realtime-disabled' }, { status: 403 });
-  }
-  return NextResponse.json(
-    {
-      marker: ROUTE_BUILD_MARKER,
-      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-      env: {
-        realtimeEnabled: isServerFlagEnabled(),
-        hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
-        hasSalt: Boolean(process.env.REALTIME_SAFETY_ID_SALT),
-        allowlistConfigured: Boolean(
-          (process.env.REALTIME_DEV_USER_IDS ?? '').trim(),
-        ),
-        model: process.env.INTERVIEW_AI_REALTIME_MODEL || DEFAULT_REALTIME_MODEL,
-      },
-    },
-    { status: 200 },
-  );
-}
-
 export async function handleRealtimeToken(
   req: Request,
   deps: RealtimeTokenDeps,
 ): Promise<Response> {
-  // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: POST が最新 route/commit/env を見ているか確認。
-  console.log('TOKEN ROUTE HIT', { method: req.method, ...diagPayload() });
-
   // 1. server 最終ゲート。これが true でなければトークンは絶対に発行しない。
   if (!isServerFlagEnabled()) {
-    return NextResponse.json(
-      { error: 'realtime-disabled', diagnostic: diagPayload() },
-      { status: 403 },
-    );
+    return NextResponse.json({ error: 'realtime-disabled' }, { status: 403 });
   }
 
   // 2. gate（auth + plan + 当月 quota）。非Premium / 上限超過は 402、未認証は 401。
@@ -254,21 +200,11 @@ export async function handleRealtimeToken(
   const voice = process.env.INTERVIEW_AI_REALTIME_VOICE || DEFAULT_REALTIME_VOICE;
 
   // OPENAI_API_KEY 欠落は config エラー。session を作る前に弾く（orphan を作らない）。
-  // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: ここも diagnostic を返す。
-  //   この分岐に来る = Preview runtime に OPENAI_API_KEY が見えていない（scope/redeploy 漏れ）。
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    const diagnostic = diagPayload({
-      reason: 'missing-openai-key',
-      openaiStatus: null,
-      openaiBody: null,
-      model,
-    });
-    console.error('TOKEN ROUTE MISSING OPENAI KEY', diagnostic);
-    return NextResponse.json(
-      { error: 'token-mint-failed', diagnostic },
-      { status: 502 },
-    );
+    // 内部 env/commit/marker は出さず、原因種別のみ最小限ログする。
+    console.error('[interview-ai/realtime/token] missing OPENAI_API_KEY');
+    return NextResponse.json({ error: 'token-mint-failed' }, { status: 502 });
   }
 
   const admin = deps.getAdmin();
@@ -354,16 +290,11 @@ export async function handleRealtimeToken(
   });
 
   if (!minted.ok) {
-    // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: OpenAI の実 status/body をログ＋応答に出す。
-    //   - devWarn は production(=Vercel Preview) で DCE 除去されるため console.error を使う。
-    //   - 原因切り分け後に削除する（diagnostic フィールド / console.error / model 出力）。
-    const diagnostic = diagPayload({
+    // 失敗種別と OpenAI HTTP status のみ最小限ログ（commit/env/marker/生body は出さない）。
+    console.error('[interview-ai/realtime/token] mint failed', {
       reason: minted.reason,
-      openaiStatus: minted.openaiStatus,
-      openaiBody: minted.openaiBody,
-      model,
+      status: minted.openaiStatus,
     });
-    console.error('TOKEN ROUTE MINT FAILED', diagnostic);
     // one_in_progress を解放するため abandoned に倒す（best-effort）。
     const { error: abErr } = await deps.updateSessionStatus(admin, {
       sessionId,
@@ -379,10 +310,7 @@ export async function handleRealtimeToken(
       model,
       status: 'failed',
     });
-    return NextResponse.json(
-      { error: 'token-mint-failed', diagnostic },
-      { status: 502 },
-    );
+    return NextResponse.json({ error: 'token-mint-failed' }, { status: 502 });
   }
 
   // 7. 観測ログのみ。recordUsage は呼ばない（課金は最初の有効発話で CAS 計上＝STEP7）。
@@ -400,8 +328,6 @@ export async function handleRealtimeToken(
       model,
       maxDurationMs: REALTIME_MAX_DURATION_MS,
       callUrl: OPENAI_REALTIME_CALLS_URL,
-      // STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: 成功時も marker/env を載せる。原因特定後に削除。
-      diagnostic: diagPayload({ reason: 'ok' }),
     },
     { status: 201 },
   );
