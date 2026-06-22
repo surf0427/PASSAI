@@ -34,6 +34,7 @@ import {
   INTERVIEW_AI_MAX_ANSWER_CHARS,
   INTERVIEW_AI_MAX_ANSWER_TURNS,
   INTERVIEW_AI_MAX_AUDIO_BYTES,
+  INTERVIEW_AI_MAX_TTS_CHARS,
 } from '@/lib/interviewAi/constants';
 import { loadInProgressOwnedSession } from '@/lib/interviewAi/sessionGuard';
 import { triggerInterviewAiBilling } from '@/lib/interviewAi/billing';
@@ -49,6 +50,7 @@ import {
   type PriorTurn,
 } from '@/lib/interviewAi/questionGen';
 import { isInterviewType, type InterviewType } from '@/lib/interviewAi/interviewTypes';
+import { isPrefetchAllowedForInterviewType } from '@/lib/interviewAi/featureFlag';
 import {
   isSttError,
   SttUnavailableError,
@@ -64,6 +66,16 @@ const ROUTE_TAG = 'interview-ai/turn';
 
 function json(body: Record<string, unknown>, status: number): Response {
   return NextResponse.json(body, { status });
+}
+
+// 先読み採用候補（presetQuestion）の検証。trim 後に空 / 長すぎ（質問1文の上限超過）なら無効 → null。
+// 無効時は呼び出し側が通常生成にフォールバックするため、面接が止まることはない。
+// 質問本文はこのセッション自身の履歴にのみ保存され、課金・他ユーザー・評価には影響しない。
+function sanitizePresetQuestion(raw: string | undefined): string | null {
+  const t = (raw ?? '').trim();
+  if (!t) return null;
+  if (t.length > INTERVIEW_AI_MAX_TTS_CHARS) return null;
+  return t;
 }
 
 export async function POST(req: Request) {
@@ -82,6 +94,10 @@ export async function POST(req: Request) {
   let answerText = '';
   let audioBuffer: ArrayBuffer | null = null;
   let audioMime = '';
+  // 先読み採用（任意）: client が先生成した次質問候補。回答保存後の followup を AI 生成する代わりに
+  // この候補を採用して待機を消す。空 / 無効ならフォールバックで通常生成する（既存挙動と同一）。
+  // 採用しても課金・保存・turn_index・上限判定は一切変えない（質問本文の出所のみが変わる）。
+  let presetQuestion = '';
 
   if (isMultipart) {
     let form: FormData;
@@ -100,6 +116,8 @@ export async function POST(req: Request) {
     sessionId = sid;
     mode = 'voice-answer';
     audioMime = audio.type || 'application/octet-stream';
+    const preset = form.get('presetQuestion');
+    if (typeof preset === 'string') presetQuestion = preset;
     // 音声はメモリ上で transcribe するためだけに読む。保存はしない（§6）。
     audioBuffer = await audio.arrayBuffer();
   } else {
@@ -128,6 +146,7 @@ export async function POST(req: Request) {
       }
       mode = 'text-answer';
       answerText = trimmed;
+      if (typeof b.presetQuestion === 'string') presetQuestion = b.presetQuestion;
     } else {
       return json({ error: 'invalid-body' }, 400);
     }
@@ -159,6 +178,7 @@ export async function POST(req: Request) {
       answerText,
       audioBuffer,
       audioMime,
+      presetQuestion,
     });
   } catch (err) {
     devWarn('[interview-ai/turn] unhandled', err);
@@ -234,6 +254,7 @@ async function handleAnswer(
     answerText: string;
     audioBuffer: ArrayBuffer | null;
     audioMime: string;
+    presetQuestion: string;
   },
 ): Promise<Response> {
   // §5: source 分岐の整合性。voice セッションは音声、text セッションは text のみ。
@@ -261,7 +282,15 @@ async function handleAnswer(
   if (input.mode === 'voice-answer') {
     return await handleVoiceAnswer(admin, session, userId, turns, answerIndex, input);
   }
-  return await handleTextAnswer(admin, session, userId, turns, answerIndex, input.answerText);
+  return await handleTextAnswer(
+    admin,
+    session,
+    userId,
+    turns,
+    answerIndex,
+    input.answerText,
+    input.presetQuestion,
+  );
 }
 
 // voice: STT → (STT 成功で課金トリガ) → transcript 保存 → followup。
@@ -271,7 +300,7 @@ async function handleVoiceAnswer(
   userId: string,
   turns: TurnRow[],
   answerIndex: number,
-  input: { audioBuffer: ArrayBuffer | null; audioMime: string },
+  input: { audioBuffer: ArrayBuffer | null; audioMime: string; presetQuestion: string },
 ): Promise<Response> {
   if (!input.audioBuffer) return json({ error: 'invalid-body' }, 400);
 
@@ -315,6 +344,7 @@ async function handleVoiceAnswer(
     answerIndex,
     transcript,
     answerCountBefore: countAnswerTurns(turns),
+    presetQuestion: input.presetQuestion,
   });
 }
 
@@ -326,6 +356,7 @@ async function handleTextAnswer(
   turns: TurnRow[],
   answerIndex: number,
   answerText: string,
+  presetQuestion: string,
 ): Promise<Response> {
   // §5: text は STT を通さない。回答テキストをそのまま transcript として保存する。
   // §8: 保存失敗は明示エラー。保存に失敗したら recordUsage しない（保存より先に課金しない）。
@@ -349,6 +380,7 @@ async function handleTextAnswer(
     answerIndex,
     transcript: answerText,
     answerCountBefore: countAnswerTurns(turns),
+    presetQuestion,
   });
 }
 
@@ -358,7 +390,12 @@ async function respondWithFollowup(
   session: { id: string; target_ref: Record<string, unknown>; interview_type: string },
   userId: string,
   turns: TurnRow[],
-  ctx: { answerIndex: number; transcript: string; answerCountBefore: number },
+  ctx: {
+    answerIndex: number;
+    transcript: string;
+    answerCountBefore: number;
+    presetQuestion: string;
+  },
 ): Promise<Response> {
   const newAnswerCount = ctx.answerCountBefore + 1;
 
@@ -379,6 +416,7 @@ async function respondWithFollowup(
     priorTurns,
     answerIndex: ctx.answerIndex,
     transcript: ctx.transcript,
+    presetQuestion: ctx.presetQuestion,
   });
 }
 
@@ -426,29 +464,46 @@ async function genAndSaveFollowup(
   admin: ReturnType<typeof getServiceRoleSupabaseClient>,
   session: { id: string; target_ref: Record<string, unknown>; interview_type: string },
   userId: string,
-  ctx: { priorTurns: PriorTurn[]; answerIndex: number; transcript: string },
+  ctx: {
+    priorTurns: PriorTurn[];
+    answerIndex: number;
+    transcript: string;
+    presetQuestion?: string;
+  },
 ): Promise<Response> {
+  // 先読み採用: 有効な presetQuestion があれば AI 生成をスキップしてそれを次質問にする。
+  // 保存（insertTurn）・turn_index・課金・上限判定は通常生成と完全に同一（質問本文の出所だけが変わる）。
+  // 採用は「全体 flag ON かつ先読み許可モード（free / pressure）」のときだけ（client / prefetch と三重整合）。
+  // 非許可モード（self_analysis / statement / essay）/ flag OFF では、直接 POST で presetQuestion が
+  // 送られても無視し、従来どおり generateFollowupQuestion で生成する（フォールバック）。
+  const preset = isPrefetchAllowedForInterviewType(session.interview_type)
+    ? sanitizePresetQuestion(ctx.presetQuestion)
+    : null;
   let question: string;
-  try {
-    const gp = genParams(session);
-    question = await generateFollowupQuestion({
-      interviewType: gp.interviewType,
-      targetRef: session.target_ref,
-      turns: ctx.priorTurns,
-      sourceContext: gp.sourceContext,
-    });
-  } catch {
-    // 回答は保存・課金済み。次の質問生成だけ失敗 → 明示 surface。retryFollowup で再試行可能。
-    return json(
-      {
-        transcript: ctx.transcript,
-        turnIndex: ctx.answerIndex,
-        done: false,
-        question: null,
-        questionError: 'question-generation-failed',
-      },
-      200,
-    );
+  if (preset) {
+    question = preset;
+  } else {
+    try {
+      const gp = genParams(session);
+      question = await generateFollowupQuestion({
+        interviewType: gp.interviewType,
+        targetRef: session.target_ref,
+        turns: ctx.priorTurns,
+        sourceContext: gp.sourceContext,
+      });
+    } catch {
+      // 回答は保存・課金済み。次の質問生成だけ失敗 → 明示 surface。retryFollowup で再試行可能。
+      return json(
+        {
+          transcript: ctx.transcript,
+          turnIndex: ctx.answerIndex,
+          done: false,
+          question: null,
+          questionError: 'question-generation-failed',
+        },
+        200,
+      );
+    }
   }
 
   const questionIndex = ctx.answerIndex + 1;

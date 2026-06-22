@@ -171,14 +171,21 @@ function mapAnswerBody(res: Response, body: Record<string, unknown>): AnswerResu
   return { kind: 'error', error: String(body.error ?? 'turn-failed') };
 }
 
+// presetQuestion（任意）= 先読み採用候補。server が有効な候補を次質問として保存し、AI 生成を省く。
+// 無効 / 未指定なら server は従来どおり生成する（フォールバック）。課金・保存仕様は不変。
 export async function submitTextAnswer(
   sessionId: string,
   answer: string,
+  presetQuestion?: string | null,
 ): Promise<AnswerResult> {
   const res = await fetch('/api/interview-ai/turn', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, answer }),
+    body: JSON.stringify({
+      sessionId,
+      answer,
+      ...(presetQuestion ? { presetQuestion } : {}),
+    }),
   });
   return mapAnswerBody(res, await parseJson(res));
 }
@@ -186,12 +193,37 @@ export async function submitTextAnswer(
 export async function submitVoiceAnswer(
   sessionId: string,
   audio: Blob,
+  presetQuestion?: string | null,
 ): Promise<AnswerResult> {
   const form = new FormData();
   form.append('sessionId', sessionId);
   form.append('audio', audio, 'answer.webm');
+  if (presetQuestion) form.append('presetQuestion', presetQuestion);
   const res = await fetch('/api/interview-ai/turn', { method: 'POST', body: form });
   return mapAnswerBody(res, await parseJson(res));
+}
+
+// ── 次質問の先読み（候補生成。保存も課金もしない。失敗時は候補なしで従来生成にフォールバック）──
+export type PrefetchResult =
+  | { kind: 'candidate'; question: string }
+  | { kind: 'none' };
+
+export async function prefetchNextQuestion(sessionId: string): Promise<PrefetchResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/interview-ai/prefetch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch {
+    return { kind: 'none' };
+  }
+  const body = await parseJson(res);
+  if (res.ok && typeof body.candidate === 'string' && body.candidate.trim()) {
+    return { kind: 'candidate', question: body.candidate };
+  }
+  return { kind: 'none' };
 }
 
 // ── STT（音声 → transcript）。保存も課金もしない。失敗時はテキスト入力にフォールバック ──
@@ -221,13 +253,17 @@ export type SynthesizeResult =
   | { kind: 'ok'; audio: Blob }
   | { kind: 'error'; error: 'tts-unavailable' | 'tts-failed' | string };
 
-export async function synthesizeSpeech(text: string): Promise<SynthesizeResult> {
+export async function synthesizeSpeech(
+  text: string,
+  interviewType?: string | null,
+): Promise<SynthesizeResult> {
   let res: Response;
   try {
     res = await fetch('/api/interview-ai/tts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      // interviewType でモード別の話し方を切り替える（route が不正値を無視するので素直に送る）。
+      body: JSON.stringify({ text, interviewType: interviewType ?? null }),
     });
   } catch {
     return { kind: 'error', error: 'tts-failed' };

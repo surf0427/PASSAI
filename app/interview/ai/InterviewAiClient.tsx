@@ -11,6 +11,7 @@ import {
   getActiveSession,
   getSessionState,
   kickoff,
+  prefetchNextQuestion,
   retryFollowup,
   submitTextAnswer,
   synthesizeSpeech,
@@ -31,6 +32,10 @@ import {
   isInterviewSourceTypesEnabledByQuery,
   isInterviewSourceTypesEnabledClient,
   isInterviewSourceTypesDebugVisible,
+  isInterviewPrefetchEnabled,
+  isPrefetchAllowedForInterviewType,
+  isInterviewTextFallbackEnabledByEnv,
+  isInterviewTextFallbackEnabledClient,
 } from '@/lib/interviewAi/featureFlag';
 
 // 機能別データ連動面接の有効化判定（env または Preview query override）。
@@ -44,6 +49,16 @@ function useSourceTypesEnabled(): boolean {
     emptySubscribe,
     isInterviewSourceTypesEnabledClient, // client snapshot（env || query）
     isInterviewSourceTypesEnabledByEnv, // server snapshot（env のみ）
+  );
+}
+// 開発者用テキスト回答フォールバック（env || Preview ?textMode=1）。一般ユーザーは常に false。
+// ON のときだけ、エラー未発生でも音声/テキスト切替・テキスト入力を常時使える（QA・開発検証用）。
+// query override は client のみのため useSyncExternalStore で hydration mismatch を回避する。
+function useTextFallbackEnabled(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    isInterviewTextFallbackEnabledClient, // client snapshot（env || query）
+    isInterviewTextFallbackEnabledByEnv, // server snapshot（env のみ）
   );
 }
 // mount 後だけ true（SSR=false）。debug バナーを client 専用に描画して hydration mismatch を避ける。
@@ -61,6 +76,9 @@ const INPUT_CLASS =
 // req ④: 質問生成（kickoff / followup）再試行の上限。これを超えたら同じ API を叩かせず、
 // 中断してやり直す導線に切り替える（無限再試行・無限ループの防止）。
 const MAX_QUESTION_RETRIES = 3;
+
+// TTS 音声キャッシュの上限件数。1 セッションの質問数（≒5）には十分で、万一の暴走増加を防ぐ。
+const TTS_CACHE_MAX = 12;
 
 // タイプ選択カードの説明文（2026-06 方針）。
 const TYPE_CARD_DESC: Record<InterviewType, string> = {
@@ -103,11 +121,12 @@ function buildExchangesFromTurns(
 export function InterviewAiClient() {
   // env または Preview query override で有効化（client mount 後に query を含めて確定）。
   const sourceTypesEnabled = useSourceTypesEnabled();
+  // 開発者用テキスト回答フォールバック。ON のときだけ音声/テキスト切替を一般表示する（QA・開発検証用）。
+  const devTextFallback = useTextFallbackEnabled();
   const mounted = useMounted();
 
   // 常に setup（大学・学部選択）から始める。タイプ選択は setup 完了後（有効時のみ）。
   const [phase, setPhase] = useState<Phase>('setup');
-  const [mode, setMode] = useState<'voice' | 'text'>('text');
   const [university, setUniversity] = useState('');
   const [faculty, setFaculty] = useState('');
   const [examType, setExamType] = useState('');
@@ -116,6 +135,12 @@ export function InterviewAiClient() {
   const [guidance, setGuidance] = useState<(SourceGuidance & { type: InterviewType }) | null>(null);
 
   const [session, setSession] = useState<AiSession | null>(null);
+  // session の最新値を同期参照する ref。setSession の再レンダー前（kickoff 等の同期処理中）でも
+  // sessionId / interviewType を確実に読むため、setSession と同じ箇所で eager に更新する。
+  const sessionRef = useRef<AiSession | null>(null);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState('');
   // exchanges は「画面に出す過去のやり取り」の表示専用バッファ。質問数のカウントには使わない（req ②）。
@@ -137,10 +162,11 @@ export function InterviewAiClient() {
   const [resume, setResume] = useState<AiSession | null>(null);
   const [result, setResult] = useState<Extract<CompleteResult, { kind: 'completed' }> | null>(null);
 
-  // 回答の入力方法（現在の実効モード）。session 既定（mode）からセッション開始 / 再開時に初期化し、
-  // 以降は質問が変わっても保持する（質問切替で勝手に変わらない / req ①）。変わるのは
-  //   (a) ユーザーの明示トグル（🎤音声で回答 / テキストで回答に切り替え）
-  //   (b) STT 失敗による voice→text 自動フォールバック（req ④。音声モード編集禁止の唯一の例外）
+  // 回答の入力方法（現在の実効モード）。defaultInputMode() でセッション開始 / 再開時に初期化し、
+  // 以降は質問が変わっても保持する（質問切替で勝手に変わらない / req ①）。2026-06 方針では
+  // 一般ユーザーの実効モードは原則 voice。変わるのは
+  //   (a) STT 失敗 / マイク拒否による voice→text 自動フォールバック（例外時のみテキスト解放 = 解釈A）
+  //   (b) 開発者用 flag（devTextFallback）ON のときの明示トグル（QA・開発検証用）
   // の 2 経路のみ。TTS の成否は inputMode に一切影響しない（補助機能として分離 / req ⑥）。
   // 音声回答も最終的には STT 後の text answer として保存する（1セッション1課金は不変）。
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('text');
@@ -195,6 +221,44 @@ export function InterviewAiClient() {
   const ttsReqRef = useRef(0);
   // provider 未設定が一度わかったら以降は fetch せず即 'unavailable'（無駄な 502 を避ける）。
   const ttsUnavailableRef = useRef(false);
+  // session 内の音声キャッシュ（Map<質問テキスト, 音声Blob>）。同じ質問の読み上げを再生成しない。
+  // 保存は DB / Storage には一切しない（client メモリ上のみ。session を抜ける resetToStart で破棄）。
+  // モードごとに話し方が変わるため、session（=同一モード）境界でのみ再利用し、reset で必ずクリアする。
+  const ttsCacheRef = useRef<Map<string, Blob>>(new Map());
+
+  // ── 次質問の先読み（prefetch / 候補採用） ─────────────────────────────
+  // 現在の質問を表示した直後、回答を待たずに「次に出す可能性が高い質問候補」を裏で1件生成しておく。
+  // 回答時にこの候補を /turn の presetQuestion として即採用し、AI 生成の待機を消す。
+  // 失敗 / 未生成なら候補 null のまま送信 → server が従来どおり生成（フォールバック）。
+  // flag OFF（既定）では prefetchNext が即 return し、候補は常に null ＝ 従来挙動と完全同一。
+  const [nextQuestionCandidate, setNextQuestionCandidate] = useState<string | null>(null);
+  const [isPreloading, setIsPreloading] = useState(false);
+  // 進行中 prefetch を無効化するトークン。質問が変わる/リセットのたびに ++ し、古い候補を捨てる。
+  const prefetchReqRef = useRef(0);
+
+  // 先読み状態を初期化（質問切替・リセット・終了時）。in-flight 結果も破棄する。
+  const resetPrefetch = useCallback(() => {
+    prefetchReqRef.current += 1;
+    setNextQuestionCandidate(null);
+    setIsPreloading(false);
+  }, []);
+
+  // 次質問候補をバックグラウンドで先読みする（fire-and-forget）。flag OFF なら何もしない。
+  // server が pending 質問なし / 上限到達 / 生成失敗のときは candidate なし → 候補 null（フォールバック）。
+  const prefetchNext = useCallback((sessionId: string) => {
+    if (!sessionId) return;
+    // モード別ガード: 全体 flag ON かつ、このモードが先読み許可（free / pressure）のときだけ先読みする。
+    // self_analysis / statement / essay は回答依存の深掘り精度を優先し、先読みしない（候補 null = 従来生成）。
+    if (!isPrefetchAllowedForInterviewType(sessionRef.current?.interviewType)) return;
+    const reqId = (prefetchReqRef.current += 1);
+    setIsPreloading(true);
+    void (async () => {
+      const r = await prefetchNextQuestion(sessionId);
+      if (reqId !== prefetchReqRef.current) return; // 質問が変わった後の結果は破棄
+      setIsPreloading(false);
+      setNextQuestionCandidate(r.kind === 'candidate' ? r.question : null);
+    })();
+  }, []);
 
   // 録音リソース（MediaRecorder / MediaStream / chunks）を確実に解放する一元処理。
   // 録音中の切替・中断・リセット・結果遷移・unmount・STT失敗・録り直しなど、
@@ -300,8 +364,44 @@ export function InterviewAiClient() {
       }
       releaseTtsResources(); // 進行中 fetch を無効化 + 前の音声を解放
       const reqId = ttsReqRef.current;
+
+      // 取得済み（cache hit / 新規生成）の音声 Blob を object URL 化して自動再生する共通処理。
+      // 質問が切り替わっていたら（reqId 不一致）鳴らさない（古い質問の音声を防ぐ）。
+      const startPlayback = async (audioBlob: Blob) => {
+        if (reqId !== ttsReqRef.current) return;
+        const url = URL.createObjectURL(audioBlob);
+        ttsUrlRef.current = url;
+        // 毎回新しい Audio を作り、全プロパティを設定してから ref に格納する
+        // （ref 格納後の mutation を避ける / 前の要素は release 済みなので GC される）。
+        const audio = new Audio();
+        audio.src = url;
+        audio.onended = () => setTtsStage('ended');
+        audioRef.current = audio;
+        try {
+          await audio.play();
+          if (reqId !== ttsReqRef.current) return; // 再生開始直前に切り替わっていたら反映しない
+          setTtsStage('playing');
+        } catch {
+          // ブラウザの自動再生制限（iPhone Safari 等）。音声は取得済みなので手動再生できる。
+          setTtsStage('blocked');
+        }
+      };
+
+      // session 内キャッシュ（Map<cacheKey, 音声Blob>）。同じ質問は再生成しない（loading も挟まない）。
+      // key は `${interviewType}:${questionText}`。安定した questionId は client 状態に無く
+      // （turnIndex は turn route 内部に留まり、retryFollowup 再生成で衝突しうる）、ターン制フローの
+      // plumbing を変えずに使える text を採用。interviewType を前置してモード跨ぎの再利用を防ぐ。
+      const mode = sessionRef.current?.interviewType ?? 'free';
+      const cacheKey = `${mode}:${t}`;
+      const cached = ttsCacheRef.current.get(cacheKey);
+      if (cached) {
+        await startPlayback(cached);
+        return;
+      }
+
       setTtsStage('loading');
-      const r = await synthesizeSpeech(t);
+      // モード別の話し方で読み上げる（session.interviewType を渡す。未確定なら本番モード相当）。
+      const r = await synthesizeSpeech(t, mode);
       // 質問が変わった/解放された後の結果は破棄（古い質問の音声を鳴らさない）。
       if (reqId !== ttsReqRef.current) return;
       if (r.kind === 'error') {
@@ -317,22 +417,13 @@ export function InterviewAiClient() {
         }
         return;
       }
-      const url = URL.createObjectURL(r.audio);
-      ttsUrlRef.current = url;
-      // 毎回新しい Audio を作り、全プロパティを設定してから ref に格納する
-      // （ref 格納後の mutation を避ける / 前の要素は release 済みなので GC される）。
-      const audio = new Audio();
-      audio.src = url;
-      audio.onended = () => setTtsStage('ended');
-      audioRef.current = audio;
-      try {
-        await audio.play();
-        if (reqId !== ttsReqRef.current) return; // 再生開始直前に切り替わっていたら反映しない
-        setTtsStage('playing');
-      } catch {
-        // ブラウザの自動再生制限（iPhone Safari 等）。音声は取得済みなので手動再生できる。
-        setTtsStage('blocked');
+      // 生成成功 → session 内で再利用できるようキャッシュ（上限超過時は最古を1件捨てる）。
+      if (ttsCacheRef.current.size >= TTS_CACHE_MAX) {
+        const oldest = ttsCacheRef.current.keys().next().value;
+        if (oldest !== undefined) ttsCacheRef.current.delete(oldest);
       }
+      ttsCacheRef.current.set(cacheKey, r.audio);
+      await startPlayback(r.audio);
     },
     [releaseTtsResources, sourceTypesEnabled],
   );
@@ -399,10 +490,11 @@ export function InterviewAiClient() {
   //   になってコントロールを隠す（API利用可否は実行時判定）。
   const ttsAvailable = sourceTypesEnabled;
 
-  // セッション開始 / 再開時の実効モード初期値。setup で選んだ既定（mode）が voice かつ STT 利用可
-  // （flag ON + 録音対応）のときだけ voice、それ以外は text（安全側）。質問切替では使わない（req ①）。
+  // セッション開始 / 再開時の実効モード初期値（2026-06 方針: 一般ユーザーは音声のみ）。
+  // STT 利用可（flag ON + 録音対応）なら voice を既定にする。録音できない環境（flag OFF /
+  // 非対応ブラウザ）のみ text（安全側 / 音声が使えない人を排除しない = 解釈A）。質問切替では使わない（req ①）。
   function defaultInputMode(): 'voice' | 'text' {
-    return mode === 'voice' && sttAvailable ? 'voice' : 'text';
+    return sttAvailable ? 'voice' : 'text';
   }
 
   // 新しい質問を表示するときのリセット。質問固有の状態（回答テキスト・音声サブ状態）だけ初期化し、
@@ -411,21 +503,28 @@ export function InterviewAiClient() {
   // （TTS は失敗しても面接を止めない / 質問はテキストで続行できる）。
   function showQuestion(q: string) {
     stopRecordingResources();
+    resetPrefetch(); // 前の質問向けに用意した候補を破棄（この質問の「次」をこれから先読みする）
     setCurrentQuestion(q);
     setQuestionError(false);
     setRetryCount(0); // 新しい質問が出た → 再試行カウントをリセット（req ④）
     setAnswerText('');
     setVoiceStage('idle');
     void speak(q); // 自動再生（ブロック時は手動「🔊 読み上げ」に誘導）
+    // この質問の「次」をバックグラウンド先読み（flag OFF なら no-op / server が上限時は候補なし）。
+    const sid = sessionRef.current?.id;
+    if (sid) prefetchNext(sid);
   }
 
   // 最初（= 大学・学部選択の setup）まで戻す。タイプ選択は setup の後段なので、戻り先は常に setup。
   function resetToStart(message?: string) {
     stopRecordingResources();
     releaseTtsResources();
+    ttsCacheRef.current.clear(); // session を抜ける → 別モードの音声を再利用させない
     setTtsStage('idle');
+    resetPrefetch(); // 先読み候補・進行中 prefetch を破棄
     setPhase('setup');
     setGuidance(null);
+    sessionRef.current = null;
     setSession(null);
     setCurrentQuestion(null);
     setAnswerText('');
@@ -512,6 +611,7 @@ export function InterviewAiClient() {
     try {
       const res = await createSession(payload);
       if (res.kind === 'created') {
+        sessionRef.current = res.session; // 同期参照を即更新（kickoff 内の showQuestion が読む）
         setSession(res.session);
         await runKickoff(res.session);
       } else if (res.kind === 'in-progress-exists') {
@@ -547,6 +647,7 @@ export function InterviewAiClient() {
       // followup ではなく kickoff を再実行する（kickoff のリトライ経路を確保 / req ④・完走保証）。
       setErrorMsg('最初の質問の生成に失敗しました。再試行してください。');
       setPhase('interviewing');
+      sessionRef.current = s;
       setSession(s);
       setDone(false);
       setQuestionError(true);
@@ -565,11 +666,12 @@ export function InterviewAiClient() {
         resetToStart('面接の再開に失敗しました。');
         return;
       }
+      sessionRef.current = resume; // 同期参照を即更新（再開直後の showQuestion が読む）
       setSession(resume);
       setResume(null);
       setPhase('interviewing');
-      // 再開時の実効モード初期化（安全側 / req ⑤）。リロードで mode は既定 text に戻るため
-      // defaultInputMode()=text ＝ 再開後は必ずテキストで回答可能（回答不能状態にしない）。
+      // 再開時の実効モード初期化（req ⑤）。STT 利用可なら voice、非対応環境なら text（解釈A）。
+      // 音声が使えない例外時は面接画面側で自動的にテキスト入力へフォールバックする。
       setInputMode(defaultInputMode());
       // 質問数の単一情報源は server の answerCount（client ミラー = answeredCount）。
       setAnsweredCount(st.state.answerCount);
@@ -609,6 +711,7 @@ export function InterviewAiClient() {
       }
       releaseTtsResources(); // 回答済み質問の読み上げを止める
       setTtsStage('idle');
+      resetPrefetch(); // 候補は無効（次質問は再試行で生成し直す）
       setCurrentQuestion(null);
       setAnswerText('');
       setVoiceStage('idle');
@@ -620,6 +723,7 @@ export function InterviewAiClient() {
       }
       releaseTtsResources(); // 面接終了 → 読み上げを止める
       setTtsStage('idle');
+      resetPrefetch(); // 終了 → 候補不要
       setCurrentQuestion(null);
       setAnswerText('');
       setVoiceStage('idle');
@@ -641,7 +745,9 @@ export function InterviewAiClient() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const r = await submitTextAnswer(session.id, answer);
+      // 先読み候補があれば presetQuestion として渡す（server が次質問に即採用 → AI 生成待ちを消す）。
+      // 無ければ null ＝ server は従来どおり生成（フォールバック）。課金・保存仕様は不変。
+      const r = await submitTextAnswer(session.id, answer, nextQuestionCandidate);
       applyAnswerResult(r, currentQuestion);
     } finally {
       setLoading(false);
@@ -811,6 +917,7 @@ export function InterviewAiClient() {
     stopRecordingResources();
     releaseTtsResources();
     setTtsStage('idle');
+    resetPrefetch();
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -871,6 +978,15 @@ export function InterviewAiClient() {
             {typeof window !== 'undefined' ? window.location.hostname : '(ssr)'}
           </div>
           <div>phase = {phase}</div>
+          {/* 先読み（prefetch）の状態。本番ホストでは debug box ごと非表示なので出ない。 */}
+          <div>prefetch flag = {String(isInterviewPrefetchEnabled())}</div>
+          <div>
+            prefetch allowed({session?.interviewType ?? '-'}) ={' '}
+            {String(isPrefetchAllowedForInterviewType(session?.interviewType))}
+          </div>
+          <div>
+            prefetch = {isPreloading ? 'loading…' : nextQuestionCandidate ? 'candidate ready' : 'none'}
+          </div>
         </div>
       )}
 
@@ -981,38 +1097,14 @@ export function InterviewAiClient() {
             面接対象の大学・学部・受験方式を選んでください（任意）。
           </p>
 
-          {/* 回答方法（音声/テキスト）の選択。STT available（flag ON かつ録音対応）のときだけ表示。
-              unavailable（Production / 非対応ブラウザ）ではこのブロックを出さず、テキスト回答のみ。
-              音声は補助機能なので、出さなくても面接はテキストで完走できる。 */}
+          {/* 2026-06 方針: 一般ユーザーの回答方法は「音声のみ」。setup での音声/テキスト切替は廃止した。
+              音声が使えない例外時（マイク拒否 / Safari 不具合 / STT 障害）のみ、面接画面側で自動的に
+              テキスト入力へフォールバックする。開発者用 flag（devTextFallback）の時だけ切替を出す。 */}
           {sttAvailable && (
-            <div className="mb-5">
-              <span className="block text-sm font-semibold text-gray-700 mb-2">
-                回答方法（既定・あとで切替できます）
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode('text')}
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-                    mode === 'text'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white text-gray-700 border-gray-300'
-                  }`}
-                >
-                  テキスト
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode('voice')}
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold border ${
-                    mode === 'voice'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white text-gray-700 border-gray-300'
-                  }`}
-                >
-                  音声（録音）
-                </button>
-              </div>
+            <div className="mb-5 rounded-lg bg-blue-50 border border-blue-100 px-4 py-3">
+              <p className="text-sm text-blue-900">
+                🎤 この面接は<strong>音声で回答</strong>します。本番の大学面接のように、声に出して答えてください。
+              </p>
             </div>
           )}
 
@@ -1067,7 +1159,7 @@ export function InterviewAiClient() {
 
           {/* 現在の質問 / 回答 */}
           <div className="bg-white border border-gray-200 rounded-xl p-6 mb-4">
-            {loading && <p className="text-sm text-gray-500 mb-3">処理中…</p>}
+            {loading && <p className="text-sm text-gray-500 mb-3">🤖 AIが考えています…</p>}
 
             {questionError ? (
               <div>
@@ -1107,13 +1199,18 @@ export function InterviewAiClient() {
                     {ttsStage === 'loading' ? (
                       <span className="text-xs text-gray-500">🔊 読み上げ準備中…</span>
                     ) : ttsStage === 'playing' ? (
-                      <button
-                        type="button"
-                        onClick={stopSpeech}
-                        className="text-sm text-gray-700 border border-gray-300 hover:border-gray-400 font-semibold px-3 py-1.5 rounded-lg"
-                      >
-                        ⏸ 停止
-                      </button>
+                      <>
+                        <span className="text-xs font-semibold text-blue-700">
+                          🔊 AIが話しています…
+                        </span>
+                        <button
+                          type="button"
+                          onClick={stopSpeech}
+                          className="text-sm text-gray-700 border border-gray-300 hover:border-gray-400 font-semibold px-3 py-1.5 rounded-lg"
+                        >
+                          ⏸ 停止
+                        </button>
+                      </>
                     ) : ttsStage === 'ended' || ttsStage === 'paused' ? (
                       <button
                         type="button"
@@ -1233,9 +1330,10 @@ export function InterviewAiClient() {
                         🎤 録音開始
                       </Button>
                     )}
-                    {/* 文字起こし中は切替を出さない（編集不可仕様の死守 / M-3）。
-                        切替時は録音リソースを解放してマイクを止める（H-1）。 */}
-                    {voiceStage !== 'transcribing' && (
+                    {/* 一般ユーザーには音声→テキストの自発切替を出さない（2026-06 方針: 逃げ道を作らない）。
+                        開発者用 flag（devTextFallback）ON のときだけ表示する。
+                        文字起こし中は出さない（編集不可仕様の死守 / M-3）。切替時はマイクを止める（H-1）。 */}
+                    {devTextFallback && voiceStage !== 'transcribing' && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1246,12 +1344,21 @@ export function InterviewAiClient() {
                         }}
                         className="text-xs text-blue-600 hover:text-blue-700 underline self-start mt-1"
                       >
-                        テキストで回答に切り替え
+                        テキストで回答に切り替え（開発用）
                       </button>
                     )}
                   </div>
                 ) : (
                   <>
+                    {/* テキスト入力は「内部フォールバック」。一般ユーザーには音声が使えない例外時
+                        （マイク拒否 / Safari 不具合 / STT 障害 / 非対応ブラウザ）にだけ自動で出る。
+                        この案内は sourceTypes ON（= 音声面接が有効な環境）かつ開発者 flag OFF の
+                        フォールバック時にだけ出す。flag OFF の旧テキスト面接 / 開発者 flag ON では出さない。 */}
+                    {sourceTypesEnabled && !devTextFallback && (
+                      <AlertBox variant="warning" className="mb-3">
+                        <p>音声が利用できないため、テキスト回答に切り替えました。</p>
+                      </AlertBox>
+                    )}
                     <label className="block text-xs font-semibold text-gray-500 mb-1">
                       回答（送信前に自由に編集できます）
                     </label>
@@ -1265,9 +1372,9 @@ export function InterviewAiClient() {
                       <Button onClick={handleSubmitText} disabled={loading || !answerText.trim()}>
                         次へ
                       </Button>
-                      {/* 音声回答への切替は STT available（flag ON かつ録音対応）のときだけ。
-                          unavailable（Production / 非対応）ではテキスト入力のみ。 */}
-                      {sttAvailable && (
+                      {/* 音声への切替は一般ユーザーには出さない（2026-06 方針）。
+                          開発者用 flag（devTextFallback）ON かつ STT 利用可のときだけ表示する。 */}
+                      {devTextFallback && sttAvailable && (
                         <button
                           type="button"
                           onClick={() => {
@@ -1277,7 +1384,7 @@ export function InterviewAiClient() {
                           }}
                           className="text-sm text-blue-600 hover:text-blue-700 border border-blue-300 hover:border-blue-400 font-semibold px-4 py-2 rounded-lg"
                         >
-                          🎤 音声で回答
+                          🎤 音声で回答（開発用）
                         </button>
                       )}
                     </div>

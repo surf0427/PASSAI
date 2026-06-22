@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { devWarn } from '@/lib/devLog';
+import type { InterviewType } from '@/lib/interviewAi/interviewTypes';
+import { ttsDeliveryFor } from '@/lib/interviewAi/ttsVoice';
 
 /**
  * STEP-INTERVIEW-AI-TTS: TTS（AI 質問テキスト → 音声）境界。
@@ -17,10 +19,14 @@ import { devWarn } from '@/lib/devLog';
  *     呼び出し側（route / client）は音声なしで続行する。**課金は一切発生しない**
  *     （TTS は recordUsage を呼ばない。課金は既存の text answer 保存時のみ）。
  *
- * 音声キャラクター（MVP 固定）:
- *   - 面接官らしい落ち着いた声。圧迫面接モードでも声色自体は落ち着いたままにする
- *     （威圧感は質問文側で表現し、TTS の声・速度は変えない）。
- *   - voice / model / speed は env で上書き可能だが、既定は落ち着いた・早口すぎない設定。
+ * 音声キャラクター（モード別）:
+ *   - voice（声そのもの）は全モード共通（既定 alloy）。env で全体上書き可能。
+ *   - 口調・テンポ・間は面接タイプごとに変える（lib/interviewAi/ttsVoice.ts）。
+ *     gpt-4o-mini-tts の `instructions`（話し方の system prompt 相当）と `speed` で表現する。
+ *     例: 自己分析=優しくゆっくり / 圧迫=低め・短め・間（ただし暴言・侮辱の口調は絶対にしない）。
+ *   - `instructions` はステアリング対応モデル（gpt-4o 系）のときだけ付与する。
+ *     env で旧モデル（tts-1 等）に固定した場合は instructions を送らない（API エラー回避）。
+ *   - model / voice / speed は env で上書き可能（speed の env 指定はモード別既定より優先）。
  */
 
 // provider 未設定 / 未知。音声化経路を通せない状態（→ テキスト表示のまま続行）。
@@ -41,6 +47,8 @@ export class TtsFailedError extends Error {
 
 export type SynthesizeInput = {
   text: string;
+  // モード別の話し方（口調・テンポ）を切り替えるための面接タイプ。未指定は本番モード相当。
+  interviewType?: InterviewType | null;
 };
 
 export type SynthesizeOutput = {
@@ -81,7 +89,23 @@ export async function synthesizeSpeech(
 
   const model = process.env.INTERVIEW_AI_TTS_MODEL || DEFAULT_TTS_MODEL;
   const voice = process.env.INTERVIEW_AI_TTS_VOICE || DEFAULT_TTS_VOICE;
-  const speed = parseSpeed(process.env.INTERVIEW_AI_TTS_SPEED);
+
+  // モード別の話し方（口調・テンポ）。env で speed を明示したらそれを優先（ops 上書き）、
+  // 無ければモード別の既定速度を使う。instructions は ステアリング対応モデルのみ付与。
+  const delivery = ttsDeliveryFor(input.interviewType);
+  const speed =
+    process.env.INTERVIEW_AI_TTS_SPEED !== undefined
+      ? parseSpeed(process.env.INTERVIEW_AI_TTS_SPEED)
+      : delivery.speed;
+  const supportsInstructions = model.startsWith('gpt-4o');
+  const body: Record<string, unknown> = {
+    model,
+    voice,
+    input: text,
+    response_format: 'mp3',
+    speed,
+  };
+  if (supportsInstructions) body.instructions = delivery.instructions;
 
   // タイムアウト（TTS は数秒）。
   const controller = new AbortController();
@@ -94,13 +118,7 @@ export async function synthesizeSpeech(
         Authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        voice,
-        input: text,
-        response_format: 'mp3',
-        speed,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
   } catch (err) {

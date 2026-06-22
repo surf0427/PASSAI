@@ -28,6 +28,7 @@ import { devWarn } from '@/lib/devLog';
 import { captureRouteException } from '@/lib/sentry/capture';
 import { authenticateRequest } from '@/lib/billing/planGate';
 import { INTERVIEW_AI_MAX_TTS_CHARS } from '@/lib/interviewAi/constants';
+import { isInterviewType } from '@/lib/interviewAi/interviewTypes';
 import {
   isTtsError,
   synthesizeSpeech,
@@ -67,10 +68,16 @@ export async function POST(req: Request) {
   if (text.length > INTERVIEW_AI_MAX_TTS_CHARS) {
     return jsonError({ error: 'text-too-large' }, 413);
   }
+  // モード別の話し方を切り替えるための面接タイプ（任意）。不正値は無視して既定（本番モード相当）。
+  const rawType = (body as { interviewType?: unknown }).interviewType;
+  const interviewType = isInterviewType(rawType) ? rawType : null;
 
   try {
     // 音声はメモリ上で生成してそのまま返すだけ。保存しない。
-    const { audio, contentType: audioType } = await synthesizeSpeech({ text });
+    const { audio, contentType: audioType } = await synthesizeSpeech({
+      text,
+      interviewType,
+    });
     // audio はレスポンス body として返したら参照終了（GC 対象）。保存しない。
     return new NextResponse(audio, {
       status: 200,

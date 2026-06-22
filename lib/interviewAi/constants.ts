@@ -16,9 +16,22 @@ export const INTERVIEW_AI_USAGE_ROUTE = 'interview-ai';
 // 既存慣習どおり 'api/<name>' プレフィクスで descriptive に分ける（quota には一切影響しない）。
 export const INTERVIEW_AI_SEED_LOG_ROUTE = 'api/interview-ai/turn:seed';
 export const INTERVIEW_AI_FOLLOWUP_LOG_ROUTE = 'api/interview-ai/turn:followup';
+// 次質問の先読み（speculative 生成）専用の観測 route 識別子。recordUsage には一切影響しない
+// （logAiUsage のみ。先読みは保存も課金もしないため、本物の followup と観測軸を分けて計測する）。
+export const INTERVIEW_AI_PREFETCH_LOG_ROUTE = 'api/interview-ai/prefetch';
 
-// 内部 AI 生成（seed / followup）に使う model。
+// 内部 AI 生成（seed / followup / speculative）の既定 model。
+// ※ INTERVIEW_AI_FEEDBACK_MODEL のエイリアス元でもある（評価モデルと結合）。ここは触らない方針。
 export const INTERVIEW_AI_MODEL = 'claude-sonnet-4-6';
+
+// followup（reaction + 次質問）専用の生成 model。
+//   - **未設定なら INTERVIEW_AI_MODEL（= Sonnet）にフォールバック** ＝ 既定挙動は本番と完全同一。
+//   - `INTERVIEW_AI_FOLLOWUP_MODEL=claude-haiku-4-5-20251001` を入れた時だけ followup が高速モデルになる
+//     （回答後〜次質問までの待機短縮。Preview で品質確認してから本番投入する運用）。
+//   - 影響範囲は generateFollowupQuestion のみ。seed / speculative / finalFeedback は INTERVIEW_AI_MODEL のまま。
+//   - 課金には無関係（recordUsage の model は billing.ts が INTERVIEW_AI_MODEL を記録。route キー計上は不変）。
+export const INTERVIEW_AI_FOLLOWUP_MODEL =
+  process.env.INTERVIEW_AI_FOLLOWUP_MODEL || INTERVIEW_AI_MODEL;
 
 // 1 質問あたりの出力上限。短い面接質問 1 つなので小さく抑える。
 export const INTERVIEW_AI_MAX_TOKENS = 400;
