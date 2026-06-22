@@ -226,6 +226,41 @@ export function InterviewAiClient() {
   // モードごとに話し方が変わるため、session（=同一モード）境界でのみ再利用し、reset で必ずクリアする。
   const ttsCacheRef = useRef<Map<string, Blob>>(new Map());
 
+  // ── 自動再生アンロック（iOS Safari 対策 / 提案A） ─────────────────────
+  // iOS Safari は「ユーザー操作の直接スタック外の audio.play()」をブロックする。初回質問は
+  // 「開始」クリック → await（session作成/kickoff）後に play() するため、ジェスチャ外と判定され
+  // blocked になりやすい。対策として開始/再開クリックの同期スタック内で audioRef の要素を一度
+  // 無音再生して unlock し、以降の質問読み上げ（startPlayback）は同一要素を使い回す。
+  //   - 音声は無音の空 WAV（data URI）。生成も保存もしない。TTS ロジック（tts.ts/route）は不変。
+  const audioUnlockedRef = useRef(false);
+  const unlockAudioPlayback = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true; // 多重 unlock を避ける（1ジェスチャ1回）
+    // 0 サンプルの無音 WAV（44byte ヘッダのみ）。play 即 pause で要素を「許可済み」にする。
+    const SILENT_WAV =
+      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    try {
+      const a = audioRef.current ?? new Audio();
+      audioRef.current = a;
+      a.src = SILENT_WAV;
+      const p = a.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          try {
+            a.pause();
+            a.currentTime = 0;
+          } catch {
+            /* ignore */
+          }
+        }).catch(() => {
+          /* unlock 失敗時も面接は止めない（blocked 経由で手動再生に誘導） */
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // ── 次質問の先読み（prefetch / 候補採用） ─────────────────────────────
   // 現在の質問を表示した直後、回答を待たずに「次に出す可能性が高い質問候補」を裏で1件生成しておく。
   // 回答時にこの候補を /turn の presetQuestion として即採用し、AI 生成の待機を消す。
@@ -371,9 +406,10 @@ export function InterviewAiClient() {
         if (reqId !== ttsReqRef.current) return;
         const url = URL.createObjectURL(audioBlob);
         ttsUrlRef.current = url;
-        // 毎回新しい Audio を作り、全プロパティを設定してから ref に格納する
-        // （ref 格納後の mutation を避ける / 前の要素は release 済みなので GC される）。
-        const audio = new Audio();
+        // unlock 済みの audio 要素があれば使い回す（iOS Safari は同一要素なら以降の play が通る）。
+        // 無ければ新規生成（unlock 前 / 非対応環境）。全プロパティを設定してから ref に格納する。
+        const audio = audioRef.current ?? new Audio();
+        audio.muted = false;
         audio.src = url;
         audio.onended = () => setTtsStage('ended');
         audioRef.current = audio;
@@ -490,6 +526,22 @@ export function InterviewAiClient() {
   //   になってコントロールを隠す（API利用可否は実行時判定）。
   const ttsAvailable = sourceTypesEnabled;
 
+  // 質問テキストの表示可否（2026-06 方針: 本番面接に近づけるため、通常は質問文を見せず音声で聞かせる）。
+  // 通常時（loading/playing/ended/paused/idle）は非表示。ただし音声で聞けない/聞き直せない状況では
+  // 安全側でテキストを自動表示する（フォールバックとして残す。手動トグルは置かない）。
+  //   - !ttsAvailable        … TTS 無効環境（flag OFF / 旧テキスト面接）→ 常に表示（音声が無い）
+  //   - 'unavailable'        … provider 未設定 → 表示（音声化不可）
+  //   - 'failed'             … TTS 一時失敗 → 表示（聞けなかった）
+  //   - 'blocked'            … 自動再生ブロック → 表示（手動再生ボタンと併せて救済）
+  //   - devTextFallback ON   … 開発/QA debug → 常に表示
+  // 評価・履歴・DB保存は currentQuestion state を使うため、この表示制御は一切影響しない。
+  const showQuestionText =
+    !ttsAvailable ||
+    ttsStage === 'unavailable' ||
+    ttsStage === 'failed' ||
+    ttsStage === 'blocked' ||
+    devTextFallback;
+
   // セッション開始 / 再開時の実効モード初期値（2026-06 方針: 一般ユーザーは音声のみ）。
   // STT 利用可（flag ON + 録音対応）なら voice を既定にする。録音できない環境（flag OFF /
   // 非対応ブラウザ）のみ text（安全側 / 音声が使えない人を排除しない = 解釈A）。質問切替では使わない（req ①）。
@@ -545,6 +597,7 @@ export function InterviewAiClient() {
   //   - flag on:  タイプ選択 phase へ進む。
   function handleSetupNext() {
     if (!sourceTypesEnabled) {
+      unlockAudioPlayback(); // クリック（ジェスチャ）起点で TTS 自動再生を unlock（提案A）
       void startSession('free', null);
       return;
     }
@@ -560,6 +613,7 @@ export function InterviewAiClient() {
   function handleSelectType(type: InterviewType) {
     setErrorMsg(null);
     setGuidance(null);
+    unlockAudioPlayback(); // クリック（ジェスチャ）起点で TTS 自動再生を unlock（提案A）
     try {
       debugLog('[interview-ai] selected type', type);
       const r = resolveSource(type);
@@ -657,6 +711,7 @@ export function InterviewAiClient() {
   // ── 再開（in_progress） ─────────────────────────────────────
   async function handleResume() {
     if (!resume) return;
+    unlockAudioPlayback(); // クリック（ジェスチャ）起点で TTS 自動再生を unlock（提案A）
     if (!beginSubmit()) return; // req ⑤: 二重送信ガード
     setLoading(true);
     setErrorMsg(null);
@@ -1187,8 +1242,18 @@ export function InterviewAiClient() {
                     {remainingAfter > 0 ? `・残り${remainingAfter}問` : '・最後の質問'}
                   </span>
                 </div>
-                {/* 質問テキストは必ず表示。TTS はこの下の読み上げコントロールで追加する。 */}
-                <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
+                {/* 通常は質問文を見せず音声で聞かせる（本番面接に近づける）。音声で聞けない/聞き直せない
+                    状況（showQuestionText）では質問文を自動表示する（フォールバック）。 */}
+                {showQuestionText ? (
+                  <p className="text-base text-gray-800 mb-2">{currentQuestion}</p>
+                ) : (
+                  <p className="text-base font-medium text-gray-600 mb-2">
+                    🗣️{' '}
+                    {ttsStage === 'playing' || ttsStage === 'loading'
+                      ? '面接官が質問しています…'
+                      : '質問は音声で流れます（「もう一度聞く」で再生できます）'}
+                  </p>
+                )}
 
                 {/* AI 質問読み上げ（TTS）。正式公開まで flag ON 限定で表示する
                     （flag false の本番導線では一切出さず、従来どおりテキスト質問のみ）。
@@ -1220,13 +1285,20 @@ export function InterviewAiClient() {
                         🔊 もう一度聞く
                       </button>
                     ) : ttsStage === 'blocked' ? (
-                      <button
-                        type="button"
-                        onClick={replaySpeech}
-                        className="text-sm text-blue-600 border border-blue-300 hover:border-blue-400 font-semibold px-3 py-1.5 rounded-lg"
-                      >
-                        🔊 読み上げ
-                      </button>
+                      // 自動再生がブラウザにブロックされた（iOS Safari 等）。タップ起点で再生できる。
+                      // 質問文も showQuestionText により自動表示されるため、読めない行き止まりにはならない。
+                      <div className="flex flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={replaySpeech}
+                          className="self-start text-sm text-white bg-blue-600 hover:bg-blue-700 font-semibold px-4 py-2 rounded-lg"
+                        >
+                          🔊 質問を再生する（タップ）
+                        </button>
+                        <span className="text-xs text-gray-500">
+                          ブラウザの設定で自動再生がブロックされました。タップで質問を再生できます。
+                        </span>
+                      </div>
                     ) : (
                       // 'idle' / 'failed' → 読み上げ（再生成）。
                       <button
