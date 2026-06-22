@@ -266,7 +266,7 @@ export function PresentationSetupClient() {
 
       if (res.status === 402) {
         setApiError(
-          'プレゼン機能は Premium 限定です（または今月の利用上限に達しています）。プランをご確認ください。',
+          'プレゼン対策は Premium 限定です（または今月の利用上限に達しています）。プランをご確認ください。',
         );
         return;
       }

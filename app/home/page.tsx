@@ -130,6 +130,11 @@ const FEATURES = [
     description: '予想質問の作成や、練習結果の記録・振り返りをします。',
     href: '/interview',
   },
+  {
+    title: 'プレゼン対策',
+    description: '大学入試のプレゼンテーションを録画し、AIが構成力・説得力・具体性・時間配分を評価します。発表後の質疑応答も練習できます。',
+    href: '/presentation',
+  },
 ] as const;
 
 // ── 今日やるべきこと ──────────────────────────────────────────────
@@ -143,9 +148,17 @@ const FEATURE_HINTS: Record<string, string> = {
   '/interview':          '予想質問を作って、面接本番に備えましょう。',
 };
 
-// completedでない最初の機能を返す。全完了の場合はnullを返す
+// completedでない最初の機能を返す。全完了の場合はnullを返す。
+// 進捗を localStorage で追跡している機能のみが対象。プレゼン対策は DB 直読み
+// （Premium 限定）で localStorage 進捗を持たないため、ここでは候補に含めない
+// （「今日やるべきこと」/「全完了」表示を壊さないため）。
 function getNextFeature(statuses: Record<string, ProgressStatus>) {
-  return FEATURES.find((feature) => statuses[feature.href] !== 'completed') ?? null;
+  return (
+    FEATURES.find(
+      (feature) =>
+        feature.href in statuses && statuses[feature.href] !== 'completed',
+    ) ?? null
+  );
 }
 
 // statusesからhrefに対応するステータスを取得する。未登録の場合はnot_startedを返す
@@ -287,6 +300,9 @@ export default function HomePage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {FEATURES.map((feature) => {
           const status = getStatus(statuses, feature.href);
+          // プレゼン対策は localStorage 進捗を持たない（DB 直読み）。常時「未開始」を
+          // 出すと誤解を招くため、進捗追跡対象の機能だけバッジを表示する。
+          const isTracked = feature.href in statuses;
           return (
             <Card
               key={feature.href}
@@ -299,9 +315,11 @@ export default function HomePage() {
                   <h2 className="text-base font-bold text-gray-800">
                     {feature.title}
                   </h2>
-                  <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${PROGRESS_BADGE_STYLES[status]}`}>
-                    {PROGRESS_LABELS[status]}
-                  </span>
+                  {isTracked && (
+                    <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${PROGRESS_BADGE_STYLES[status]}`}>
+                      {PROGRESS_LABELS[status]}
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-gray-500 leading-relaxed">
                   {feature.description}

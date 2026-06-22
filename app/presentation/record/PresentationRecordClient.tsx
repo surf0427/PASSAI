@@ -407,7 +407,7 @@ export function PresentationRecordClient() {
       if (!res.ok) {
         if (res.status === 402) {
           setSubmitError(
-            'プレゼン機能は Premium 限定です（または今月の利用上限に達しています）。プランをご確認ください。',
+            'プレゼン対策は Premium 限定です（または今月の利用上限に達しています）。プランをご確認ください。',
           );
         } else {
           setSubmitError('AI評価の作成に失敗しました。少し時間をおいて再度お試しください。');

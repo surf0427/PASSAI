@@ -210,7 +210,7 @@ export function PresentationResultClient() {
             テーマ設定へ
           </LinkButton>
           <LinkButton href="/presentation" variant="secondary">
-            プレゼン練習トップへ
+            プレゼン対策トップへ
           </LinkButton>
         </div>
       </Card>
@@ -256,7 +256,7 @@ function ResultBody({
             新しく練習する
           </LinkButton>
           <LinkButton href="/presentation" variant="secondary">
-            プレゼン練習トップへ
+            プレゼン対策トップへ
           </LinkButton>
         </div>
       </Card>
@@ -277,7 +277,7 @@ function ResultBody({
             録画画面に戻る
           </LinkButton>
           <LinkButton href="/presentation" variant="secondary">
-            プレゼン練習トップへ
+            プレゼン対策トップへ
           </LinkButton>
         </div>
       </Card>

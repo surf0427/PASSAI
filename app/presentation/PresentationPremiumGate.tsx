@@ -32,7 +32,7 @@ export function PresentationPremiumGate({ children }: { children: ReactNode }) {
     return (
       <Card padding="lg" className="space-y-4">
         <AlertBox variant="info">
-          プレゼン機能は <strong>Premium プラン限定</strong>の機能です。
+          プレゼン対策は <strong>Premium プラン限定</strong>の機能です。
         </AlertBox>
         <p className="text-sm text-slate-600 leading-relaxed">
           録画したプレゼンを AI がカテゴリ評価し、発表後には AI が深掘り質問を行います。

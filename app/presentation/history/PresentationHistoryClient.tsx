@@ -228,7 +228,7 @@ function HistoryBody({ state }: { state: LoadState }) {
   if (state.items.length === 0) {
     return (
       <Card padding="lg" className="space-y-4">
-        <p className="text-sm text-slate-600">まだプレゼン練習の履歴がありません。</p>
+        <p className="text-sm text-slate-600">まだプレゼン対策の履歴がありません。</p>
         <LinkButton href="/presentation/setup" variant="primary">
           テーマ設定へ
         </LinkButton>

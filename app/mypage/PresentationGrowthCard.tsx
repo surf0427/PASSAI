@@ -156,7 +156,7 @@ function CardBody({ state, qaCount }: { state: LoadState; qaCount: number }) {
           まだプレゼン評価の記録がありません。録画練習をすると、ここに成長レポートが表示されます。
         </p>
         <LinkButton href="/presentation/university" variant="primary" size="sm">
-          プレゼン練習を始める
+          プレゼン対策を始める
         </LinkButton>
       </div>
     );

@@ -15,9 +15,9 @@ export function PresentationHubClient() {
         {/* 1. AIプレゼン練習（テーマ設定 → 録画・AI評価） */}
         <Card padding="lg" className="space-y-3">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">AIプレゼン練習</h2>
+            <h2 className="text-lg font-bold text-slate-900">AIプレゼン対策</h2>
             <p className="mt-1 text-sm text-slate-600 leading-relaxed">
-              録画 → AI評価 → 発表後AI質問 の流れで本番に近いプレゼン練習ができます。
+              録画 → AI評価 → 発表後AI質問 の流れで本番に近いプレゼン対策ができます。
               発表をブラウザで録画し、AI がカテゴリ評価（構成力・説得力・具体性 など）を行い、
               そのあと AI が内容を深掘り質問します。
             </p>
