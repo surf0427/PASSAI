@@ -33,6 +33,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 import { isExamType } from '@/types/examDiagnosis';
 import { EXAM_DIAGNOSIS_TYPE_HINTS } from '@/lib/examDiagnosis/tutorHints';
+// AI 面接モードのラベル（純データモジュール。server-only 依存なし）。
+import {
+  INTERVIEW_TYPE_LABELS,
+  isInterviewType,
+} from '@/lib/interviewAi/interviewTypes';
 
 // ── 型 ───────────────────────────────────────────────────────────
 
@@ -62,12 +67,25 @@ export type TutorStudentContext = {
     totalCount: number;
     categoryCounts: Record<string, number>;
   };
+  // interview_ai_results 由来（最新の completed AI 面接 1 件）。結果画面と同じ保存済み feedback を読む。
+  //   - turn 履歴 / 音声 / STT 全文は含めない（結果サマリのみ）。
+  //   - 直近 3 件へ拡張する場合は loadInterviewAiContext の limit を上げて配列化すればよい
+  //     （type を配列にし、section builder で複数 block を出す）。MVP は最新 1 件のみ。
+  interviewAi?: {
+    modeLabel: string; // 面接モード（INTERVIEW_TYPE_LABELS）
+    date?: string; // 実施日時（JST の年月日）
+    overall?: string; // 総合評価
+    goodPoints?: string[]; // 良かった点
+    improvements?: string[]; // 改善点
+    nextPractice?: string[]; // 次に練習すべきこと
+  };
   // どの source が取得できたかの真偽サマリ（section 構築・観測用）。
   sourceSummary: {
     hasSelfAnalysis: boolean;
     hasBasicInfo: boolean;
     hasDiagnosis: boolean;
     hasActivity: boolean;
+    hasInterviewAi: boolean;
   };
 };
 
@@ -79,6 +97,10 @@ const MAX_TARGETS = 3;
 const MAX_ITEM_LENGTH = 40;
 const MAX_SUMMARY_LENGTH = 120;
 const MAX_TOTAL_LENGTH = 1200;
+// AI 面接結果サマリの件数上限（turn 履歴は渡さない。結果画面の主要項目だけ短く渡す）。
+const MAX_INTERVIEW_AI_GOOD = 3;
+const MAX_INTERVIEW_AI_IMPROVE = 3;
+const MAX_INTERVIEW_AI_NEXT = 2;
 
 // 受験タイプ診断 resultType(legacy 1-4) → 会話補助 hint（ラベル名そのものは出さない）。
 // app/diagnosis/page.tsx:RESULT_TYPES の 4 タイプの趣旨を、断定しない支援方針へ言い換える。
@@ -313,6 +335,100 @@ async function loadActivityContext(
   return { activity: { totalCount, categoryCounts } };
 }
 
+// ── source loader: interview_ai_results（最新の completed AI 面接 1 件）──────
+//
+// 結果画面（lib/supabase/interviewAiResults.ts:listCompletedAiInterviews）と同じ保存済み
+// データを server-side で読む。新しい面接結果は生成しない。turn 履歴 / 音声 / STT 全文は
+// 一切読まず、結果サマリ（総合評価 / 良かった点 / 改善点 / 次の練習 / モード / 日時）だけを抽出する。
+// interview_ai_results の SELECT は session 経由 EXISTS RLS で owner に閉じる（schema §60）。
+// table 不存在 / RLS 失敗 / 例外でも throw せず {}。
+async function loadInterviewAiContext(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  let data: unknown;
+  try {
+    const res = await client
+      .from('interview_ai_sessions')
+      .select('created_at, interview_type, interview_ai_results(feedback)')
+      .eq('user_id', userId)
+      .eq('status', 'completed')
+      .order('created_at', { ascending: false })
+      .limit(1); // 最新 1 件。3 件対応時はここを上げて配列化する。
+    if (res.error) {
+      console.warn('tutor supabase context: interview_ai read error', {
+        code: res.error.code,
+      });
+      return {};
+    }
+    data = res.data;
+  } catch {
+    console.warn('tutor supabase context: interview_ai read threw');
+    return {};
+  }
+
+  const row = Array.isArray(data) ? data[0] : null;
+  const rec = asRecord(row);
+  if (!rec) return {};
+
+  // embed（PostgREST）は配列 or 単体で返りうる（UNIQUE(session_id) なので実質 0/1 件）。
+  const resultsRaw = rec.interview_ai_results;
+  const resultRec = Array.isArray(resultsRaw)
+    ? asRecord(resultsRaw[0])
+    : asRecord(resultsRaw);
+  const feedback = asRecord(resultRec?.feedback);
+  if (!feedback) return {};
+
+  const overall = truncate(
+    toTrimmedString(feedback.overallEvaluation),
+    MAX_SUMMARY_LENGTH,
+  );
+  const goodPoints = toStringArray(feedback.goodPoints, MAX_INTERVIEW_AI_GOOD);
+  const improvements = toStringArray(feedback.improvements, MAX_INTERVIEW_AI_IMPROVE);
+  const nextPractice = toStringArray(feedback.nextPractice, MAX_INTERVIEW_AI_NEXT);
+
+  const hasAny =
+    overall !== '' ||
+    goodPoints.length > 0 ||
+    improvements.length > 0 ||
+    nextPractice.length > 0;
+  if (!hasAny) return {};
+
+  const typeRaw = toTrimmedString(rec.interview_type) || 'free';
+  const modeLabel = isInterviewType(typeRaw)
+    ? INTERVIEW_TYPE_LABELS[typeRaw]
+    : INTERVIEW_TYPE_LABELS.free;
+  const date = formatDateJst(toTrimmedString(rec.created_at));
+
+  return {
+    interviewAi: {
+      modeLabel,
+      ...(date !== '' ? { date } : {}),
+      ...(overall !== '' ? { overall } : {}),
+      ...(goodPoints.length > 0 ? { goodPoints } : {}),
+      ...(improvements.length > 0 ? { improvements } : {}),
+      ...(nextPractice.length > 0 ? { nextPractice } : {}),
+    },
+  };
+}
+
+// ISO 文字列 → JST の年月日（不正値は ''）。section builder は純粋関数のため日時整形はここで行う。
+function formatDateJst(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleDateString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
 // ── 主 entry: loadTutorStudentContext ────────────────────────────
 //
 // userId scope で Supabase の各 auth-scoped durable から保存済み生徒情報を取得し、
@@ -331,6 +447,7 @@ export async function loadTutorStudentContext(
       hasBasicInfo: false,
       hasDiagnosis: false,
       hasActivity: false,
+      hasInterviewAi: false,
     },
   };
 
@@ -366,6 +483,7 @@ export async function loadTutorStudentContext(
       timed('basicInfo_ms', () => loadBasicInfoContext(client, userId)),
       timed('diagnosis_ms', () => loadDiagnosisContext(client, userId)),
       timed('activity_ms', () => loadActivityContext(client, userId)),
+      timed('interviewAi_ms', () => loadInterviewAiContext(client, userId)),
     ]);
   } catch {
     // allSettled は本来 reject しないが、念のため。
@@ -415,6 +533,10 @@ export async function loadTutorStudentContext(
       merged.activity = v.activity;
       merged.sourceSummary.hasActivity = true;
     }
+    if (v.interviewAi) {
+      merged.interviewAi = v.interviewAi;
+      merged.sourceSummary.hasInterviewAi = true;
+    }
   }
 
   return merged;
@@ -448,7 +570,11 @@ const contextCache = new Map<string, ContextCacheEntry>();
 function hasAnySource(ctx: TutorStudentContext): boolean {
   const s = ctx.sourceSummary;
   return (
-    s.hasSelfAnalysis || s.hasBasicInfo || s.hasDiagnosis || s.hasActivity
+    s.hasSelfAnalysis ||
+    s.hasBasicInfo ||
+    s.hasDiagnosis ||
+    s.hasActivity ||
+    s.hasInterviewAi
   );
 }
 
@@ -467,6 +593,7 @@ export async function loadTutorStudentContextCached(
       hasBasicInfo: false,
       hasDiagnosis: false,
       hasActivity: false,
+      hasInterviewAi: false,
     },
   };
   if (!userId) return { context: empty, cacheHit: false };
@@ -580,6 +707,31 @@ export function buildTutorSupabaseContextSection(
   const dg = context.diagnosis;
   if (dg?.typeHint) {
     lines.push(`・保存情報からは、${dg.typeHint}。`);
+  }
+
+  // 5. 直近の AI 面接練習の結果（結果画面と同じ保存済み feedback。turn 履歴は含めない）。
+  const ia = context.interviewAi;
+  if (ia) {
+    const head = ia.date ? `${ia.date}実施の${ia.modeLabel}` : ia.modeLabel;
+    lines.push(`・直近のAI面接練習（${head}）の結果が保存されています。`);
+    if (ia.overall) {
+      lines.push(`  - 総合評価: ${ia.overall}`);
+    }
+    if (ia.goodPoints && ia.goodPoints.length > 0) {
+      lines.push(
+        `  - 良かった点: ${ia.goodPoints.map((s) => `「${s}」`).join('')}`,
+      );
+    }
+    if (ia.improvements && ia.improvements.length > 0) {
+      lines.push(
+        `  - 改善点: ${ia.improvements.map((s) => `「${s}」`).join('')}`,
+      );
+    }
+    if (ia.nextPractice && ia.nextPractice.length > 0) {
+      lines.push(
+        `  - 次に練習すると良い点: ${ia.nextPractice.map((s) => `「${s}」`).join('')}`,
+      );
+    }
   }
 
   if (lines.length === 0) return '';
