@@ -135,6 +135,38 @@ function resolveStatement(): ResolvedSource {
   };
 }
 
+// 小論文の最新 AI 添削結果（評価）を防御的にテキスト化する。
+//   - reviews は append-only（push のみ。最新は末尾＝reviews.at(-1)。invariant I3: body は
+//     reviews.at(-1).essayBodySnapshot と一致）。本文と整合する「最新の評価」として末尾を使う
+//     （reviews[0] は最古の初回添削なので使わない）。
+//   - breakdown（5 軸スコア）と improvement（最重要改善点）を載せ、面接官が AI 採点結果を踏まえて
+//     「論理性が弱い」「具体例が不足」等の口頭試問をできるようにする。
+//   - 形は ReviewEntry（types/essay.ts）。ただし旧データ / parse 揺れに備えて防御的に読む。
+function essayReviewLines(reviews: unknown): string {
+  if (!Array.isArray(reviews) || reviews.length === 0) return '';
+  const latest = reviews[reviews.length - 1];
+  if (!latest || typeof latest !== 'object') return '';
+  const r = latest as Record<string, unknown>;
+  const lines: string[] = [];
+  // breakdown: { label, score }[] を「論理構造: 3 / 具体性: 2 …」の 1 行に集約。
+  if (Array.isArray(r.breakdown)) {
+    const axes = r.breakdown
+      .filter(
+        (b): b is { label: string; score: number } =>
+          !!b &&
+          typeof b === 'object' &&
+          typeof (b as { label?: unknown }).label === 'string' &&
+          typeof (b as { score?: unknown }).score === 'number',
+      )
+      .map((b) => `${b.label}: ${b.score}`);
+    if (axes.length) lines.push(`AI採点（5軸スコア）: ${axes.join(' / ')}`);
+  }
+  const improvement =
+    typeof r.improvement === 'string' ? r.improvement.trim() : '';
+  if (improvement) lines.push(`AIが指摘した最重要改善点: ${improvement}`);
+  return joinNonEmpty(lines);
+}
+
 // 📝 小論文ベース。
 function resolveEssay(): ResolvedSource {
   const workspaces = loadEssayWorkspaces();
@@ -153,10 +185,16 @@ function resolveEssay(): ResolvedSource {
       ])
     : '';
   const body = (latest.body ?? '').trim();
-  if (!theme && !mini && !body) return { available: false, guidance: GUIDANCE.essay };
+  // 最新 AI 添削（評価結果）。breakdown / improvement を口頭試問に使えるよう要約する。
+  const reviewSummary = essayReviewLines(latest.reviews);
+  if (!theme && !mini && !body && !reviewSummary) {
+    return { available: false, guidance: GUIDANCE.essay };
+  }
+  // 評価結果（短く高価値）は本文（長文）より前に置き、clip による末尾切り捨てで失われないようにする。
   const ctx = joinNonEmpty([
     theme ? `小論文テーマ: ${theme}` : '',
     mini,
+    reviewSummary ? `AI添削の評価結果:\n${reviewSummary}` : '',
     body ? `本文:\n${body}` : '',
   ]);
   return { available: true, sourceType: 'essay', sourceId: latest.id ?? null, sourceContext: clip(ctx) };
