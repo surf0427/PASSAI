@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Button } from '@/components/ui/Button';
 import { AlertBox } from '@/components/ui/AlertBox';
 import {
@@ -26,6 +27,7 @@ import {
   INTERVIEW_TYPE_LABELS,
   type InterviewType,
 } from '@/lib/interviewAi/interviewTypes';
+import { getInterviewerImage, getInterviewerAlt } from '@/lib/interviewAi/interviewerAvatar';
 import { INTERVIEW_AI_MAX_ANSWER_TURNS } from '@/lib/interviewAi/limits';
 import {
   isInterviewSourceTypesEnabledByEnv,
@@ -1266,7 +1268,7 @@ export function InterviewAiClient() {
                   <span className="text-xs font-semibold tracking-wide text-slate-500">
                     👨‍🏫 AI面接官
                   </span>
-                  <AvatarFace state={avatarFace} />
+                  <InterviewerAvatar state={avatarFace} mode={session?.interviewType} />
                   {/* ④ 音声波形: AIが話す時 / ユーザーが録音する時だけ出す（簡易アニメ） */}
                   {avatarState === 'speaking' && <Waveform variant="ai" />}
                   {avatarState === 'listening' && <Waveform variant="user" />}
@@ -1558,18 +1560,28 @@ function formatElapsed(totalSec: number): string {
   return `${mm}:${ss}`;
 }
 
-// 2D Phase1 アバター（CSS のみ / 外部ライブラリ不使用）。状態クラスに応じて globals.css の
-// keyframes（瞬き・口パク・考える動作・頷き）と transition（表情変化）が効く。
-function AvatarFace({ state }: { state: 'thinking' | 'speaking' | 'listening' | 'idle' }) {
+// 面接官アバター（モード別の専用画像）。画像 URL は interviewerAvatar.ts に集約し、ここではベタ書きしない。
+// 状態（thinking / speaking / listening / idle）はカードのグロー演出にのみ使う（画像自体は差し替え可能）。
+// 将来 Live2D / 表情差分 / 口パクへ移行する際も、参照は getInterviewerImage 経由なのでこの JSX は据え置ける。
+// CLS 対策: カードを固定幅 + aspect-ratio にし、画像は fill + object-contain（globals.css 側で指定）。
+function InterviewerAvatar({
+  state,
+  mode,
+}: {
+  state: 'thinking' | 'speaking' | 'listening' | 'idle';
+  mode: string | undefined;
+}) {
+  const src = getInterviewerImage(mode);
+  const alt = getInterviewerAlt(mode);
   return (
-    <div className={`iv-avatar iv-avatar--${state}`} role="img" aria-label="AI面接官">
-      <div className="iv-face">
-        <span className="iv-brow iv-brow--l" />
-        <span className="iv-brow iv-brow--r" />
-        <span className="iv-eye iv-eye--l" />
-        <span className="iv-eye iv-eye--r" />
-        <span className="iv-mouth" />
-      </div>
+    <div className={`iv-interviewer iv-interviewer--${state}`} role="img" aria-label={alt}>
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        sizes="(min-width: 640px) 280px, 220px"
+        className="iv-interviewer__img"
+      />
     </div>
   );
 }
