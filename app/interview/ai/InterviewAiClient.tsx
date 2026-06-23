@@ -1582,6 +1582,14 @@ function InterviewerAvatar({
         sizes="(min-width: 640px) 280px, 220px"
         className="iv-interviewer__img"
       />
+      {/* thinking（次質問生成中・処理中）: 画像は変えず、小さな「…」だけ重ねる。 */}
+      {state === 'thinking' && (
+        <span className="iv-interviewer__thinking" aria-label="考え中" role="status">
+          <span className="iv-interviewer__dot" />
+          <span className="iv-interviewer__dot" />
+          <span className="iv-interviewer__dot" />
+        </span>
+      )}
     </div>
   );
 }

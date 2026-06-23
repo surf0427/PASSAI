@@ -20,13 +20,13 @@ import { ttsDeliveryFor } from '@/lib/interviewAi/ttsVoice';
  *     （TTS は recordUsage を呼ばない。課金は既存の text answer 保存時のみ）。
  *
  * 音声キャラクター（モード別）:
- *   - voice（声そのもの）は全モード共通（既定 alloy）。env で全体上書き可能。
- *   - 口調・テンポ・間は面接タイプごとに変える（lib/interviewAi/ttsVoice.ts）。
- *     gpt-4o-mini-tts の `instructions`（話し方の system prompt 相当）と `speed` で表現する。
- *     例: 自己分析=優しくゆっくり / 圧迫=低め・短め・間（ただし暴言・侮辱の口調は絶対にしない）。
- *   - `instructions` はステアリング対応モデル（gpt-4o 系）のときだけ付与する。
+ *   - voice（声そのもの）・口調・テンポ・間は面接タイプごとに変える（lib/interviewAi/ttsVoice.ts）。
+ *     voice は面接官画像の性別と一致させる（male.png の 4 モード=男性/中性 / 圧迫=女性）。
+ *     例: 自己分析=優しくゆっくり(echo) / 圧迫=可愛い女性ボイス(shimmer)・少し速め
+ *     （ただし暴言・侮辱の口調は絶対にしない）。
+ *   - `instructions`（話し方）はステアリング対応モデル（gpt-4o 系）のときだけ付与する。
  *     env で旧モデル（tts-1 等）に固定した場合は instructions を送らない（API エラー回避）。
- *   - model / voice / speed は env で上書き可能（speed の env 指定はモード別既定より優先）。
+ *   - model / voice / speed は env で全体上書き可能（env 指定はモード別既定より優先＝ops 制御）。
  */
 
 // provider 未設定 / 未知。音声化経路を通せない状態（→ テキスト表示のまま続行）。
@@ -57,8 +57,8 @@ export type SynthesizeOutput = {
 };
 
 // MVP の既定値（落ち着いた面接官の声 / 早口すぎない）。env で上書き可能。
+// voice の既定はモード別（ttsVoice.ts）。env INTERVIEW_AI_TTS_VOICE 指定時のみ全体上書きする。
 const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts';
-const DEFAULT_TTS_VOICE = 'alloy'; // 落ち着いた中性的な声。圧迫モードでも声色は変えない。
 const DEFAULT_TTS_SPEED = 0.95; // 早口すぎないよう少し遅め。
 
 function parseSpeed(raw: string | undefined): number {
@@ -88,11 +88,11 @@ export async function synthesizeSpeech(
   if (!text) throw new TtsFailedError('tts-empty-input');
 
   const model = process.env.INTERVIEW_AI_TTS_MODEL || DEFAULT_TTS_MODEL;
-  const voice = process.env.INTERVIEW_AI_TTS_VOICE || DEFAULT_TTS_VOICE;
 
-  // モード別の話し方（口調・テンポ）。env で speed を明示したらそれを優先（ops 上書き）、
-  // 無ければモード別の既定速度を使う。instructions は ステアリング対応モデルのみ付与。
+  // モード別の声・話し方（声 / 口調 / テンポ）。env で voice / speed を明示したらそれを優先（ops 上書き）、
+  // 無ければモード別の既定を使う。instructions は ステアリング対応モデルのみ付与。
   const delivery = ttsDeliveryFor(input.interviewType);
+  const voice = process.env.INTERVIEW_AI_TTS_VOICE || delivery.voice;
   const speed =
     process.env.INTERVIEW_AI_TTS_SPEED !== undefined
       ? parseSpeed(process.env.INTERVIEW_AI_TTS_SPEED)

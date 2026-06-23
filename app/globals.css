@@ -103,6 +103,16 @@ body {
   0%, 100% { transform: scaleY(0.28); }
   50%      { transform: scaleY(1); }
 }
+/* thinking: カードのグローをやわらかく明滅（画像は変えない）。 */
+@keyframes iv-think-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgb(100 116 139 / 0.1), 0 8px 22px -10px rgb(100 116 139 / 0.35); }
+  50%      { box-shadow: 0 0 0 5px rgb(100 116 139 / 0.18), 0 10px 24px -10px rgb(100 116 139 / 0.45); }
+}
+/* thinking インジケータの「…」ドットの上下バウンス。 */
+@keyframes iv-think-dot {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50%      { transform: translateY(-3px); opacity: 1; }
+}
 
 /* 面接官カード（モード別の専用画像）。
    - 固定幅 + aspect-ratio で CLS（レイアウトシフト）を防ぐ（画像の実寸に依存しない）。
@@ -119,15 +129,47 @@ body {
   overflow: hidden;
   background: linear-gradient(to bottom, #f1f5fb 0%, #e2eaf6 100%);
   box-shadow: 0 8px 22px -10px rgb(15 23 42 / 0.28);
-  transition: box-shadow 0.3s ease;
+  /* 状態演出は画像ではなくカード周辺（グロー・拡大・透明度）だけを変える。 */
+  transition: box-shadow 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
 }
 @media (min-width: 640px) {
   .iv-interviewer { width: 280px; }   /* PC: 220〜280px */
 }
 .iv-interviewer__img { object-fit: contain; }
-.iv-interviewer--speaking  { box-shadow: 0 0 0 4px rgb(37 99 235 / 0.14), 0 10px 24px -10px rgb(37 99 235 / 0.45); }
-.iv-interviewer--listening { box-shadow: 0 0 0 4px rgb(22 163 74 / 0.14), 0 10px 24px -10px rgb(22 163 74 / 0.4); }
-.iv-interviewer--thinking  { box-shadow: 0 0 0 4px rgb(100 116 139 / 0.12), 0 10px 24px -10px rgb(100 116 139 / 0.4); }
+
+/* speaking: 青系グロー + ほんの少し拡大（派手すぎない）。 */
+.iv-interviewer--speaking  {
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 0.16), 0 12px 26px -10px rgb(37 99 235 / 0.5);
+  transform: scale(1.02);
+}
+/* listening: ほぼ通常表示 + 薄いリング程度。 */
+.iv-interviewer--listening { box-shadow: 0 0 0 3px rgb(22 163 74 / 0.1), 0 8px 22px -10px rgb(15 23 42 / 0.28); }
+/* thinking: 画像は変えず、カードのグローと透明度をやわらかく明滅させる（処理中の合図）。 */
+.iv-interviewer--thinking  { opacity: 0.97; animation: iv-think-pulse 1.6s ease-in-out infinite; }
+
+/* thinking インジケータ（小さな「…」）。画像の上に控えめに重ねる。 */
+.iv-interviewer__thinking {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: rgb(15 23 42 / 0.55);
+  backdrop-filter: blur(2px);
+}
+.iv-interviewer__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #fff;
+  animation: iv-think-dot 1.2s ease-in-out infinite;
+}
+.iv-interviewer__dot:nth-child(2) { animation-delay: 0.2s; }
+.iv-interviewer__dot:nth-child(3) { animation-delay: 0.4s; }
 
 /* 進捗ドット（● ○ ○ ○ ○） */
 .iv-dot {
@@ -154,5 +196,8 @@ body {
 .iv-wave--user .iv-wave__bar { background: #dc2626; }
 
 @media (prefers-reduced-motion: reduce) {
-  .iv-wave__bar { animation: none !important; }
+  .iv-wave__bar,
+  .iv-interviewer--thinking,
+  .iv-interviewer__dot { animation: none !important; }
+  .iv-interviewer--speaking { transform: none; }
 }
