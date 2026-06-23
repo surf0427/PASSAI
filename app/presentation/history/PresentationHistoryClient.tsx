@@ -48,6 +48,8 @@ type Item = {
   sessionId: string;
   status: string;
   durationSec: number;
+  // 録画画面のカウントダウン用の制限時間（秒）。session.time_limit_sec 由来。無ければ null。
+  limitSec: number | null;
   createdAt: string;
   result: ResultInfo | null;
   hasMaterial: boolean;
@@ -154,13 +156,14 @@ export function PresentationHistoryClient() {
       const { data: sessions } = await supabase
         .from('presentation_sessions')
         .select(
-          'id, material_path, material_deleted_at, university_name, faculty_name, department_name, admission_type, presentation_format, presentation_limit_sec, university_notes, theme_mode',
+          'id, material_path, material_deleted_at, university_name, faculty_name, department_name, admission_type, presentation_format, presentation_limit_sec, university_notes, theme_mode, time_limit_sec',
         );
       if (cancelledRef.current) return;
       const materialSessionIds = new Set<string>();
       const materialDeletedSessionIds = new Set<string>();
       const universityMap = new Map<string, UniversityInfo | null>();
       const themeModeMap = new Map<string, string>();
+      const limitSecMap = new Map<string, number | null>();
       for (const s of sessions ?? []) {
         if (s.material_path) materialSessionIds.add(s.id as string);
         if (s.material_deleted_at) materialDeletedSessionIds.add(s.id as string);
@@ -168,6 +171,12 @@ export function PresentationHistoryClient() {
         themeModeMap.set(
           s.id as string,
           typeof s.theme_mode === 'string' ? s.theme_mode : 'manual',
+        );
+        limitSecMap.set(
+          s.id as string,
+          typeof s.time_limit_sec === 'number' && s.time_limit_sec > 0
+            ? s.time_limit_sec
+            : null,
         );
       }
 
@@ -187,6 +196,7 @@ export function PresentationHistoryClient() {
         sessionId: (a.session_id as string) ?? '',
         status: (a.status as string) ?? '',
         durationSec: (a.duration_sec as number) ?? 0,
+        limitSec: limitSecMap.get((a.session_id as string) ?? '') ?? null,
         createdAt: (a.created_at as string) ?? '',
         result: resultMap.get(a.id as string) ?? null,
         hasMaterial: materialSessionIds.has((a.session_id as string) ?? ''),
@@ -310,7 +320,9 @@ function HistoryCard({ item }: { item: Item }) {
           </LinkButton>
         ) : item.sessionId ? (
           <LinkButton
-            href={`/presentation/record?sessionId=${encodeURIComponent(item.sessionId)}`}
+            href={`/presentation/record?sessionId=${encodeURIComponent(item.sessionId)}${
+              item.limitSec ? `&limit=${item.limitSec}` : ''
+            }`}
             variant="secondary"
           >
             録画に戻る

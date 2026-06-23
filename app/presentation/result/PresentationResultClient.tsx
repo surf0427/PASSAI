@@ -63,7 +63,7 @@ type Feedback = {
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'not-found' }
-  | { kind: 'pending'; sessionId: string } // 評価作成中 / 未完了
+  | { kind: 'pending'; sessionId: string; limitSec: number | null } // 評価作成中 / 未完了
   | {
       kind: 'ready';
       feedback: Feedback;
@@ -117,8 +117,23 @@ export function PresentationResultClient() {
       if (cancelledRef.current) return;
 
       if (!result || attempt.status !== 'evaluated') {
-        // 評価作成中 / 未完了。record へ戻れるよう session_id を渡す。
-        setState({ kind: 'pending', sessionId: attempt.session_id ?? '' });
+        // 評価作成中 / 未完了。record へ戻れるよう session_id と制限時間（カウントダウン用）を渡す。
+        let limitSec: number | null = null;
+        if (attempt.session_id) {
+          const { data: pendingSession } = await supabase
+            .from('presentation_sessions')
+            .select('time_limit_sec')
+            .eq('id', attempt.session_id)
+            .maybeSingle();
+          if (cancelledRef.current) return;
+          if (
+            typeof pendingSession?.time_limit_sec === 'number' &&
+            pendingSession.time_limit_sec > 0
+          ) {
+            limitSec = pendingSession.time_limit_sec;
+          }
+        }
+        setState({ kind: 'pending', sessionId: attempt.session_id ?? '', limitSec });
         return;
       }
 
@@ -265,7 +280,9 @@ function ResultBody({
 
   if (state.kind === 'pending') {
     const recordHref = state.sessionId
-      ? `/presentation/record?sessionId=${encodeURIComponent(state.sessionId)}`
+      ? `/presentation/record?sessionId=${encodeURIComponent(state.sessionId)}${
+          state.limitSec ? `&limit=${state.limitSec}` : ''
+        }`
       : '/presentation/setup';
     return (
       <Card padding="lg" className="space-y-4">

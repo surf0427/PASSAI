@@ -360,13 +360,12 @@ async function respondWithExistingInProgress(
   );
 }
 
-// STEP-INTERVIEW-AI-REALTIME-DIAG（一時診断）: mint 失敗時に OpenAI の実 status/body を持ち回る。
-// 原因切り分け後に削除予定（reason / openaiStatus / openaiBody）。
+// mint 失敗種別と OpenAI HTTP status のみを持ち回る最小診断。
+// OpenAI 応答の生 body は保持しない（ログ・レスポンスへの漏洩を防ぐ）。
 type MintFailure = {
   ok: false;
   reason: 'fetch-error' | 'http-error' | 'parse-error' | 'missing-value';
   openaiStatus: number | null;
-  openaiBody: string | null;
 };
 type MintResult =
   | { ok: true; value: string; expiresAt: number | null }
@@ -413,18 +412,17 @@ async function mintClientSecret(args: {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-  } catch (err) {
+  } catch {
     return {
       ok: false,
       reason: 'fetch-error',
       openaiStatus: null,
-      openaiBody: String((err as Error)?.message ?? err).slice(0, 500),
     };
   } finally {
     clearTimeout(timer);
   }
 
-  // body は 1 度だけ text で読み、診断に使い回す（失敗時も OpenAI の本文を残す）。
+  // body は 1 度だけ text で読み、JSON parse に使う（生 body は保持・ログしない）。
   let bodyText = '';
   try {
     bodyText = await res.text();
@@ -437,7 +435,6 @@ async function mintClientSecret(args: {
       ok: false,
       reason: 'http-error',
       openaiStatus: res.status,
-      openaiBody: bodyText.slice(0, 2000),
     };
   }
 
@@ -449,7 +446,6 @@ async function mintClientSecret(args: {
       ok: false,
       reason: 'parse-error',
       openaiStatus: res.status,
-      openaiBody: bodyText.slice(0, 2000),
     };
   }
 
@@ -460,7 +456,6 @@ async function mintClientSecret(args: {
       ok: false,
       reason: 'missing-value',
       openaiStatus: res.status,
-      openaiBody: bodyText.slice(0, 2000),
     };
   }
   const expiresAt =
