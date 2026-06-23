@@ -106,13 +106,15 @@ body {
 
 /* 面接官カード（モード別の専用画像）。
    - 固定幅 + aspect-ratio で CLS（レイアウトシフト）を防ぐ（画像の実寸に依存しない）。
+   - aspect-ratio は実アートワーク（1402×1122 ≒ 5:4 の横長）に合わせ、余白なくシーンを表示する。
+     縦長アートワークへ差し替える場合はこの比率だけ変更する。
    - 画像は fill + object-contain で縦横比を維持。角丸・軽いシャドウ。
    - 状態（speaking / listening / thinking / idle）はグローのみに使い、画像差し替えに影響しない。
    - 将来 Live2D / 表情差分へ移行しても、この枠（サイズ・角丸・シャドウ）はそのまま流用できる。 */
 .iv-interviewer {
   position: relative;
   width: 220px;          /* スマホ: 180〜220px */
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 1402 / 1122;  /* ≒ 5:4（実画像の比率に一致 → object-contain でも余白ゼロ） */
   border-radius: 18px;   /* 角丸 16〜20px */
   overflow: hidden;
   background: linear-gradient(to bottom, #f1f5fb 0%, #e2eaf6 100%);
