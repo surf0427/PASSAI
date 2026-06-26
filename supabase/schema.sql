@@ -2412,6 +2412,8 @@ CREATE TABLE presentation_results (
   user_id     uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   feedback    jsonb        NOT NULL,
   categories  jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  qa_summary  jsonb,
+  final_report jsonb,
   created_at  timestamptz  NOT NULL DEFAULT now(),
   CONSTRAINT presentation_results_attempt_unique UNIQUE (attempt_id)
 );
@@ -2420,6 +2422,18 @@ COMMENT ON TABLE presentation_results IS
   'STEP-PRESENTATION-PR1. プレゼン attempt の AI カテゴリ評価（auth-scoped / 1:1）。'
   'feedback = PresentationFeedback（jsonb / categories は weak|normal|strong の 6 軸）。'
   '数値評価はしない。1 attempt 1 結果（UNIQUE(attempt_id)）。pr0_design.md §4.4 / §10.2。';
+
+COMMENT ON COLUMN presentation_results.qa_summary IS
+  '発表後 Q&A（5問）全体の総合評価（jsonb / nullable）。{categories:{understanding,logic,depth,'
+  'responsiveness,persuasion ∈ weak|normal|strong}, goodPoints[], improvements[], overallComment}。'
+  '5 問完了時に 1 度だけ生成（qa route の summary action）。再生成しない＝再課金しない。'
+  '1問ごとの presentation_qa_reviews とは責務が異なる（あちらは交換ログ、ここは全体総括）。';
+
+COMMENT ON COLUMN presentation_results.final_report IS
+  'プレゼン + Q&A を合わせた最終評価レポート（jsonb / nullable）。{totalScore(0-100), rank(S|A|B|C|D), '
+  'categoryScores{8軸 0-100}, goodPoints[], improvements[{point,reason}], presentationReview, qaReview, '
+  'finalComment(長文), improvementPlan[{priority,title,today,tomorrow}], passProbabilityStars(1-5), '
+  'passProbabilityNote}。5 問完了時に 1 度だけ生成（qa route の final-report action）。再生成しない＝再課金しない。';
 
 COMMENT ON COLUMN presentation_results.user_id IS
   'auth.users(id). owner key を複製。RLS（§70）は auth.uid()=user_id の SELECT のみ。書込は service_role。';

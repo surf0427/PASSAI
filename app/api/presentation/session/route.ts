@@ -190,6 +190,24 @@ export async function POST(req: Request) {
 
   const admin = getServiceRoleSupabaseClient();
 
+  // setup フォームで確定した可変フィールド一式（insert と「続きから」上書きで共有）。
+  // user_id / status / usage_recorded は作成専用なのでここには含めない。
+  const setupFields = {
+    university_name: universityName,
+    faculty_name: facultyName,
+    department_name: departmentName || null,
+    admission_type: admissionType || null,
+    presentation_format: presentationFormat || null,
+    presentation_limit_sec: presentationLimitSec,
+    university_notes: universityNotes || null,
+    theme,
+    time_limit_sec: timeLimitSec,
+    script,
+    theme_mode: themeMode,
+    generated_conditions: generatedConditions,
+    generated_questions: generatedQuestions,
+  };
+
   // 3. in_progress セッションを insert（usage_recorded=false 初期値）。
   //    課金は本 route では行わない（消費は evaluate route の初回 AI 評価成功時のみ）。
   const { data, error } = await admin
@@ -198,27 +216,18 @@ export async function POST(req: Request) {
       user_id: userId,
       status: 'in_progress',
       usage_recorded: false,
-      university_name: universityName,
-      faculty_name: facultyName,
-      department_name: departmentName || null,
-      admission_type: admissionType || null,
-      presentation_format: presentationFormat || null,
-      presentation_limit_sec: presentationLimitSec,
-      university_notes: universityNotes || null,
-      theme,
-      time_limit_sec: timeLimitSec,
-      script,
-      theme_mode: themeMode,
-      generated_conditions: generatedConditions,
-      generated_questions: generatedQuestions,
+      ...setupFields,
     })
     .select(SELECT_COLS)
     .single();
 
   if (error) {
-    // 3a. in_progress 重複（§64 部分 unique index）→ 既存セッションを返す（続きから）。
+    // 3a. in_progress 重複（§64 部分 unique index）→ 既存セッションを「今回の setup 内容」で
+    //     上書きしてから返す（続きから）。これをしないと、過去に作った in_progress（多くは
+    //     デフォルト5分）の time_limit_sec が返り続け、ユーザーが選び直した制限時間が無視される。
+    //     課金フラグ usage_recorded は触らないため quota 回避にはならない。
     if (error.code === UNIQUE_VIOLATION) {
-      return await respondWithExistingInProgress(admin, userId);
+      return await respondWithExistingInProgress(admin, userId, setupFields);
     }
     // DB 返却エラー（throw ではなく { error }）。スキーマ未適用・型不一致などが該当。
     // 秘密情報は出さず、message / code のみログ。
@@ -255,18 +264,22 @@ export async function POST(req: Request) {
   }
 }
 
-// 既存の in_progress セッションを取得して「続きから」用に返す。
-// race condition で unique violation が起きても、ここで再 SELECT して既存 session を返す。
+// 既存の in_progress セッションを「今回の setup 内容」で上書きしてから「続きから」用に返す。
+// race condition で unique violation が起きても、ここで UPDATE → 既存 session を返す。
+// time_limit_sec を含む可変フィールドを更新するため、ユーザーが setup で選び直した制限時間が
+// 確実に反映される（旧セッションの古い値が居座らない）。
 // 取得できなければ（competing delete 等の境界ケース）500 に倒す。
 async function respondWithExistingInProgress(
   admin: ReturnType<typeof getServiceRoleSupabaseClient>,
   userId: string,
+  setupFields: Record<string, unknown>,
 ): Promise<Response> {
   const { data, error } = await admin
     .from(TABLE)
-    .select(SELECT_COLS)
+    .update(setupFields)
     .eq('user_id', userId)
     .eq('status', 'in_progress')
+    .select(SELECT_COLS)
     .maybeSingle();
 
   if (error || !data) {

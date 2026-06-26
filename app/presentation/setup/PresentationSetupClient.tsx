@@ -256,7 +256,8 @@ export function PresentationSetupClient() {
           setApiError(`${matErr} 資料を外すか、もう一度お試しください。`);
           return;
         }
-        // record 画面のカウントダウン用に制限時間（秒）も渡す（GET session API は未実装のため query 経由）。
+        // record 画面の初期表示用に制限時間（秒）も渡す（正準値は record 側が session から再取得する。
+        // ここは DB 読み込みまでのブートストラップヒント）。
         const limit = json.session?.timeLimitSec ?? v.timeLimitSec;
         router.push(
           `/presentation/record?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`,

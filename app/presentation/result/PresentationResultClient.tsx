@@ -20,7 +20,6 @@ import {
   type UniversityInfo,
 } from '../universityInfoView';
 import { PostPresentationQa } from './PostPresentationQa';
-import { PastPresentationQaHistory } from './PastPresentationQaHistory';
 
 type Level = 'weak' | 'normal' | 'strong';
 
@@ -68,6 +67,7 @@ type LoadState =
       kind: 'ready';
       feedback: Feedback;
       transcript: string;
+      theme: string;
       university: UniversityInfo | null;
       themeMode: string;
       conditions: string[];
@@ -141,12 +141,14 @@ export function PresentationResultClient() {
       const { data: session } = await supabase
         .from('presentation_sessions')
         .select(
-          'university_name, faculty_name, department_name, admission_type, presentation_format, presentation_limit_sec, university_notes, theme_mode, generated_conditions, generated_questions',
+          'theme, university_name, faculty_name, department_name, admission_type, presentation_format, presentation_limit_sec, university_notes, theme_mode, generated_conditions, generated_questions',
         )
         .eq('id', attempt.session_id)
         .maybeSingle();
       if (cancelledRef.current) return;
       const university = parseUniversityInfo(session ?? null);
+      // プレゼンテーマ（正準ソース = session.theme）。評価・Q&A・履歴の全表示でこの値を参照する。
+      const theme = typeof session?.theme === 'string' ? session.theme.trim() : '';
       const themeMode = typeof session?.theme_mode === 'string' ? session.theme_mode : 'manual';
       const conditions = Array.isArray(session?.generated_conditions)
         ? (session.generated_conditions as unknown[]).filter(
@@ -177,6 +179,7 @@ export function PresentationResultClient() {
         feedback,
         transcript:
           typeof attempt.transcript === 'string' ? attempt.transcript : '',
+        theme,
         university,
         themeMode,
         conditions,
@@ -301,12 +304,23 @@ function ResultBody({
     );
   }
 
-  const { feedback, transcript, university, themeMode, conditions, questions } =
+  const { feedback, transcript, theme, university, themeMode, conditions, questions } =
     state;
   const isGenerated = themeMode === 'generated';
 
   return (
     <div className="space-y-4">
+      {/* プレゼンテーマ（正準ソース = session.theme）。評価・Q&A もこのテーマを基準にしている。 */}
+      {theme && (
+        <Card padding="lg">
+          <p className="text-xs font-semibold text-slate-500">プレゼンテーマ</p>
+          <p className="mt-0.5 text-sm font-medium text-slate-800">{theme}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            {isGenerated ? 'AI生成テーマ' : '自分で設定したテーマ'}
+          </p>
+        </Card>
+      )}
+
       {/* 想定大学情報（university_name がある場合のみ） */}
       {university && (
         <Card padding="lg">
@@ -421,11 +435,8 @@ function ResultBody({
         </Card>
       )}
 
-      {/* 発表後Q&A練習（評価完了済みの attempt のみ。今セッションのライブ Q&A） */}
+      {/* 発表後Q&A練習（5問固定・DB 永続化 / リロード復元。保存済み交換もここに表示する） */}
       <PostPresentationQa attemptId={attemptId} />
-
-      {/* 過去の発表後Q&A履歴（DB 永続化分。新しい順・折りたたみ。0 件なら描画しない） */}
-      <PastPresentationQaHistory attemptId={attemptId} />
     </div>
   );
 }

@@ -174,6 +174,16 @@ export async function POST(req: Request) {
     return json({ error: 'forbidden-attempt' }, 403);
   }
 
+  // テーマは presentation_sessions.theme が唯一の正準ソース。取得できない / 空なら評価不可で止める。
+  // 別テーマ（テストテーマ等）へのフォールバックは禁止（誤テーマ評価を構造的に不可能にする）。
+  const theme = typeof session.theme === 'string' ? session.theme.trim() : '';
+  if (!theme) {
+    devWarn('[presentation/evaluate] missing session theme', {
+      sessionId: attempt.session_id,
+    });
+    return json({ error: 'theme-required' }, 409);
+  }
+
   // 6. 添付資料があれば Storage から取得して評価に渡す（PDF/画像 → base64）。
   //    取得失敗時は資料なしで評価を続行する（ユーザーをブロックしない / 劣化動作）。
   const material = await loadMaterial(
@@ -189,7 +199,7 @@ export async function POST(req: Request) {
     timeLimitSec: session.time_limit_sec ?? 0,
     universityName: session.university_name ?? '',
     facultyName: session.faculty_name ?? '',
-    theme: session.theme ?? '',
+    theme,
     script: session.script ?? '',
     departmentName:
       typeof session.department_name === 'string' ? session.department_name : '',

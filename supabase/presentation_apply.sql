@@ -262,6 +262,8 @@ CREATE TABLE presentation_results (
   user_id     uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   feedback    jsonb        NOT NULL,
   categories  jsonb        NOT NULL DEFAULT '{}'::jsonb,
+  qa_summary  jsonb,
+  final_report jsonb,
   created_at  timestamptz  NOT NULL DEFAULT now(),
   CONSTRAINT presentation_results_attempt_unique UNIQUE (attempt_id)
 );

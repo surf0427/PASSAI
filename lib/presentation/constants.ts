@@ -42,6 +42,16 @@ export const PRESENTATION_QA_FINISH_LOG_ROUTE = 'api/presentation/qa:finish';
 // stateless（DB保存なし）の単発 Q&A 練習用（result 画面の発表後 Q&A）。
 export const PRESENTATION_QA_GENERATE_LOG_ROUTE = 'api/presentation/qa:generate';
 export const PRESENTATION_QA_REVIEW_LOG_ROUTE = 'api/presentation/qa:review';
+// Q&A 全体（5問）の総合評価。1 attempt 1 回だけ生成し presentation_results.qa_summary に保存する。
+export const PRESENTATION_QA_SUMMARY_LOG_ROUTE = 'api/presentation/qa:summary';
+export const PRESENTATION_QA_SUMMARY_MAX_TOKENS = 1500;
+// 最終評価レポート（プレゼン + Q&A の締め。スコア/ランク/詳細レビュー/改善プラン/合格可能性）。
+// 1 attempt 1 回だけ生成し presentation_results.final_report に保存する（再生成しない＝再課金しない）。
+export const PRESENTATION_FINAL_REPORT_LOG_ROUTE = 'api/presentation/qa:final-report';
+// 長文レポート（最終総評 400 字 + 各種詳細）を一度に出すため上限を大きめに取る。
+export const PRESENTATION_FINAL_REPORT_MAX_TOKENS = 4000;
+// 最終総評の最低文字数（大学・企業の評価レポート相当の密度を担保）。
+export const PRESENTATION_FINAL_COMMENT_MIN_CHARS = 300;
 // generate に渡す「既出の質問」の上限（重複回避用）。
 export const PRESENTATION_QA_ASKED_MAX = 10;
 

@@ -39,12 +39,17 @@ import {
   generateFinishSummary,
   generateFollowupQuestion,
   generateKickoffQuestion,
+  generateQaOverallEvaluation,
   generateStandaloneQuestion,
   QaGenerationError,
   reviewAnswer,
   type QaContext,
   type QaTurn,
 } from '@/lib/presentation/qa';
+import {
+  FinalReportError,
+  generatePresentationFinalReport,
+} from '@/lib/presentation/finalReport';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,7 +66,14 @@ const UNIQUE_VIOLATION = '23505';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type Action = 'kickoff' | 'answer' | 'finish' | 'generate' | 'review';
+type Action =
+  | 'kickoff'
+  | 'answer'
+  | 'finish'
+  | 'generate'
+  | 'review'
+  | 'summary'
+  | 'final-report';
 type Admin = ReturnType<typeof getServiceRoleSupabaseClient>;
 
 type TurnRow = {
@@ -81,7 +93,9 @@ function isAction(v: unknown): v is Action {
     v === 'answer' ||
     v === 'finish' ||
     v === 'generate' ||
-    v === 'review'
+    v === 'review' ||
+    v === 'summary' ||
+    v === 'final-report'
   );
 }
 
@@ -123,12 +137,18 @@ export async function POST(req: Request) {
     if (action === 'review') {
       return await handleReview(admin, attemptId, userId, ctx, b.question, b.answer_text);
     }
+    if (action === 'summary') {
+      return await handleSummary(admin, attemptId, ctx);
+    }
+    if (action === 'final-report') {
+      return await handleFinalReport(admin, attemptId, ctx);
+    }
     // ターン制（DB 保存）。
     if (action === 'finish') return await handleFinish(admin, attemptId, ctx);
     if (action === 'kickoff') return await handleKickoff(admin, attemptId, userId, ctx);
     return await handleAnswer(admin, attemptId, userId, ctx, b.answer_text);
   } catch (err) {
-    if (err instanceof QaGenerationError) {
+    if (err instanceof QaGenerationError || err instanceof FinalReportError) {
       devWarn('[presentation/qa] generation error', { message: err.message });
       return json({ error: 'qa-failed' }, 500);
     }
@@ -169,6 +189,16 @@ async function loadContext(
     return { error: json({ error: 'forbidden-attempt' }, 403) };
   }
 
+  // テーマは presentation_sessions.theme が唯一の正準ソース。空なら Q&A 生成・評価を止める
+  // （別テーマ・テストテーマへのフォールバックは禁止。質問は必ず今回のテーマに沿わせる）。
+  const theme = typeof session.theme === 'string' ? session.theme.trim() : '';
+  if (!theme) {
+    devWarn('[presentation/qa] missing session theme', {
+      sessionId: attempt.session_id,
+    });
+    return { error: json({ error: 'theme-required' }, 409) };
+  }
+
   const { data: result, error: resultErr } = await admin
     .from(RESULTS_TABLE)
     .select('feedback, categories')
@@ -189,7 +219,7 @@ async function loadContext(
 
   const ctx: QaContext = {
     transcript,
-    theme: session.theme ?? '',
+    theme,
     universityName: session.university_name ?? '',
     facultyName: session.faculty_name ?? '',
     categories:
@@ -362,42 +392,55 @@ async function handleFinish(
   return json({ summary }, 200);
 }
 
-// 保存済み Q&A 履歴（question のみ）を created_at 昇順で取得。重複回避用。失敗は [] に倒す。
-async function loadReviewQuestions(
+// 保存済み Q&A（質問＋回答）を turn_index 昇順で取得。重複回避・深掘り文脈・件数判定に使う。
+// 失敗は [] に倒す（生成は止めない）。
+async function loadReviewPairs(
   admin: Admin,
   attemptId: string,
-): Promise<string[]> {
+): Promise<{ question: string; answer: string }[]> {
   const { data, error } = await admin
     .from(REVIEWS_TABLE)
-    .select('question')
-    .eq('attempt_id', attemptId);
+    .select('turn_index, question, answer_text')
+    .eq('attempt_id', attemptId)
+    .order('turn_index', { ascending: true });
   if (error) {
-    devWarn('[presentation/qa] load review questions failed', {
+    devWarn('[presentation/qa] load review pairs failed', {
       message: error.message,
     });
     return [];
   }
   return (data ?? [])
-    .map((r) => (typeof r.question === 'string' ? r.question.trim() : ''))
-    .filter(Boolean);
+    .map((r) => ({
+      question: typeof r.question === 'string' ? r.question.trim() : '',
+      answer: typeof r.answer_text === 'string' ? r.answer_text.trim() : '',
+    }))
+    .filter((p) => p.question);
 }
 
 // action: generate — 質問を1つ生成して返す（DB 保存なし）。
-//   重複回避は「画面内 asked_questions」＋「DB 上の過去質問」の両方を除外対象にする
-//   （API コスト最適化: 過去質問を優先参照して同一質問の再生成を減らす。AI は停止しない）。
+//   - 質問数は 5 問固定。保存済み（= 回答済み）が 5 問に達していたら 409 で打ち切る
+//     （新しい質問は生成しない。終了状態はクライアントが終了画面に倒す）。
+//   - 重複回避: 「画面内 asked_questions」＋「DB 上の過去質問」を除外対象にする。
+//   - 深掘り: DB 上のこれまでの質問＋回答を priorQa として渡し、回答内容を踏まえさせる。
 async function handleGenerate(
   admin: Admin,
   attemptId: string,
   ctx: QaContext,
   askedRaw: unknown,
 ): Promise<Response> {
+  const priorPairs = await loadReviewPairs(admin, attemptId);
+  // 5 問固定: 既に 5 問回答済みなら新規生成しない（サーバ側の最終防衛）。
+  if (priorPairs.length >= PRESENTATION_QA_MAX_QUESTIONS) {
+    return json({ error: 'qa-limit-reached' }, 409);
+  }
+
   const clientAsked = Array.isArray(askedRaw)
     ? askedRaw
         .filter((x): x is string => typeof x === 'string')
         .map((s) => s.trim())
         .filter(Boolean)
     : [];
-  const dbAsked = await loadReviewQuestions(admin, attemptId);
+  const dbAsked = priorPairs.map((p) => p.question);
 
   // DB 上の過去質問を優先（前方）に、画面内を後方に置き、重複除去して上限で打ち切る。
   const seen = new Set<string>();
@@ -409,8 +452,29 @@ async function handleGenerate(
     if (askedQuestions.length >= PRESENTATION_QA_ASKED_MAX) break;
   }
 
-  const question = await generateStandaloneQuestion({ ctx, askedQuestions });
-  return json({ question }, 200);
+  const question = await generateStandaloneQuestion({
+    ctx,
+    askedQuestions,
+    priorQa: priorPairs,
+  });
+  return json(
+    {
+      question,
+      questionNumber: priorPairs.length + 1,
+      maxQuestions: PRESENTATION_QA_MAX_QUESTIONS,
+    },
+    200,
+  );
+}
+
+// 保存済み Q&A（回答済み）件数。5 問固定の判定に使う（セッション単位の質問数管理の正準値）。
+async function countReviews(admin: Admin, attemptId: string): Promise<number> {
+  const { count, error } = await admin
+    .from(REVIEWS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .eq('attempt_id', attemptId);
+  if (error) throw error;
+  return count ?? 0;
 }
 
 // 次の turn_index（attempt 内の保存件数ベース）。max(turn_index)+1。空なら 0。
@@ -460,7 +524,9 @@ async function persistReview(
 }
 
 // action: review — 1つの質問への回答に短いフィードバックを返し、成功後に DB 保存する。
-//   保存失敗時も review はそのまま返し（体験は止めない）、saved=false でクライアントへ通知する。
+//   - 質問数は 5 問固定。既に 5 問回答済みなら 409（6 問目は受け付けない＝終了）。
+//   - 保存失敗時も review はそのまま返し（体験は止めない）、saved=false でクライアントへ通知する。
+//   - finished=true は「この回答で 5 問目に到達した」ことを示し、クライアントが終了画面に倒す。
 async function handleReview(
   admin: Admin,
   attemptId: string,
@@ -475,6 +541,13 @@ async function handleReview(
   if (!answer || answer.length > PRESENTATION_QA_MAX_ANSWER_CHARS) {
     return json({ error: 'answer-required' }, 400);
   }
+
+  // 5 問固定: 既に 5 問保存済みなら新規回答は受け付けない（サーバ側の最終防衛）。
+  const existing = await countReviews(admin, attemptId);
+  if (existing >= PRESENTATION_QA_MAX_QUESTIONS) {
+    return json({ error: 'qa-limit-reached' }, 409);
+  }
+
   const review = await reviewAnswer({ ctx, question, answer });
   const saved = await persistReview(admin, {
     attemptId,
@@ -483,7 +556,126 @@ async function handleReview(
     answerText: answer,
     review,
   });
-  return json({ review, saved }, 200);
+  const questionCount = saved ? existing + 1 : existing;
+  return json(
+    {
+      review,
+      saved,
+      questionCount,
+      maxQuestions: PRESENTATION_QA_MAX_QUESTIONS,
+      finished: existing + 1 >= PRESENTATION_QA_MAX_QUESTIONS,
+    },
+    200,
+  );
+}
+
+// action: summary — Q&A 全体（5問）の総合評価を生成し presentation_results.qa_summary に保存する。
+//   - 冪等: 既に保存済みなら AI を呼ばずそのまま返す（再生成・再課金しない）。
+//   - 5 問に達していなければ 409 qa-incomplete（UI は 5 問完了後にのみ要求する）。
+//   - 課金しない（logAiUsage のみ。generate/review と同じ方針）。
+async function handleSummary(
+  admin: Admin,
+  attemptId: string,
+  ctx: QaContext,
+): Promise<Response> {
+  // 既存の qa_summary があればそれを返す（冪等・再課金回避）。
+  const { data: existingRow, error: existingErr } = await admin
+    .from(RESULTS_TABLE)
+    .select('qa_summary')
+    .eq('attempt_id', attemptId)
+    .maybeSingle();
+  if (existingErr) return failQa(existingErr);
+  if (existingRow?.qa_summary) {
+    return json({ summary: existingRow.qa_summary }, 200);
+  }
+
+  // 5 問完了が前提。
+  const pairs = await loadReviewPairs(admin, attemptId);
+  if (pairs.length < PRESENTATION_QA_MAX_QUESTIONS) {
+    return json({ error: 'qa-incomplete' }, 409);
+  }
+
+  const summary = await generateQaOverallEvaluation({ ctx, pairs });
+
+  const { error: updErr } = await admin
+    .from(RESULTS_TABLE)
+    .update({ qa_summary: summary })
+    .eq('attempt_id', attemptId);
+  if (updErr) {
+    // 保存に失敗しても生成結果は返す（体験を止めない）。次回アクセスで再生成される。
+    devWarn('[presentation/qa] persist qa_summary failed', {
+      message: updErr.message,
+    });
+    return json({ summary, saved: false }, 200);
+  }
+  return json({ summary, saved: true }, 200);
+}
+
+// action: final-report — プレゼン + Q&A を合わせた最終評価レポートを生成し
+//   presentation_results.final_report に保存する。
+//   - 冪等: 既に保存済みなら AI を呼ばずそのまま返す（再生成・再課金しない）。
+//   - 5 問完了が前提（未完了は 409 qa-incomplete）。
+//   - 課金しない（logAiUsage のみ）。テーマは loadContext で正準ソース（session.theme）に固定済み。
+async function handleFinalReport(
+  admin: Admin,
+  attemptId: string,
+  ctx: QaContext,
+): Promise<Response> {
+  // 既存があれば返す（冪等・再課金回避）。
+  const { data: existingRow, error: existingErr } = await admin
+    .from(RESULTS_TABLE)
+    .select('final_report')
+    .eq('attempt_id', attemptId)
+    .maybeSingle();
+  if (existingErr) return failQa(existingErr);
+  if (existingRow?.final_report) {
+    return json({ report: existingRow.final_report }, 200);
+  }
+
+  // 5 問完了が前提。
+  const pairs = await loadReviewPairs(admin, attemptId);
+  if (pairs.length < PRESENTATION_QA_MAX_QUESTIONS) {
+    return json({ error: 'qa-incomplete' }, 409);
+  }
+
+  // 時間配分の採点に使う実発表時間 / 制限時間を取得（テーマ等は ctx に固定済み）。
+  const { data: attemptRow } = await admin
+    .from(ATTEMPTS_TABLE)
+    .select('session_id, duration_sec')
+    .eq('id', attemptId)
+    .maybeSingle();
+  const durationSec =
+    typeof attemptRow?.duration_sec === 'number' ? attemptRow.duration_sec : 0;
+  let timeLimitSec = 0;
+  if (attemptRow?.session_id) {
+    const { data: sessionRow } = await admin
+      .from(SESSIONS_TABLE)
+      .select('time_limit_sec')
+      .eq('id', attemptRow.session_id)
+      .maybeSingle();
+    if (typeof sessionRow?.time_limit_sec === 'number') {
+      timeLimitSec = sessionRow.time_limit_sec;
+    }
+  }
+
+  const report = await generatePresentationFinalReport({
+    ctx,
+    pairs,
+    durationSec,
+    timeLimitSec,
+  });
+
+  const { error: updErr } = await admin
+    .from(RESULTS_TABLE)
+    .update({ final_report: report })
+    .eq('attempt_id', attemptId);
+  if (updErr) {
+    devWarn('[presentation/qa] persist final_report failed', {
+      message: updErr.message,
+    });
+    return json({ report, saved: false }, 200);
+  }
+  return json({ report, saved: true }, 200);
 }
 
 function failQa(err: unknown): Response {

@@ -47,7 +47,12 @@ const VIDEO_MIME_CANDIDATES = [
 ];
 const AUDIO_MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
 
-const DEFAULT_LIMIT_SEC = 300;
+// URL の ?limit= は「DB 読み込みまでの初期表示用ヒント」にすぎない。制限時間の正準ソースは
+// presentation_sessions.time_limit_sec（下の useEffect で取得して上書きする）。
+function parseLimitParam(v: string | null): number | null {
+  const raw = Number(v);
+  return Number.isInteger(raw) && raw > 0 ? raw : null;
+}
 
 function pickMime(candidates: string[]): string | null {
   if (typeof MediaRecorder === 'undefined') return null;
@@ -61,7 +66,8 @@ function pickMime(candidates: string[]): string | null {
   return null;
 }
 
-function formatTime(totalSec: number): string {
+function formatTime(totalSec: number | null): string {
+  if (totalSec == null) return '--:--';
   const s = Math.max(0, Math.floor(totalSec));
   const m = Math.floor(s / 60);
   const r = s % 60;
@@ -71,21 +77,27 @@ function formatTime(totalSec: number): string {
 export function PresentationRecordClient() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('sessionId') ?? '';
-  const limitSec = (() => {
-    const raw = Number(searchParams.get('limit'));
-    return Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_LIMIT_SEC;
-  })();
 
   const router = useRouter();
   const userId = useCurrentUserId();
 
+  // 制限時間（秒）。正準ソースは presentation_sessions.time_limit_sec（DB）。
+  // URL ?limit= は初期描画用のヒントとしてのみ使い、DB 取得後にそれで上書きする。
+  // 制限時間・残り時間・カウントダウン・自動終了タイミングは、すべてこの limitSec のみを参照する。
+  const [limitSec, setLimitSec] = useState<number | null>(() =>
+    parseLimitParam(searchParams.get('limit')),
+  );
+
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [remaining, setRemaining] = useState(limitSec);
+  const [remaining, setRemaining] = useState<number>(limitSec ?? 0);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [durationSec, setDurationSec] = useState(0);
+
+  // プレゼンテーマ（正準ソース = presentation_sessions.theme）。録画画面で明示表示する。
+  const [theme, setTheme] = useState<string | null>(null);
 
   // 発表資料（任意）。session に登録済みなら signed URL を取得して表示する。
   const [materialUrl, setMaterialUrl] = useState<string | null>(null);
@@ -180,6 +192,8 @@ export function PresentationRecordClient() {
   const startRecording = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
+    // 制限時間が未確定（DB 未取得）のうちは録画させない。自動終了の基準が無いため。
+    if (limitSec == null) return;
 
     const videoMime = pickMime(VIDEO_MIME_CANDIDATES);
     if (!videoMime) {
@@ -281,7 +295,7 @@ export function PresentationRecordClient() {
     setRecordedUrl(null);
     setVideoBlob(null);
     setAudioBlob(null);
-    setRemaining(limitSec);
+    setRemaining(limitSec ?? 0);
     setStatus('idle');
     void startCamera();
   }, [
@@ -447,20 +461,35 @@ export function PresentationRecordClient() {
     }
   }, [status]);
 
-  // 資料の signed URL を取得（session に material があれば。RLS owner で本人のみ）。
+  // session を取得し、制限時間（正準ソース）と発表資料（任意）を反映する。
+  // time_limit_sec は record 画面の制限時間そのもの。URL ?limit= ではなく DB の値を採用する
+  // ことで、「続きから」リンクや リロードでも常にユーザーが設定した制限時間が表示される。
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
 
-    async function loadMaterial() {
+    async function loadSession() {
       const supabase = getBrowserSupabaseClient();
       if (!supabase) return;
       const { data: session } = await supabase
         .from('presentation_sessions')
-        .select('material_path, material_mime_type')
+        .select('theme, time_limit_sec, material_path, material_mime_type')
         .eq('id', sessionId)
         .maybeSingle();
-      if (cancelled || !session?.material_path) return;
+      if (cancelled || !session) return;
+
+      // プレゼンテーマを DB 値で確定（録画画面表示用。正準ソース）。
+      if (typeof session.theme === 'string' && session.theme.trim()) {
+        setTheme(session.theme.trim());
+      }
+
+      // 制限時間を DB 値で確定（正の整数のみ採用）。
+      const dbLimit = session.time_limit_sec;
+      if (typeof dbLimit === 'number' && Number.isInteger(dbLimit) && dbLimit > 0) {
+        setLimitSec(dbLimit);
+      }
+
+      if (!session.material_path) return;
       const { data: signed } = await supabase.storage
         .from(PRESENTATION_MATERIAL_BUCKET)
         .createSignedUrl(session.material_path as string, 600);
@@ -469,11 +498,19 @@ export function PresentationRecordClient() {
       setMaterialMime((session.material_mime_type as string) ?? null);
     }
 
-    void loadMaterial();
+    void loadSession();
     return () => {
       cancelled = true;
     };
   }, [sessionId]);
+
+  // 制限時間が（DB 取得などで）確定/変化したら、録画中でない限り残り時間を同期する。
+  // これで「制限時間」と「残り」が常に同じ値から始まる。
+  useEffect(() => {
+    if (status !== 'recording' && limitSec != null) {
+      setRemaining(limitSec);
+    }
+  }, [limitSec, status]);
 
   // sessionId 不足 → 案内。
   if (!sessionId) {
@@ -501,6 +538,14 @@ export function PresentationRecordClient() {
         </AlertBox>
 
         <Card padding="lg" className="space-y-4">
+          {/* プレゼンテーマ（正準ソース = session.theme）。評価・Q&A もこのテーマを参照する。 */}
+          {theme && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">プレゼンテーマ</p>
+              <p className="text-sm font-medium text-slate-800">{theme}</p>
+            </div>
+          )}
+
           {/* 制限時間 / 残り時間 */}
           <div className="flex items-center justify-between text-sm">
             <span className="text-slate-600">
@@ -574,8 +619,12 @@ export function PresentationRecordClient() {
             )}
 
             {status === 'ready' && (
-              <Button variant="primary" onClick={startRecording}>
-                録画開始
+              <Button
+                variant="primary"
+                onClick={startRecording}
+                disabled={limitSec == null}
+              >
+                {limitSec == null ? '制限時間を確認中…' : '録画開始'}
               </Button>
             )}
 

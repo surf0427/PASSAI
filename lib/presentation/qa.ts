@@ -13,6 +13,8 @@ import {
   PRESENTATION_QA_KICKOFF_LOG_ROUTE,
   PRESENTATION_QA_QUESTION_MAX_TOKENS,
   PRESENTATION_QA_REVIEW_LOG_ROUTE,
+  PRESENTATION_QA_SUMMARY_LOG_ROUTE,
+  PRESENTATION_QA_SUMMARY_MAX_TOKENS,
 } from './constants';
 import {
   PRESENTATION_CATEGORY_KEYS,
@@ -60,6 +62,7 @@ const CATEGORY_LABELS: Record<PresentationCategoryKey, string> = {
 };
 
 const QA_QUALITY_RULES = [
+  '質問は必ず「今回のプレゼンテーマ」（上記に提示）に沿った内容にする。テーマと無関係な質問・別のテーマを想定した質問は禁止。',
   '質問は発表の文字起こし内容に即した具体的な深掘りにする（一般的すぎる質問・テンプレ質問は禁止）。',
   '出力は質問文そのものだけ。前置き・解説・番号・記号・引用符は付けない。1文・日本語。',
 ].join('\n');
@@ -269,12 +272,20 @@ export async function generateFinishSummary(args: {
 
 /**
  * 発表後に面接官・教授が聞きそうな質問を1つ生成する（DB 保存なし）。
- * askedQuestions（画面内で既出の質問）と重複しない観点を促す。
+ * - askedQuestions（既出の質問）と重複しない観点を促す。
+ * - priorQa（これまでの質問と受験生の回答）を渡し、回答内容を踏まえて深掘りさせる。
  */
 export async function generateStandaloneQuestion(args: {
   ctx: QaContext;
   askedQuestions: string[];
+  priorQa?: { question: string; answer: string }[];
 }): Promise<string> {
+  const priorQa = args.priorQa ?? [];
+  const priorSection = priorQa.length
+    ? `これまでの質疑応答（受験生の回答を踏まえて深掘りし、同じ論点・同じ質問を繰り返さないこと）:\n${priorQa
+        .map((p, i) => `Q${i + 1}: ${p.question}\nA${i + 1}: ${p.answer}`)
+        .join('\n')}\n\n`
+    : '';
   const askedSection = args.askedQuestions.length
     ? `既に出した質問（重複しないこと）:\n${args.askedQuestions
         .map((q, i) => `${i + 1}. ${q}`)
@@ -282,12 +293,14 @@ export async function generateStandaloneQuestion(args: {
     : '';
   const system = [
     'あなたは大学入試（総合型選抜・学校推薦型選抜）の面接官・教授です。',
-    '受験生のプレゼン発表後に、面接官や教授が実際に聞きそうな質問を1つだけ出してください。',
+    '受験生のプレゼン発表と、これまでの質疑応答（受験生の回答）を踏まえ、面接官や教授が実際に聞きそうな質問を1つだけ出してください。',
+    'これまでの回答内容を踏まえて深掘りし、既出の質問とは異なる新しい論点にすること。',
     QA_QUALITY_RULES,
   ].join('\n');
   const userPrompt =
     `${buildEvalContext(args.ctx)}\n\n` +
     `発表の文字起こし:\n${args.ctx.transcript.trim()}\n\n` +
+    priorSection +
     askedSection +
     `上記を踏まえ、発表後に聞かれやすい質問を1つ出してください。`;
 
@@ -319,6 +332,7 @@ export async function reviewAnswer(args: {
   const system = [
     'あなたは大学入試（総合型選抜・学校推薦型選抜）の面接官・教授です。',
     '受験生の回答に対する短いフィードバックを日本語で作成してください。',
+    'フィードバックは「今回のプレゼンテーマ」（上記に提示）への回答として適切かどうかの観点で行う。別のテーマを想定した指摘は禁止。',
     '出力は次の JSON オブジェクト **のみ**（前後の説明文・コードフェンスなし）:',
     '{',
     `  "goodPoints": string[],          // 良かった点（${PRESENTATION_QA_FINISH_LIST_MIN}〜${PRESENTATION_QA_FINISH_LIST_MAX}個）`,
@@ -365,4 +379,121 @@ export async function reviewAnswer(args: {
     throw new QaGenerationError('qa-review-quality-failed');
   }
   return { goodPoints, improvements, modelAnswerDirection };
+}
+
+// ── Q&A 全体（5問）の総合評価 ────────────────────────────────────────
+// 1 問ごとの review とは別に、全質疑応答を通した受験生の「受け答え」を 5 軸で総合評価する。
+// 1 attempt 1 回だけ生成し presentation_results.qa_summary に保存する（再生成しない＝再課金しない）。
+
+// Q&A 総合評価の 5 軸（質問理解力 / 論理性 / 回答の深さ / 受け答え / 説得力）。
+export const QA_SUMMARY_CATEGORY_KEYS = [
+  'understanding',
+  'logic',
+  'depth',
+  'responsiveness',
+  'persuasion',
+] as const;
+
+export type QaSummaryCategoryKey = (typeof QA_SUMMARY_CATEGORY_KEYS)[number];
+export type QaLevel = 'weak' | 'normal' | 'strong';
+
+const QA_SUMMARY_CATEGORY_LABELS: Record<QaSummaryCategoryKey, string> = {
+  understanding: '質問理解力',
+  logic: '論理性',
+  depth: '回答の深さ',
+  responsiveness: '受け答え',
+  persuasion: '説得力',
+};
+
+export type QaOverallEvaluation = {
+  categories: Record<QaSummaryCategoryKey, QaLevel>;
+  goodPoints: string[];
+  improvements: string[];
+  overallComment: string;
+};
+
+function coerceLevel(v: unknown): QaLevel {
+  return v === 'weak' || v === 'normal' || v === 'strong' ? v : 'normal';
+}
+
+/**
+ * 発表後 Q&A 全体（複数の質問と回答）を通した総合評価を JSON で返す。
+ * - categories: 5 軸を weak|normal|strong で判定。
+ * - goodPoints / improvements: 1〜3 個・空禁止。overallComment: 数文・空禁止。
+ * DB 保存・課金は route 側の責務（ここは生成のみ。logAiUsage のみ）。
+ */
+export async function generateQaOverallEvaluation(args: {
+  ctx: QaContext;
+  pairs: { question: string; answer: string }[];
+}): Promise<QaOverallEvaluation> {
+  const qaTranscript = args.pairs
+    .map((p, i) => `Q${i + 1}: ${p.question}\nA${i + 1}: ${p.answer}`)
+    .join('\n');
+  const catLines = QA_SUMMARY_CATEGORY_KEYS.map(
+    (k) => `    "${k}": "weak" | "normal" | "strong",   // ${QA_SUMMARY_CATEGORY_LABELS[k]}`,
+  ).join('\n');
+
+  const system = [
+    'あなたは大学入試（総合型選抜・学校推薦型選抜）の面接官・教授です。',
+    '受験生のプレゼン発表後に行った質疑応答（複数の質問と回答）全体を見て、受験生の受け答えを総合評価してください。',
+    '評価は「今回のプレゼンテーマ」（上記に提示）への質疑応答として行う。別のテーマを想定した評価は禁止。',
+    '個々の回答ではなく、質疑応答全体を通した傾向を評価すること。',
+    '出力は次の JSON オブジェクト **のみ**（前後の説明文・コードフェンスなし）:',
+    '{',
+    '  "categories": {',
+    catLines,
+    '  },',
+    `  "goodPoints": string[],     // 良かった点（${PRESENTATION_QA_FINISH_LIST_MIN}〜${PRESENTATION_QA_FINISH_LIST_MAX}個）`,
+    `  "improvements": string[],   // 改善点（${PRESENTATION_QA_FINISH_LIST_MIN}〜${PRESENTATION_QA_FINISH_LIST_MAX}個）`,
+    '  "overallComment": string    // 総評（数文・質疑応答全体の振り返り）',
+    '}',
+    '実際の質疑応答の内容に即した具体的な指摘にする（一般論・テンプレ文は禁止）。空配列・空文字は禁止。',
+  ].join('\n');
+  const userPrompt =
+    `${buildEvalContext(args.ctx)}\n\n` +
+    `発表の文字起こし:\n${args.ctx.transcript.trim()}\n\n` +
+    `発表後の質疑応答（全${args.pairs.length}問）:\n${qaTranscript}\n\n` +
+    `上記の質疑応答全体をもとに総合評価 JSON を出力してください。`;
+
+  const { text, truncated } = await generateText({
+    logRoute: PRESENTATION_QA_SUMMARY_LOG_ROUTE,
+    system,
+    userPrompt,
+    maxTokens: PRESENTATION_QA_SUMMARY_MAX_TOKENS,
+  });
+  if (truncated) throw new QaGenerationError('qa-summary-truncated');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJson(text));
+  } catch {
+    throw new QaGenerationError('qa-summary-parse-failed');
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new QaGenerationError('qa-summary-parse-failed');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const rawCats =
+    obj.categories && typeof obj.categories === 'object'
+      ? (obj.categories as Record<string, unknown>)
+      : {};
+  const categories = QA_SUMMARY_CATEGORY_KEYS.reduce(
+    (acc, k) => {
+      acc[k] = coerceLevel(rawCats[k]);
+      return acc;
+    },
+    {} as Record<QaSummaryCategoryKey, QaLevel>,
+  );
+  const goodPoints = cleanFinishList(obj.goodPoints);
+  const improvements = cleanFinishList(obj.improvements);
+  const overallComment =
+    typeof obj.overallComment === 'string' ? obj.overallComment.trim() : '';
+  if (
+    goodPoints.length < PRESENTATION_QA_FINISH_LIST_MIN ||
+    improvements.length < PRESENTATION_QA_FINISH_LIST_MIN ||
+    !overallComment
+  ) {
+    throw new QaGenerationError('qa-summary-quality-failed');
+  }
+  return { categories, goodPoints, improvements, overallComment };
 }
