@@ -151,6 +151,17 @@ export function InterviewAiClient() {
   // 再開時は exchanges を復元しないため server の answerCount から seed する（再開後も正しい番号を出す）。
   const [answeredCount, setAnsweredCount] = useState(0);
   const [done, setDone] = useState(false);
+  // 結果生成（complete）の進行状態。done 到達後に自動実行する。
+  //   idle    : 未着手（done になると effect が running へ遷移させ自動起動する）
+  //   running : 結果生成中（/complete 実行中。ローディング表示）
+  //   ready   : 結果生成・保存に成功（result セット済み → 「結果を見る」を出す）
+  //   failed  : 生成 / 保存に失敗（「結果を見る」は出さず再試行導線を出す）
+  // complete は sessionId だけを使い、turns は server が DB から読む（client state には依存しない）。
+  const [completeStage, setCompleteStage] = useState<'idle' | 'running' | 'ready' | 'failed'>(
+    'idle',
+  );
+  // complete の多重起動を防ぐトークン。自動起動（effect）と手動再試行の競合・StrictMode 二重 mount 対策。
+  const completeStartedRef = useRef(false);
   // 経過時間（秒）。表示専用（⏱️ 00:42）。面接ロジック・課金・保存には一切関与しない。
   // interviewing の間だけ 1 秒ごとに進める。開始 / 再開でリセットする。
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -172,8 +183,11 @@ export function InterviewAiClient() {
   // の 2 経路のみ。TTS の成否は inputMode に一切影響しない（補助機能として分離 / req ⑥）。
   // 音声回答も最終的には STT 後の text answer として保存する（1セッション1課金は不変）。
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('text');
-  // 音声入力のサブ状態。idle: 録音前 or 文字起こし結果待ち / recording: 録音中 / transcribing: STT 中。
-  const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  // 音声入力のサブ状態。idle: 録音前 / recording: 録音中 / transcribing: STT〜自動送信中 /
+  // error: 文字起こし・送信・音声取得の失敗（録音し直す導線。詳細は errorMsg に表示）。
+  const [voiceStage, setVoiceStage] = useState<'idle' | 'recording' | 'transcribing' | 'error'>(
+    'idle',
+  );
   // マイク許可拒否（NotAllowedError 等）からの復帰 UI 用。Safari は一度拒否すると getUserMedia が
   // 自動で再プロンプトしないため、明示的な「再確認」導線を出す。ページ表示時に自動取得はしない
   // （ユーザーが「音声で回答」or「マイク許可を再確認する」を押した時だけ getUserMedia を呼ぶ）。
@@ -595,6 +609,8 @@ export function InterviewAiClient() {
     setAnsweredCount(0);
     setElapsedSec(0); // 経過時間表示をリセット
     setDone(false);
+    completeStartedRef.current = false; // 次セッションで complete を再度自動起動できるようにする
+    setCompleteStage('idle');
     setQuestionError(false);
     setRetryCount(0);
     setVoiceStage('idle');
@@ -662,6 +678,10 @@ export function InterviewAiClient() {
     setLoading(true);
     setErrorMsg(null);
     setElapsedSec(0); // 新規セッション → 経過時間表示をリセット
+    setDone(false);
+    completeStartedRef.current = false; // 新規セッション → complete 自動起動をリセット
+    setCompleteStage('idle');
+    setResult(null);
     // 実効モードをセッション既定で初期化（以降は質問切替で変わらない / req ①）。
     setInputMode(defaultInputMode());
     // 音声回答も STT 後に text answer として保存するため、session は常に source='text'。
@@ -738,6 +758,9 @@ export function InterviewAiClient() {
       setSession(resume);
       setResume(null);
       setPhase('interviewing');
+      completeStartedRef.current = false; // 再開 → done なら complete を自動起動できるようにする
+      setCompleteStage('idle');
+      setResult(null);
       // 再開時の実効モード初期化（req ⑤）。STT 利用可なら voice、非対応環境なら text（解釈A）。
       // 音声が使えない例外時は面接画面側で自動的にテキスト入力へフォールバックする。
       setInputMode(defaultInputMode());
@@ -803,14 +826,16 @@ export function InterviewAiClient() {
     }
   }
 
-  // ── 回答送信（音声・テキスト共通で text answer として保存）─────────────
-  //   音声回答も STT 後の transcript を answerText に入れ、本関数で text answer として送る。
+  // ── 回答送信のコア（音声・テキスト共通で text answer として保存）─────────────
+  //   音声回答も STT 後の transcript を本関数に渡し、text answer として送る。
   //   → 既存の text 回答フロー（/turn text）= 1セッション1カウントの課金仕様に合流する。
-  async function handleSubmitText() {
-    if (!session || !currentQuestion) return;
-    const answer = answerText.trim();
-    if (!answer) return;
-    if (!beginSubmit()) return; // req ⑤: 二重送信ガード（回答の二重保存・二重課金を防ぐ）
+  //   呼び出し側で確定した回答文字列（音声=文字起こし結果 / テキスト=入力）を受け取る。
+  //   返り値の AnswerResult で結果種別（送信失敗かどうか）を呼び出し側に渡す（音声の録音し直し判定用）。
+  async function submitAnswer(rawAnswer: string): Promise<AnswerResult | null> {
+    if (!session || !currentQuestion) return null;
+    const answer = rawAnswer.trim();
+    if (!answer) return null;
+    if (!beginSubmit()) return null; // req ⑤: 二重送信ガード（回答の二重保存・二重課金を防ぐ）
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -818,10 +843,16 @@ export function InterviewAiClient() {
       // 無ければ null ＝ server は従来どおり生成（フォールバック）。課金・保存仕様は不変。
       const r = await submitTextAnswer(session.id, answer, nextQuestionCandidate);
       applyAnswerResult(r, currentQuestion);
+      return r;
     } finally {
       setLoading(false);
       endSubmit();
     }
+  }
+
+  // テキスト回答（音声が使えない例外時のフォールバック）の「次へ」。入力欄の値を送る。
+  async function handleSubmitText() {
+    await submitAnswer(answerText);
   }
 
   // ── 音声入力（録音 → STT → transcript を answerText に格納。保存はしない）──────
@@ -904,37 +935,51 @@ export function InterviewAiClient() {
     setVoiceStage('transcribing');
   }
 
-  // 録音 blob を STT API でテキスト化。成功で answerText にセット（音声モードは読み取り専用で確認のみ）。
+  // 録音 blob を STT API でテキスト化し、成功したら確認画面を出さずそのまま自動送信する（本番面接に近い体験）。
+  //   - 正常時: 文字起こし → submitAnswer → 次の質問へ自動で進む（「この内容で送信」操作なし）。
+  //   - 異常時のみ: 文字起こし失敗 / 送信失敗 / 音声データ取得失敗のときだけ「録音し直す」導線（voiceStage='error'）。
   // 失敗時は保存も課金もしない。STT 中にリソース解放（切替/中断/unmount 等）が起きたら結果は破棄する（M-3）。
   // 音声 blob はここで破棄。
   async function handleTranscribe(blob: Blob) {
     const reqId = (transcribeIdRef.current += 1);
     setVoiceStage('transcribing');
+    // 音声データ取得失敗（無音 / chunks 空）→ 送れないので「録音し直す」導線を出す。
+    if (blob.size === 0) {
+      stopRecordingResources();
+      setVoiceStage('error');
+      setErrorMsg('音声をうまく取得できませんでした。もう一度録音してください。');
+      return;
+    }
     const r = await transcribeVoice(blob);
     // 解放（切替/リセット/中断/unmount）で無効化された STT の結果は反映しない。
     if (reqId !== transcribeIdRef.current) return;
-    if (r.kind === 'ok') {
-      // inputMode は voice のまま（編集不可の readonly 欄に表示）。
-      setAnswerText(r.transcript);
-      setVoiceStage('idle');
+    if (r.kind === 'ok' && r.transcript.trim()) {
+      // 確認画面を出さず、文字起こし結果をそのまま自動送信する（編集・送信確認 UI は廃止）。
+      // 送信成功（next/done/limit/question-error）は applyAnswerResult が次質問 / 完了 / 再試行へ進める。
+      // 送信そのものが失敗（kind==='error'）したときだけ「録音し直す」導線を出す。
+      const result = await submitAnswer(r.transcript);
+      // submitAnswer が次質問へ進んだ（showQuestion で transcribeIdRef を更新）場合は何もしない。
+      if (reqId !== transcribeIdRef.current) return;
+      if (result && result.kind === 'error') {
+        stopRecordingResources();
+        setVoiceStage('error');
+        setErrorMsg('回答の送信に失敗しました。もう一度録音してください。');
+      }
       return;
     }
     // STT 失敗時は保存も課金もしない（turn を作らない / answeredCount を増やさない / 次の質問へ進まない）。
-    // 録音リソースを解放（マイクを残さない / req ⑥）し、面接を止めず同じ質問のままテキスト入力へ
-    // フォールバックする（req ①②）。currentQuestion は維持。answerText は空のまま（STT 失敗＝transcript 無し）
-    // → ユーザーがテキストで回答 → 既存の text turn（/turn）に流す＝初回回答として 1 回だけ課金（req ③）。
+    // 録音リソースを解放（マイクを残さない / req ⑥）し、currentQuestion は維持したまま分岐する。
     stopRecordingResources();
-    setVoiceStage('idle');
-    setAnswerText('');
-    setInputMode('text');
-    if (r.error === 'stt-unavailable') {
-      // provider 無効 → 録り直しても無駄。テキスト入力へ誘導。
+    if (r.kind === 'error' && r.error === 'stt-unavailable') {
+      // provider 無効 → 録り直しても無駄。完走保証のためテキスト入力へフォールバック（例外時のみ）。
+      setVoiceStage('idle');
+      setAnswerText('');
+      setInputMode('text');
       setErrorMsg('音声認識が利用できません。テキストで回答してください。');
     } else {
-      // 一時失敗（stt-failed / stt-empty 等）→ 同じ質問のままテキスト入力で続行できるようにする。
-      setErrorMsg(
-        '音声の文字起こしに失敗しました。お手数ですが、この質問への回答をテキストで入力してください。',
-      );
+      // 一時失敗（stt-failed / 通信エラー / 空 transcript）→ 同じ質問のまま「録音し直す」導線を出す。
+      setVoiceStage('error');
+      setErrorMsg('音声の文字起こしに失敗しました。もう一度録音してください。');
     }
   }
 
@@ -979,31 +1024,61 @@ export function InterviewAiClient() {
     }
   }
 
-  // ── 完了 ────────────────────────────────────────────────────
-  async function handleComplete() {
-    if (!session) return;
-    if (!beginSubmit()) return; // req ⑤: 二重送信ガード
-    stopRecordingResources();
-    releaseTtsResources();
-    setTtsStage('idle');
-    resetPrefetch();
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const r = await completeSession(session.id);
-      if (r.kind === 'completed') {
-        setResult(r);
-        setPhase('result');
-      } else if (r.kind === 'feedback-error') {
-        setErrorMsg('結果の生成に失敗しました。もう一度「結果を見る」を押してください。');
-      } else {
-        setErrorMsg('完了処理に失敗しました。再試行してください。');
+  // ── 完了（結果生成） ────────────────────────────────────────────
+  // done 到達後に自動実行する（音声自動送信・テキスト送信のどちらでも同じ完了処理に合流する）。
+  //   - complete は sessionId だけを使う。回答（turns）は server が DB から読むため、client の
+  //     exchanges / answeredCount / answerText の setState 反映待ちには一切依存しない（最新回答は
+  //     既に /turn で DB 保存済み）。よって渡すのは sessionId のみ（ローカル変数で確定済みの値を使う）。
+  //   - 成功時のみ result をセットして 'ready'（→「結果を見る」を出す）。
+  //   - 失敗時は 'failed'（→「結果を見る」を出さず再試行導線）。失敗の実コードは dev ログに出す。
+  const runComplete = useCallback(
+    async (sessionId: string) => {
+      if (!sessionId) return;
+      if (!beginSubmit()) return; // 自動起動と手動再試行・連打の競合を弾く（req ⑤）
+      completeStartedRef.current = true;
+      // 音声・読み上げ・先読みの後始末（面接は終了済み）。
+      stopRecordingResources();
+      releaseTtsResources();
+      setTtsStage('idle');
+      resetPrefetch();
+      setCompleteStage('running');
+      setErrorMsg(null);
+      try {
+        const r = await completeSession(sessionId);
+        if (r.kind === 'completed') {
+          setResult(r);
+          setCompleteStage('ready');
+        } else {
+          // 結果保存に失敗 → 「結果を見る」は出さず再試行導線（done 画面は維持。回答は DB 保存済み）。
+          console.error('[interview-ai] complete failed', r);
+          setErrorMsg(
+            r.kind === 'feedback-error'
+              ? '結果の生成に失敗しました。「結果を生成し直す」を押してください。'
+              : '結果の作成に失敗しました。「結果を生成し直す」を押してください。',
+          );
+          setCompleteStage('failed');
+        }
+      } catch (err) {
+        // fetch 例外（通信断など）。completeSession は fetch 例外を catch しないためここで受ける。
+        console.error('[interview-ai] complete threw', err);
+        setErrorMsg('結果の作成に失敗しました。通信環境を確認して「結果を生成し直す」を押してください。');
+        setCompleteStage('failed');
+      } finally {
+        endSubmit();
       }
-    } finally {
-      setLoading(false);
-      endSubmit();
-    }
-  }
+    },
+    [releaseTtsResources, resetPrefetch, stopRecordingResources],
+  );
+
+  // done 到達で結果生成を自動起動する（全 done 経路を 1 箇所で拾う: 回答送信 / followup 再試行 / 再開）。
+  // completeStartedRef で多重起動を防ぐ（resetToStart / runComplete 内でのみ false/true に更新）。
+  // setState 反映待ちには依存しない（session は startSession/resume で確定済みの安定値）。
+  useEffect(() => {
+    if (phase !== 'interviewing') return;
+    if (!done || !session) return;
+    if (completeStartedRef.current) return;
+    void runComplete(session.id);
+  }, [phase, done, session, runComplete]);
 
   // ── 中断（明示キャンセル） ──────────────────────────────────
   async function handleAbandon(sessionId: string) {
@@ -1046,29 +1121,32 @@ export function InterviewAiClient() {
   const avatarFace: 'thinking' | 'speaking' | 'listening' | 'idle' =
     avatarState === 'transcribing' ? 'thinking' : avatarState;
   // メインの状態テキスト（req ⑦: 「止まった」と感じさせない可視化）。
+  // 録音終了後は文字起こし→自動送信まで一続きのローディング（「音声を解析しています…」）として見せる。
   const statusLine =
-    avatarState === 'thinking'
-      ? '🤔 AIが考えています…'
-      : avatarState === 'speaking'
-        ? '🗣️ AIが質問しています…'
-        : avatarState === 'listening'
-          ? '🎤 あなたが回答しています…'
-          : avatarState === 'transcribing'
-            ? '📝 文字起こし中…'
-            : answerText
-              ? '✅ 内容を確認して送信してください'
+    voiceStage === 'error'
+      ? '⚠️ もう一度録音してください'
+      : avatarState === 'thinking'
+        ? '🤔 AIが考えています…'
+        : avatarState === 'speaking'
+          ? '🗣️ AIが質問しています…'
+          : avatarState === 'listening'
+            ? '🎤 あなたが回答しています…'
+            : avatarState === 'transcribing'
+              ? '⏳ 音声を解析しています…'
               : '⏳ 録音を開始してください';
   // AI面接官カード内の短いキャプション（req ②）。
   const avatarCaption =
-    avatarState === 'thinking'
-      ? '🤔 AIが考えています…'
-      : avatarState === 'speaking'
-        ? '🗣️ 質問しています…'
-        : avatarState === 'listening'
-          ? '👂 回答を聞いています…'
-          : avatarState === 'transcribing'
-            ? '📝 文字起こし中…'
-            : '⏳ 録音を開始してください';
+    voiceStage === 'error'
+      ? '⚠️ もう一度録音してください'
+      : avatarState === 'thinking'
+        ? '🤔 AIが考えています…'
+        : avatarState === 'speaking'
+          ? '🗣️ 質問しています…'
+          : avatarState === 'listening'
+            ? '👂 回答を聞いています…'
+            : avatarState === 'transcribing'
+              ? '⏳ 音声を解析しています…'
+              : '⏳ 録音を開始してください';
 
   // ── 描画 ────────────────────────────────────────────────────
   return (
@@ -1253,11 +1331,22 @@ export function InterviewAiClient() {
                 </Button>
               </div>
             ) : done ? (
+              // 面接終了。結果生成（complete）は done 到達で自動起動する（送信操作なし）。
+              //   running … 生成中ローディング（操作ボタンなし）
+              //   ready   … 結果保存に成功 → このときだけ「結果を見る」を出す
+              //   failed  … 失敗 → 「結果を見る」は出さず、生成し直す導線のみ
               <div>
                 <p className="text-sm text-gray-700 mb-3">面接が一通り終わりました。</p>
-                <Button onClick={handleComplete} disabled={loading}>
-                  {loading ? '結果を生成中…' : '結果を見る'}
-                </Button>
+                {completeStage === 'ready' ? (
+                  <Button onClick={() => setPhase('result')}>結果を見る</Button>
+                ) : completeStage === 'failed' ? (
+                  <Button onClick={() => runComplete(session?.id ?? '')} disabled={loading}>
+                    結果を生成し直す
+                  </Button>
+                ) : (
+                  // idle（自動起動待ちの一瞬）/ running はどちらも生成中として見せる。
+                  <p className="text-sm text-gray-500">⏳ 面接結果を生成しています…</p>
+                )}
               </div>
             ) : currentQuestion ? (
               // Zoom × 2D Phase1 レイアウト: 上=AI面接官 / 中=進捗・状態 / 下=録音エリア。
@@ -1404,42 +1493,24 @@ export function InterviewAiClient() {
                           ⏹ 録音停止
                         </button>
                       ) : voiceStage === 'transcribing' ? (
-                        <p className="text-sm text-gray-500">📝 文字起こし中…</p>
-                      ) : answerText ? (
-                        <div className="w-full text-left">
-                          <label className="mb-1 block text-xs font-semibold text-gray-500">
-                            文字起こし結果（編集できません）
-                          </label>
-                          {/* 音声モードは本番再現のため編集不可（readonly 表示）。 */}
-                          <textarea
-                            readOnly
-                            aria-readonly="true"
-                            className={`${INPUT_CLASS} mb-1 min-h-[120px] resize-y bg-slate-50 text-slate-700`}
-                            value={answerText}
-                          />
-                          <p className="mb-2 text-xs text-amber-700">
-                            音声回答は文字起こし後、そのまま保存されます（本番の面接を想定し、編集はできません）。
+                        // 録音終了後は文字起こし→自動送信まで確認画面を出さず、解析ローディングのみ表示する。
+                        <p className="text-sm text-gray-500">⏳ 音声を解析しています…</p>
+                      ) : voiceStage === 'error' ? (
+                        // 異常時のみの例外導線（文字起こし失敗 / 送信失敗 / 音声取得失敗）。詳細は上部の警告に表示。
+                        <div className="flex w-full flex-col items-center gap-2">
+                          <p className="text-sm text-red-600">
+                            うまく送信できませんでした。もう一度録音してください。
                           </p>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              onClick={handleSubmitText}
-                              disabled={loading || !answerText.trim()}
-                            >
-                              この内容で送信
-                            </Button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                stopRecordingResources();
-                                setAnswerText('');
-                                setVoiceStage('idle');
-                              }}
-                              disabled={loading}
-                              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-600 hover:border-gray-400"
-                            >
-                              録音し直す
-                            </button>
-                          </div>
+                          <Button
+                            onClick={() => {
+                              stopRecordingResources();
+                              setVoiceStage('idle');
+                              setErrorMsg(null);
+                            }}
+                            disabled={loading}
+                          >
+                            🎤 録音し直す
+                          </Button>
                         </div>
                       ) : (
                         <Button onClick={startRecording} disabled={loading}>
@@ -1507,8 +1578,8 @@ export function InterviewAiClient() {
             )}
           </div>
 
-          {/* 中断（明示キャンセル） */}
-          {session && (
+          {/* 中断（明示キャンセル）。結果生成の自動実行中は出さない（complete との status 競合を避ける）。 */}
+          {session && !(done && completeStage === 'running') && (
             <button
               type="button"
               onClick={() => handleAbandon(session.id)}
