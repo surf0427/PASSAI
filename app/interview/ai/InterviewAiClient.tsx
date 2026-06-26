@@ -960,7 +960,9 @@ export function InterviewAiClient() {
       const result = await submitAnswer(r.transcript);
       // submitAnswer が次質問へ進んだ（showQuestion で transcribeIdRef を更新）場合は何もしない。
       if (reqId !== transcribeIdRef.current) return;
-      if (result && result.kind === 'error') {
+      // 送信失敗（kind==='error'）、または送信ガード競合 / 質問消失で送信自体が走らなかった（null）場合は
+      // 「録音し直す」導線を出す（transcribing のまま固まらせない）。
+      if (!result || result.kind === 'error') {
         stopRecordingResources();
         setVoiceStage('error');
         setErrorMsg('回答の送信に失敗しました。もう一度録音してください。');
