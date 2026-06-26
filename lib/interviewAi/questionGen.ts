@@ -118,13 +118,18 @@ const PERSONA_DELIVERY_RULES =
 //   - kind=seed / speculative は「質問文のみ」を出力する。
 //   - kind=followup のみ「一言リアクション（最大1文）+ 質問1つ（合計2文以内目安）」を出力する。
 function buildSystem(type: InterviewType, kind: 'seed' | 'followup' | 'speculative'): string {
+  const isFree = type === 'free';
+  // followup の導入文: 通常は「深掘り質問」を促すが、本番モードだけは「深掘り or 別テーマ切替」を選ばせる。
+  const followupIntro = isFree
+    ? 'あなたは大学入試（総合型選抜）の面接官です。これまでのやり取りと受験生の直前の回答を踏まえ、本番の面接らしく、直前回答の深掘りか別テーマへの切り替えのどちらかを選んで、面接質問を1つだけ出してください。'
+    : 'あなたは大学入試（総合型選抜）の面接官です。これまでのやり取りと受験生の直前の回答を踏まえ、深掘りする面接質問を1つだけ出してください。';
   const intro =
     kind === 'seed'
       ? 'あなたは大学入試（総合型選抜）の面接官です。受験生に最初の面接質問を1つだけ出してください。'
       : kind === 'speculative'
         ? 'あなたは大学入試（総合型選抜）の面接官です。受験生は今、最後に提示された質問にこれから答えようとしています。' +
           'その回答内容を待たずに、面接官として次に出す可能性が最も高い質問を1つだけ予測して出してください。'
-        : 'あなたは大学入試（総合型選抜）の面接官です。これまでのやり取りと受験生の直前の回答を踏まえ、深掘りする面接質問を1つだけ出してください。';
+        : followupIntro;
   const parts = [
     intro,
     // 面接官そのものを5タイプで演じ分ける（人格を最優先で枠付けする）。
@@ -134,17 +139,30 @@ function buildSystem(type: InterviewType, kind: 'seed' | 'followup' | 'speculati
     QUESTION_QUALITY_RULES,
     PERSONA_DELIVERY_RULES,
   ];
+  // 本番モード(free)だけ、深掘り偏重を抑え質問タイプを散らす配分ポリシーを足す（他モードには付けない）。
+  if (isFree) parts.push(FREE_MODE_QUESTION_POLICY);
   if (kind === 'followup') {
-    // followup のみ: 冒頭に一言リアクション → 続けて質問1つ。合計2文以内目安。
-    parts.push(reactionGuidanceFor(type));
-    parts.push(
-      '【出力形式（リアクション+質問）】まず直前の回答への一言リアクション（最大1文）を述べ、' +
-        '続けて深掘りする質問を1つだけ出す。リアクションと質問は自然につなげてよい。' +
-        '合計2文以内を目安にする（長い前置き・採点者目線の説明・箇条書き・番号・記号・引用符は付けない）。' +
-        '質問は必ず1つだけ（1発話に質問を2つ以上混ぜない）。リアクションと質問以外の余計な文は出さない。',
-    );
+    if (isFree) {
+      // 本番モード: 毎回の内容リアクションをやめ、質問タイプに応じた自然なトランジションで切り出す。
+      parts.push(FREE_MODE_TRANSITION_RULES);
+      parts.push(FREE_FOLLOWUP_OUTPUT_FORMAT);
+    } else {
+      // 他モード（従来どおり）: 冒頭に一言リアクション → 続けて質問1つ。合計2文以内目安。
+      parts.push(reactionGuidanceFor(type));
+      parts.push(
+        '【出力形式（リアクション+質問）】まず直前の回答への一言リアクション（最大1文）を述べ、' +
+          '続けて深掘りする質問を1つだけ出す。リアクションと質問は自然につなげてよい。' +
+          '合計2文以内を目安にする（長い前置き・採点者目線の説明・箇条書き・番号・記号・引用符は付けない）。' +
+          '質問は必ず1つだけ（1発話に質問を2つ以上混ぜない）。リアクションと質問以外の余計な文は出さない。',
+      );
+    }
+  } else if (isFree && kind === 'speculative') {
+    // 本番モードの先読み候補は採用されると実際の次質問になるため、トランジション付きで出す
+    // （回答前なので内容リアクションはせず、転換表現＋質問のみ）。
+    parts.push(FREE_MODE_TRANSITION_RULES);
+    parts.push(FREE_SPECULATIVE_OUTPUT_FORMAT);
   } else {
-    // seed / speculative: 従来どおり「質問文のみ」（リアクションは付けない）。
+    // seed（全タイプ） / 非free の speculative: 従来どおり「質問文のみ」（リアクションは付けない）。
     parts.push(
       '【文体】受験面接として自然な口語の日本語。質問は原則1文、長くても2文まで。' +
         '採点者目線の説明・長い前置き・箇条書き・番号・記号・引用符は付けない。' +
@@ -185,6 +203,7 @@ function buildTranscript(turns: PriorTurn[]): string {
 
 // 5問の観点設計（総合型選抜の目安 / req ③）。観点（論点・切り口）の重複を避け、深さを段階的に上げる。
 // 順番は絶対固定ではなく、面接タイプの方針・受験生のデータ・直前回答に合わせて調整してよい。
+// self_analysis / statement / essay / pressure はこの「深掘り重視」のアークをそのまま使う（既存挙動）。
 const QUESTION_ARC: readonly string[] = [
   '志望理由の核心。なぜその分野・学問なのか、関心の源にある具体的な経験まで掘り下げる。',
   '自己分析・強み。強みや価値観を抽象論で終わらせず、具体的な場面・行動で語らせる。',
@@ -193,13 +212,81 @@ const QUESTION_ARC: readonly string[] = [
   '将来像と学びの活用。学んだことを将来どう活かすか、面接の総仕上げとして問う。',
 ];
 
+// 「本番モード」(free) 専用の質問配分アーク。深掘りに偏らせず、実際の大学入試面接に近い
+// 「定番質問 + 別テーマ切替 + 価値観・時事 + 締め」の幅広い構成にする（free 以外には使わない）。
+// 各要素に内部的な質問タイプ（follow_up / topic_shift / standard / future / university_fit /
+// values / current_affairs / closing）を明示し、同タイプの連続を避けさせる。
+const FREE_QUESTION_ARC: readonly string[] = [
+  '入口の定番質問（standard）。志望理由・自己紹介・高校生活など、答えやすい入口から始める。直前回答の深掘りはしない。',
+  '1問目への軽い深掘り（follow_up・軽め）か、活動実績の質問（standard）。深掘りする場合も単語拾いにせず一段だけにする。',
+  '別テーマへの切り替え（topic_shift）。大学で学びたいこと・学部/学科理解（university_fit）・将来像（future）など、直前回答に依存しない新しいテーマに移る。',
+  '価値観・社会関心を見る質問（values / current_affairs）。最近関心を持った社会問題とその考え、困難な経験とそこから得たものなど。前のテーマからは切り替える。',
+  '締めの確認質問（closing）。入学後に挑戦したいこと・最後に伝えたいこと・将来どう社会に貢献したいかなど、面接を締める前向きな問い。',
+];
+
+// 「本番モード」(free) のみ system に足す質問配分ポリシー。深掘り偏重を抑え、質問タイプを散らす。
+// （free 以外には一切付けない＝他モードの深掘り個性は不変。）
+const FREE_MODE_QUESTION_POLICY =
+  '【本番モードの質問配分（最重要・必ず守る）】実際の大学入試面接に近づけるため、毎回は深掘りしない。' +
+  '内部的に次の質問タイプを意識し、同じタイプを連続させない:' +
+  ' follow_up=直前回答の深掘り / topic_shift=別テーマへ切替 / standard=定番質問 / future=将来像 /' +
+  ' university_fit=大学・学部理解 / values=価値観 / current_affairs=時事・社会関心 / closing=締めの確認。' +
+  '直前回答への深掘り(follow_up)は全体の半分までに抑え、深掘りを2回以上連続させない。' +
+  '直前回答の単語だけを拾って質問を作らない。「それについてもう少し詳しく」「さらに詳しく」系の質問を連発しない。' +
+  '回答へのリアクションは短い一言にとどめ、面接官らしく簡潔に次の質問へ進む（反応を長く入れすぎない）。' +
+  '直前回答を一言受け止めた上で、別テーマへ自然に切り替えてよい。' +
+  '志望理由・活動・将来像・学部理解・時事・価値観などの定番質問をバランスよく混ぜる。' +
+  'ただし、回答が明らかに浅い・抽象的すぎる・矛盾がある・重要な論点が残っている場合は、その回は深掘りしてよい。';
+
+// 「本番モード」(free) の話し方ルール。質問タイプに応じて、本物の面接官のような自然な
+// トランジション（接続表現）で話題を切り替える。topic_shift / current_affairs 等では、
+// 「○○に関心をお持ちなんですね」のような内容リアクションを無理に入れず、転換表現で切り出す。
+// （free 以外には一切付けない＝他モードの話し方は不変。）質問内容自体は変えず、進行の言い回しだけ調整する。
+const FREE_MODE_TRANSITION_RULES =
+  '【話し方・話題の切り替え（本番モード・最重要）】質問のつなぎ方を、質問タイプに応じた自然な面接官の言い回しにする。' +
+  '毎回「直前回答への内容リアクション」から始めない。特に topic_shift / university_fit / values / current_affairs / closing では、' +
+  '「〜に関心をお持ちなんですね」のような直前回答の内容をなぞるリアクションは入れず、自然な転換表現で切り出す。' +
+  '質問タイプ別のトランジション例（毎回同じ文を使い回さず、表現は必ず変える / 下記はあくまで方向性の見本）:\n' +
+  '・follow_up:「先ほどのお話についてもう一点伺います」「今のお話に関連して質問します」「その点について確認させてください」\n' +
+  '・topic_shift:「では次に別の観点から伺います」「ここから少し話題を変えます」「では次の質問です」\n' +
+  '・university_fit:「大学生活について伺います」「入学後についてお聞きします」「本学での学びについて教えてください」\n' +
+  '・values:「価値観について伺います」「あなた自身の考えについて教えてください」\n' +
+  '・current_affairs:「社会への関心について伺います」「最近関心を持った社会問題について教えてください」\n' +
+  '・closing:「最後にお聞きします」「最後の質問です」「最後になりますが」\n' +
+  'トランジションは最大1文。トランジション＋質問で合計2文以内に収める。';
+
+// 本番モード followup の出力形式（トランジション＋質問）。follow_up の回だけ軽い受け止めを許可。
+const FREE_FOLLOWUP_OUTPUT_FORMAT =
+  '【出力形式（本番モード）】質問タイプに合うトランジション（最大1文）で切り出してから、質問を1つだけ出す。' +
+  'follow_up（直前回答を深掘りする回）のときだけ、短い受け止め（最大1文）を入れてよい。' +
+  'topic_shift / university_fit / values / current_affairs / closing では、直前回答の内容を繰り返すリアクションは入れない。' +
+  'トランジション＋質問で合計2文以内。質問は必ず1つだけ。長い前置き・採点者目線の説明・箇条書き・番号・記号・引用符は付けない。' +
+  '質問の内容そのものは変えず、進行の言い回し（つなぎ方）だけを面接官らしくする。';
+
+// 本番モード speculative（先読み）の出力形式。回答前なので内容に触れず、転換表現＋質問のみ。
+const FREE_SPECULATIVE_OUTPUT_FORMAT =
+  '【出力形式（本番モード・先読み）】受験生の回答はまだ無いので内容には触れず、質問タイプに合うトランジション（最大1文）で' +
+  '切り出してから、質問を1つだけ出す。トランジション＋質問で合計2文以内。質問は必ず1つだけ。' +
+  '箇条書き・番号・記号・引用符は付けない。質問の内容そのものは変えない。';
+
 // PriorTurn[] の answer 件数 = 回答済みの質問数。次に作る質問の番号 = これ + 1。
 function countAnswers(turns: PriorTurn[]): number {
   return turns.filter((t) => t.role === 'answer').length;
 }
 
 // 今回の質問（questionNumber: 1-based / total: 全問数）の観点ガイドを組む（req ③④）。
-function buildArcGuidance(questionNumber: number, total: number): string {
+// type==='free'（本番モード）のときだけ「幅広い配分」アークに切り替える。他タイプは従来の深掘りアーク。
+function buildArcGuidance(questionNumber: number, total: number, type: InterviewType): string {
+  if (type === 'free') {
+    const arc = FREE_QUESTION_ARC;
+    const idx = Math.min(Math.max(questionNumber, 1), arc.length) - 1;
+    return [
+      `【全${total}問の設計（本番モード）】各質問はテーマ（観点）を変え、直前回答に依存しすぎない。深掘りと別テーマ切替をバランスよく混ぜる。`,
+      '本番モードの目安: 1=入口の定番(志望理由/自己紹介/高校生活) / 2=軽い深掘り or 活動実績 / 3=別テーマ切替(学びたいこと/学部理解/将来像) / 4=価値観・社会関心・時事・困難経験 / 5=締めの確認(入学後の挑戦/最後に伝えたいこと/社会貢献)。',
+      `【今回（${questionNumber}問目 / 全${total}問）の主眼】${arc[idx]}`,
+      '面接タイプの方針を最優先し、それに沿ってテーマを調整してよい。既に十分聞いたテーマ・質問タイプは繰り返さない。',
+    ].join('\n');
+  }
   const idx = Math.min(Math.max(questionNumber, 1), QUESTION_ARC.length) - 1;
   return [
     `【全${total}問の設計】各質問は観点（論点・切り口）を変え、重複させない。問が進むほど深さを上げる。`,
@@ -286,7 +373,7 @@ export async function generateSeedQuestion(args: {
   const userPrompt =
     `${buildTargetContext(args.targetRef)}` +
     `${sourceSection(args.sourceContext)}\n\n` +
-    `${buildArcGuidance(1, INTERVIEW_AI_MAX_ANSWER_TURNS)}\n\n` +
+    `${buildArcGuidance(1, INTERVIEW_AI_MAX_ANSWER_TURNS, args.interviewType)}\n\n` +
     `上記を踏まえ、1問目の質問を1つ出してください。`;
   return generateQuestion({
     logRoute: INTERVIEW_AI_SEED_LOG_ROUTE,
@@ -308,15 +395,28 @@ export async function generateFollowupQuestion(args: {
   const total = INTERVIEW_AI_MAX_ANSWER_TURNS;
   // 次に作る質問の番号 = これまでの回答数 + 1（上限でクランプ）。観点設計（arc）に使う。
   const questionNumber = Math.min(countAnswers(args.turns) + 1, total);
+  const isFree = args.interviewType === 'free';
+  // 本番モード(free)のみ: 深掘りに偏らせず、適宜「別テーマへの切り替え/定番質問」を選ばせる一言を足す。
+  const freeFollowupHint = isFree
+    ? '直前回答の深掘りが既に続いている、または深掘りの必要が薄い場合は、別テーマへの切り替え・定番質問・将来像・学部理解・価値観/時事のいずれかを選ぶこと。'
+    : '';
+  // 質問の出し方の指示。本番モードは「内容リアクション必須」をやめ、質問タイプに合うトランジションで切り出す。
+  // 他モードは従来どおり「まず一言リアクション → 質問」。いずれも質問内容自体は変えない。
+  const askInstruction = isFree
+    ? `${questionNumber}問目の質問を1つ出してください。質問タイプに合う自然なトランジション（最大1文）で切り出し、` +
+      `topic_shift / university_fit / values / current_affairs / closing では直前回答の内容を繰り返すリアクションは入れない` +
+      `（follow_up のときだけ短い受け止めを入れてよい）。トランジション+質問で合計2文以内。質問内容自体は変えず、進行の言い回しだけ面接官らしくする。` +
+      `${freeFollowupHint}`
+    : `受験生の直前の回答にまず一言リアクション（最大1文）をしてから、その回答を自然に踏まえて` +
+      `${questionNumber}問目の質問を1つ出してください` +
+      `（リアクション+質問で合計2文以内を目安に。褒めすぎず、深掘りに寄せすぎず、上記の主眼に沿って観点を進める）。`;
   const userPrompt =
     `${buildTargetContext(args.targetRef)}` +
     `${sourceSection(args.sourceContext)}\n\n` +
     `これまでのやり取り:\n${buildTranscript(args.turns)}` +
     `${askedQuestionsSection(args.turns)}\n\n` +
-    `${buildArcGuidance(questionNumber, total)}\n\n` +
-    `受験生の直前の回答にまず一言リアクション（最大1文）をしてから、その回答を自然に踏まえて` +
-    `${questionNumber}問目の質問を1つ出してください` +
-    `（リアクション+質問で合計2文以内を目安に。褒めすぎず、深掘りに寄せすぎず、上記の主眼に沿って観点を進める）。`;
+    `${buildArcGuidance(questionNumber, total, args.interviewType)}\n\n` +
+    `${askInstruction}`;
   return generateQuestion({
     logRoute: INTERVIEW_AI_FOLLOWUP_LOG_ROUTE,
     system: buildSystem(args.interviewType, 'followup'),
@@ -352,7 +452,7 @@ export async function generateSpeculativeQuestion(args: {
     `${sourceSection(args.sourceContext)}\n\n` +
     `これまでのやり取り（末尾「面接官:」が受験生がこれから答える現在の質問）:\n${buildTranscript(args.turns)}` +
     `${askedQuestionsSection(args.turns)}\n\n` +
-    `${buildArcGuidance(nextQuestionNumber, total)}\n\n` +
+    `${buildArcGuidance(nextQuestionNumber, total, args.interviewType)}\n\n` +
     `受験生はこれから上記の最後の質問に答えます。その回答を待たずに、面接官が次に出す可能性が高い` +
     `${nextQuestionNumber}問目の質問を1つだけ予測して出してください` +
     `（特定の回答内容を仮定しすぎず、観点の自然な進行として）。`;
