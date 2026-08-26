@@ -39,6 +39,7 @@ import type { StoredInterviewRecord } from '@/lib/interviewRecordStorage';
 import type { EssayWorkspace } from '@/types/essay';
 
 import { EXAM_READ_FIELD_LIMITS } from '../../read/readSources';
+import { EXAM_READ_CAPS } from '../../read/types';
 import {
   mapActivityRow,
   mapBasicInfoRow,
@@ -335,8 +336,49 @@ export function deviceListView<T>(
   return { ok: true, view: listSyncView(views, (v) => v) };
 }
 
+/**
+ * ★ server の read window と同じ部分集合を device 側でも選ぶ（Stage 5.4）★
+ *
+ * history 系 kind は Stage 3 が `EXAM_READ_CAPS` で **上位 N 件だけ**を読む
+ * （`queries.ts` の `created_at DESC, id DESC` ＋ `readSources.ts` の `applyCap`）。
+ * device 側が全件を hash すると、N 件を超えたユーザーは
+ * **内容が完全に同期していても永久に mismatch** になる。
+ * これは runtime では「mismatch」としか見えず原因が表面化しない
+ * （E-S38 の schema_version と同じ検出不能な故障）。
+ *
+ * ★ 並び順そのものは fingerprint に影響しない ★
+ *   `listSyncView` は `sortSyncItems` で **各 item の fingerprint 順**に並べ直すため、
+ *   localStorage の挿入順や DB の返却順には依存しない。
+ *   ここで揃える必要があるのは「**どの N 件を選ぶか**」だけである。
+ *
+ * ⚠️ tie: server は同一 `created_at` を `id DESC` で解くが、device 側の view は
+ *   `id` を含まない（`deviceSelfAnalysisRow` が `id: null` を置く）。
+ *   同一 timestamp の log が cap 境界をまたぐ場合だけ選択がずれ得る。
+ *   実運用では `createdAt` は `new Date().toISOString()` でミリ秒まで入るため
+ *   衝突は起きにくいが、構造的な保証ではないことを記録しておく。
+ */
+export function selectDeviceSyncWindow<T>(
+  items: readonly T[],
+  cap: number,
+  createdAtOf: (item: T) => string | null | undefined,
+): readonly T[] {
+  if (items.length <= cap) return items;
+  return [...items]
+    .map((item, index) => ({ item, index, createdAt: createdAtOf(item) ?? '' }))
+    // created_at DESC。同値は元の順序を保つ（stable）。
+    .sort((a, b) => (a.createdAt === b.createdAt ? a.index - b.index : a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, cap)
+    .map((entry) => entry.item);
+}
+
 export function deviceSelfAnalysisView(logs: readonly SelfAnalysisLog[]): ExamDeviceViewResult {
-  return deviceListView(logs, deviceSelfAnalysisItemView);
+  // server が読むのと同じ上位 N 件だけを見る（cap parity）。
+  const windowed = selectDeviceSyncWindow(
+    logs,
+    EXAM_READ_CAPS.self_analysis,
+    (log) => log.createdAt,
+  );
+  return deviceListView(windowed, deviceSelfAnalysisItemView);
 }
 
 export function deviceStatementReviewView(
