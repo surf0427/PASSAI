@@ -339,8 +339,13 @@ function main(): void {
   // ── 8. Stage 1 は dead module である ────────────────────────────
   console.log('\n8. Runtime wiring');
   const importers = findRuntimeImporters();
-  check('production runtime import = 0（Stage 1 は誰からも呼ばれない）',
-    importers.length === 0, `importers: ${importers.join(', ')}`);
+  // ★ Stage 5.0（E-S33）で pilot 1 purpose が examSpine に接続した。
+  //   Stage 1 の契約層そのものは引き続き production から直接呼ばれない。
+  //   接続点は claim 層 / shadow gate / assembler に限られる。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = importers.filter((f) => !pilotImporters.includes(f));
+  check('examSpine を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, `importers: ${unexpected.join(', ')}`);
 
   // ── 9. 型が実際に使えること（tsc だけでなく実行時にも確認）──────
   console.log('\n9. Type surface');

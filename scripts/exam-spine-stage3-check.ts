@@ -878,7 +878,26 @@ function staticBoundaries(): void {
       }
     }
   }
-  check('S26 production runtime からの examSpine import = 0', offenders.length === 0, offenders.join(', '));
+  // ★ Stage 5.0 で pilot 1 purpose の production 接続が入った（E-S33）。
+  //   「0 本」ではなく allowlist で検査し、Stage 2 の prompt 経路は誰も import しない
+  //   ことを別途固定する（consumer 未移行の機械的証拠）。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = offenders.filter((f) => !pilotImporters.includes(f));
+  check('S26 examSpine を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, unexpected.join(', '));
+
+  const promptPath: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    for (const file of listFiles(join(REPO_ROOT, dir))) {
+      const rel = relative(REPO_ROOT, file);
+      if (rel.startsWith(join('lib', 'examSpine'))) continue;
+      if (/^\s*import[^\n]*examSpine\/(blocks|orchestrator)/m.test(readFileSync(file, 'utf8'))) {
+        promptPath.push(rel);
+      }
+    }
+  }
+  check('S26 Stage 2 の prompt 経路を production が import しない（consumer 未移行）',
+    promptPath.length === 0, promptPath.join(', '));
 
   // read layer の import 境界（Stage 1 QA は read/** を Stage 3 に委譲している）
   const badImports: string[] = [];

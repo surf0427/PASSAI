@@ -583,7 +583,16 @@ function t10Static(): void {
     .filter((f) => !f.startsWith('lib/examSpine/'));
   const importers = appLib.filter((f) =>
     /examSpine\/context/.test(readFileSync(join(ROOT, f), 'utf8')));
-  eq('T10 production consumer は context layer を import していない', importers, []);
+  // ★ Stage 5.0 で shadow assembly が pilot route に入った（E-S33）。
+  //   assembler を import してよいのは pilot の route だけ。
+  //   client（page.tsx）は claim 層しか触らない。
+  const pilotRoute = 'app/api/tutor/route.ts';
+  eq('T10 context layer を import する production file は pilot route だけ',
+    importers.filter((f) => f !== pilotRoute), []);
+  // shadow は default deny gate の背後にあること。
+  const routeSrc = readFileSync(join(ROOT, pilotRoute), 'utf8');
+  check('T10 shadow assembly は gate 済み',
+    !routeSrc.includes('buildCanonicalExamContext') || routeSrc.includes('isExamSpineShadowEnabled'));
 }
 
 // ── main ──────────────────────────────────────────────────────────────

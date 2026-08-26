@@ -302,8 +302,24 @@ function staticBoundaries(): void {
       if (/examSpine\/sync/.test(readFileSync(file, 'utf8'))) importers.push(rel);
     }
   }
-  check('Runtime wiring = NONE（sync を import する production file が 0）',
-    importers.length === 0, importers.join(', '));
+  // ★ Stage 5.0（E-S33）で claim 層が pilot の production path に入った。
+  //   adapter 本体（registry / views / normalize / types）は引き続き
+  //   production から直接 import されない。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = importers.filter((f) => !pilotImporters.includes(f));
+  check('sync を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, unexpected.join(', '));
+
+  const adapterDirect: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    for (const file of listFiles(join(REPO_ROOT, dir))) {
+      const rel = relative(REPO_ROOT, file);
+      if (rel.startsWith(join('lib', 'examSpine'))) continue;
+      if (/examSpine\/sync\/adapters/.test(readFileSync(file, 'utf8'))) adapterDirect.push(rel);
+    }
+  }
+  check('adapter 本体は production から直接 import されない（接続点は claim 層のみ）',
+    adapterDirect.length === 0, adapterDirect.join(', '));
 }
 
 // ── registry contract ─────────────────────────────────────────────

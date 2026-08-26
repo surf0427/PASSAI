@@ -296,8 +296,28 @@ function staticBoundaries(): void {
       if (/examSpine\/sync/.test(src)) importers.push(rel);
     }
   }
-  check('Wave 1 は runtime に接続していない（sync import = 0）',
-    importers.length === 0, importers.join(', '));
+  // ★ Stage 5.0 で sync/claim が pilot の production path に入った（E-S33）。
+  //   sync core（revision / fingerprint / verification / adapters）自体は
+  //   引き続き production から直接 import されない。接続点は claim 層だけである。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = importers.filter((f) => !pilotImporters.includes(f));
+  check('sync を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, unexpected.join(', '));
+
+  const coreDirect: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    for (const file of listFiles(join(REPO_ROOT, dir))) {
+      const rel = relative(REPO_ROOT, file);
+      if (rel.startsWith(join('lib', 'examSpine'))) continue;
+      const src = readFileSync(file, 'utf8');
+      // claim 層以外の sync module を production が直接触っていないこと。
+      if (/examSpine\/sync\/(revision|fingerprint|hash|verification|adapters)/.test(src)) {
+        coreDirect.push(rel);
+      }
+    }
+  }
+  check('sync core 本体は production から直接 import されない（接続点は claim 層のみ）',
+    coreDirect.length === 0, coreDirect.join(', '));
 }
 
 // ── 4. Export surface freeze ──────────────────────────────────────

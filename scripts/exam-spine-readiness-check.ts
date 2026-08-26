@@ -230,8 +230,17 @@ function r89Frozen(): void {
       readFileSync(join(ROOT, f), 'utf8'),
     ),
   );
-  check('R8 production runtime からの examSpine import が 0 本', importers.length === 0,
-    importers.join(', '));
+  // ★ Stage 5.0（E-S33）で pilot 1 purpose の production 接続が入った。
+  //   invariant は「0 本」から「allowlist ＋ prompt 経路の非接続」へ移る。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = importers.filter((f) => !pilotImporters.includes(f));
+  check('R8 examSpine を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, unexpected.join(', '));
+
+  const promptPath = appLib.filter((f) =>
+    /^\s*import[^\n]*examSpine\/(blocks|orchestrator)/m.test(readFileSync(join(ROOT, f), 'utf8')));
+  check('R8 Stage 2 の prompt 経路を production が import しない（consumer 未移行）',
+    promptPath.length === 0, promptPath.join(', '));
 
   // ── mutation 不可能性 ───────────────────────────────────────────
   //

@@ -608,21 +608,37 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** production runtime（app / lib）から examSpine を import していないこと。 */
+// ★ Stage 5.0 で production 接続が始まった ★
+//   Stage 1-4 は「production runtime からの examSpine import = 0」を不変条件にしていたが、
+//   Stage 5.0（E-S33）で device claim の wiring が pilot 1 purpose に入った。
+//   したがって検査対象を「0 本」から **allowlist + 禁止 layer** へ変える。
+//
+//   許可: pilot の 2 file が claim 層 / shadow gate / assembler / purpose registry を import する
+//   禁止: **どの production file も Stage 2 の prompt 経路
+//         （examSpine/blocks, examSpine/orchestrator）を import しない**
+//         = consumer migration が起きていないことの機械的な証拠（Stage 5.1 以降の責務）
+const STAGE5_PILOT_IMPORTERS = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+
 function checkNoRuntimeImport(): void {
   const offenders: string[] = [];
+  const promptPathOffenders: string[] = [];
   for (const dir of ['app', 'lib']) {
     for (const file of walk(join(REPO_ROOT, dir))) {
       const rel = relative(REPO_ROOT, file);
       if (rel.startsWith(join('lib', 'examSpine'))) continue;
       const src = readFileSync(file, 'utf8');
-      // import 文だけを見る（コメント中の architecture 参照は許容される）。
+      // Stage 2 の prompt 経路は誰も import してはいけない（consumer migration の検出）。
+      if (/^\s*import[^\n]*examSpine\/(blocks|orchestrator)/m.test(src)) {
+        promptPathOffenders.push(rel);
+      }
       if (/^\s*import[^\n]*examSpine/m.test(src) || /require\(['"][^'"]*examSpine/.test(src)) {
-        offenders.push(rel);
+        if (!STAGE5_PILOT_IMPORTERS.includes(rel)) offenders.push(rel);
       }
     }
   }
-  check('D production runtime からの examSpine import が 0 本', offenders.length === 0,
+  check('D Stage 2 の prompt 経路を production が import しない（consumer 未移行）',
+    promptPathOffenders.length === 0, promptPathOffenders.join(' | '));
+  check('D examSpine を import する production file は Stage 5.0 pilot だけ', offenders.length === 0,
     offenders.join(', '));
 }
 
