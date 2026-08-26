@@ -12,7 +12,7 @@
 |---|---|
 | Date | 2026-08-26 |
 | Repository | `/Users/yk/paid-app` → `github.com/surf0427/PASSAI.git` |
-| Branch | `feature/interview-realtime-step1` |
+| Branch | `exam-spine-w1-convergence-v2`（canonical lineage = `exam-spine-stage3` 系列 / E-S23） |
 | Base HEAD（Stage 0 着手時） | `200b5a62f8287a55daf434a2f69c46a4296bc39d` |
 | Supabase project | `oarzldvteiuyuwkdoauq` |
 | 採用 architecture | 案E — Architecture Transplant + Exam Authority Model |
@@ -22,8 +22,21 @@
 # 2. Stage
 
 ```text
-現在地: Stage 0（Decision register + architecture docs + characterization baseline）完了
-次:     Stage 1（types + purpose registry）未着手
+現在地: Wave 2（Canonical Convergence）完了
+        Stage 0 完了 / Stage 1 完了 / Stage 2 完了 / Stage 3 完了
+次:     Stage 4（Source-Sync + canary gate + loader）— 着手条件は §14 の readiness matrix
+```
+
+## Wave 2 時点の保証
+
+```text
+runtime Spine implementation : canonical lineage 上では production 未接続（import 元 0 本）
+                               shipping lineage 上では /api/tutor が別実装で稼働中（E-S24 で退避予定）
+production behavior change   : NONE（canonical lineage の変更はすべて runtime 未接続）
+AI prompt change             : NONE（Stage 2 の 888 checks で byte-equivalence を確認）
+DB schema change             : NONE（本番への write / DDL は 0。read-only GET のみ）
+env change                   : NONE
+dependency change            : NONE
 ```
 
 ## Stage 0 終了時点の保証
@@ -59,15 +72,15 @@ dependency change            : NONE
 
 | 対象 | 予定 Stage |
 |---|---|
-| `lib/examSpine/types.ts`（Source kind / authority class） | Stage 1 |
-| `lib/examSpine/purpose.ts`（purpose registry） | Stage 1 |
-| `lib/examSpine/orchestrator.ts` | Stage 2 |
-| `lib/examSpine/sourceData/rowMappers.ts` | Stage 3 |
-| `lib/examSpine/sourceData/serverReader.server.ts` | Stage 3 |
+| ~~`lib/examSpine/types.ts`~~ | ✅ Stage 1 完了 |
+| ~~`lib/examSpine/purpose.ts`~~ | ✅ Stage 1 完了 ＋ Wave 2 で purpose gate を追加（E-S28） |
+| ~~`lib/examSpine/orchestrator.ts`~~ | ✅ Stage 2 完了（`orchestrator/` + `blocks/`。E-S25 で凍結） |
+| ~~`lib/examSpine/sourceData/rowMappers.ts`~~ | ✅ Stage 3 完了（`read/rowMappers.ts`） |
+| ~~`serverReader.server.ts`~~ | ✅ Stage 3 完了（`read/readSources.ts` + `read/supabaseExecutor.server.ts`） |
 | `lib/examSpine/sourceSync/*`（revision / signal / verdict） | Stage 4 |
 | canary gate（env / runtime） | Stage 4 |
 | `app/api/*/resolveContextInputs.ts` | Stage 5 |
-| request-local snapshot（`WeakMap<Request>`） | Stage 4〜5 |
+| ~~request-local snapshot（`WeakMap<Request>`）~~ | ✅ Stage 3 完了（`read/requestSnapshot.server.ts` / E-S21） |
 | observability counters | Stage 5 |
 | StudentProfile の Layer 2 化 | Stage 8 |
 | `interview_ai` の `sourceContext` 廃止 | Stage 9 |
@@ -224,8 +237,8 @@ mirror_events           :  0 行
 
 | ID | 内容 | Blocker |
 |---|---|---|
-| `E-H1` | RLS policy 定義 / constraint / index の検証手段 | **Stage 3** |
-| `E-H2` | `*_mirrors` の anon 可読 drift への対応方針 | なし（独立対応） |
+| `E-H1` | `authenticated` SELECT policy / constraint / index の検証（Wave 2 で範囲を縮小。table・column・order・embed は live 検証済み） | **Stage 4** |
+| ~~`E-H2`~~ | ~~`*_mirrors` の anon 可読 drift~~ | ✅ `RESOLVED`（2026-08-26 本番適用済み。canonical Register へ統合） |
 | `E-H3` | vitest 導入の再判断 | **Stage 5** |
 | `E-H4` | Layer 2 永続化の再判断 | なし |
 | `E-H5` | `statement_drafts` の要否 | なし |
@@ -288,20 +301,36 @@ revert commit 1  → docs/principles/exam_spine/ が消える
 
 # 13. Next Stage
 
-## Stage 1 — types + purpose registry
+## Wave 2 — Canonical Convergence（完了）
 
 | 項目 | 内容 |
 |---|---|
-| 作成 | `lib/examSpine/types.ts` / `purpose.ts` / `budget.ts` / `sourceData/types.ts` / `README.md` |
-| 制約 | 既存ファイルを 0 変更。import 元ゼロ。runtime 挙動不変 |
-| 内容 | `ExamSourceKind` 10 種 + `EXAM_SOURCE_AUTHORITY`（class 1 = 8 / class 2 = 2）。`EXAM_CONTEXT_REGISTRY` は**現行挙動をそのまま宣言**し、policy を強制しない |
-| QA | `tsc --noEmit` / `npm run lint` / characterization `--check` が不変 |
-| 追加 QA | CAREER 依存ゼロの静的 guard を `lib/examSpine/**` へ拡張 |
-| commit | 2 |
-| blocker | なし（`E-H1` は Stage 3 の blocker であり Stage 1 は進められる） |
+| 成果 | Decision Register 単一化（E-H2 統合 / E-S23〜E-S28 / E-P9）・purpose gate（E-S28）・essay bounded projection（E-S27）・per-kind origin（E-S26）・live schema 検証・RLS 検証 SQL |
+| 詳細 | `EXAM_SPINE_WAVE2_CONVERGENCE.md` |
+| runtime 影響 | 0（canonical lineage は production 未接続） |
 
-## Stage 1 readiness
+## Stage 4 — Source-Sync + canary gate + loader
+
+着手条件は `EXAM_SPINE_WAVE2_CONVERGENCE.md` §8 の readiness matrix を参照。
+2026-08-26 時点の hard blocker は **1 件**（`E-H1` の `authenticated` SELECT policy 検証。
+`supabase/exam_spine_rls_verification.sql` を本番 SQL Editor で 1 回実行することで閉じる）。
+
+Stage 4 の設計上の固定事項（Wave 2 で確定）:
 
 ```text
-READY
+- read status（ok/truncated/error/skipped）と trust verdict（verified/mismatch/
+  unclaimed/unreadable）を 1 つの enum に混ぜない
+- verdict 優先順位は E-S2 のとおり unreadable > unclaimed > mismatch > verified
+- class 2（interview_ai / presentation）に Source-Sync を適用しない（E-S3）。
+  ただし canary gate は適用する
+- loader は必ず purpose を渡す（E-S28。purpose 未指定は gate 無効を意味する）
+```
+
+## Stage 4 ではないもの
+
+```text
+consumer の切替（Stage 5）/ tutor の三重投入解消（Stage 6）
+block を持たない 6 kind の block 追加（Stage 5-6 / E-S25）
+budget の enforcement（Stage 5 以降）
+schema.sql の mirror policy 追随（Spine 外の別 STEP）
 ```

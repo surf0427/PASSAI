@@ -404,6 +404,159 @@ Exam-specific differences / Rollback implications
 - **Exam-specific differences:** —
 - **Rollback implications:** executor 差し替えのみ。
 
+## E-S23 — canonical lineage は Stage lineage（L2）とする
+
+- **Status:** `LOCKED`（Wave 1 判定 / Wave 2 で実コード再検証のうえ確定）
+- **Decision:** `lib/examSpine/**` の contract と実装は `exam-spine-stage3` 系列（Stage 1→2→3）を canonical とする。`feature/interview-realtime-step1` 上の `lib/examSpine/**`（Phase 1〜3.5）を canonical contract として採用しない。**shipping runtime は停止させない**（E-S24）。
+- **Reason（Wave 2 で再検証した順に）:**
+  1. **LOCKED decision との矛盾**: shipping の `lib/examSpine/read/snapshot.server.ts` は module-level `Map<key,{value,expiresAt}>` + 60 秒 TTL であり（`lib/contextBuilders/tutorContext.ts:915` が `CONTEXT_CACHE_TTL_MS = 60_000` / key = `userId` または `${userId}|parity`）、これは **E-S6 が "global cache — cross-user 汚染のリスク" として reject した alternative** そのものである。E-S6 は shipping 側の Register にも LOCKED で存在する。
+  2. **registry が read graph を覆っていない**: shipping の `EXAM_SOURCE_PRIMARY_TABLE` は 1 kind 1 table だが、reader は `presentation_attempts` / `presentation_sessions`（`readPresentationSessionByAttempt`）と `interview_ai_results`（embed）を実際に読む。Canon §22 を満たさない。canonical 側は E-S15 でこれを 1:N registry として修正済み。
+  3. **orphan**: shipping の `lib/examSpine/purpose.ts` は repo 全体で import 元 **0 本**（Wave 2 再確認）。宣言が runtime に効いていない。
+  4. **Register 未登録**: shipping は Phase 1〜3.5 で canary flag / TTL cache / parity reader 3 本 / prompt 合成切替を production へ入れているが、Register への追加は E-H2 の RESOLVED 更新 1 件のみ（Wave 2 で全 6 worktree の Register を比較して確認）。
+  5. **runtime evidence は失われない**: shipping の runtime 実態は `EXAM_SPINE_STAGE3_READINESS_AUDIT.md` 経由で canonical 側の `queries.ts` / E-S18 / E-S19 / E-S20 に取り込み済み。E-S18（`interview_ai` は result を driver にする）は production 実測（sessions 37 / results 1）から導かれている。
+- **Alternatives rejected:**
+  - *shipping を canonical にする* — 上記 1〜4。Stage 1/2/3 の contract 4,618 行を捨て、Stage 4 の型基盤（`ExamSourceBundle` / 4 値 status / origin / provenance）を作り直すことになる。
+  - *両方を canonical にする* — `lib/examSpine/types.ts` が同一パス別内容であり技術的に共存不能。Canon §31 の Dual Authority 禁止の architecture 版。
+  - *2 lineage を融合した新 architecture を作る* — Canon §59（architecture decisions are frozen）に反する。残 blocker はすべて既存 contract の充填で解消できることを Wave 2 で実証した。
+- **Rollback implications:** 本 decision 単体では runtime を変えない。shipping の `/api/tutor` 経路は無改変で稼働し続ける。
+
+## E-S24 — 拒否した lineage の read 実装は削除せず canonical namespace の外へ退避する
+
+- **Status:** `LOCKED`（実施は shipping worktree 側。canonical worktree からは実行しない）
+- **Decision:** shipping の Exam Spine read 実装を `lib/examSpine/**` の外へ **移設**する。削除しない。移設は import path の書き換えのみとし、production 挙動を 1 byte も変えない。orphan である `lib/examSpine/purpose.ts`（import 元 0 本）だけは移設せず削除してよい。
+  ```text
+  lib/examSpine/read/reader.server.ts    → lib/contextBuilders/tutor/serverRead/reader.server.ts
+  lib/examSpine/read/rowMappers.ts       → lib/contextBuilders/tutor/serverRead/rowMappers.ts
+  lib/examSpine/read/snapshot.server.ts  → lib/contextBuilders/tutor/serverRead/snapshotCache.server.ts
+  lib/examSpine/types.ts（SourceState 系）→ lib/contextBuilders/tutor/serverRead/sourceState.ts
+  lib/examSpine/purpose.ts               → 削除（import 元 0 本）
+  ```
+- **import graph（Wave 2 実測。この 2 file 以外に参照は無い）:**
+  ```text
+  lib/contextBuilders/tutorContext.ts:67,82,83,84   … 4 module すべて
+  scripts/exam-spine-live-source-check.ts:85        … reader.server.ts のみ（動的 import）
+  ```
+- **Reason:** Canon §46 は「新経路が production で確認される前に legacy を削除しない」と定める。tutor は現在唯一の server read 経路であり、削除も書き換えもできない。一方 canonical を L2 にすると `types.ts` / `read/rowMappers.ts` が同一パスで衝突する。**移設**が両方の要求を同時に満たす唯一の手段である。
+- **Alternatives rejected:**
+  - *shipping の read 層を削除して tutor を canonical reader へ即移行する* — Canon §43 / §45 に反し、1 commit で production の tutor 経路を全面差し替えることになる。
+  - *canonical を別 namespace（`lib/examSpine2/` 等）へ置く* — どちらが canonical かがパスから読めなくなる。Canon §84 に反する。
+- **受け入れ条件（移設 commit の DoD）:**
+  ```text
+  qa:examSpine:tutorLoader        PASS（fixture 無改変）
+  qa:examSpine:tutorComposition   PASS（fixture 無改変）
+  qa:examSpine:tutorCanary        PASS
+  qa:examSpine:characterization   PASS
+  npx tsc --noEmit                exit 0
+  app/api/tutor/route.ts          差分ゼロ
+  ```
+- **Rollback implications:** 移設 commit の revert のみ。挙動不変なので rollback による挙動変化も無い。
+
+## E-S25 — Stage 2 の block / orchestrator / budget を canonical contract として凍結する
+
+- **Status:** `LOCKED`
+- **Decision:** `lib/examSpine/blocks/**` / `lib/examSpine/orchestrator/**` / `lib/examSpine/budget.ts` を Layer 2〜5 の canonical contract とする。`budget.ts` は引き続き **enforce しない**。legacy formatter は再実装せず import し続ける。
+- **Reason:** Canon §34（Context Builder は Source of Truth を探さない）/ §35（Prompt と Data Retrieval の分離）に構造で適合し、17 purpose × 35 block の byte-equivalence を持つ（Wave 2 実測 888 checks PASS）。依存 formatter 8 file が両 lineage で完全一致しているため、shipping branch へ無改変で移植できる。
+- **★ 凍結は「完成」を意味しない（Wave 2 で確定した被覆範囲）:**
+  ```text
+  Stage 3 が読む kind        : 10
+  Stage 2 の block が参照する kind : 4（basic_info / activity / self_analysis / statement_review）
+  block を持たない kind      : 6（diagnosis / self_pr / essay / interview_record / interview_ai / presentation）
+  ```
+  したがって Stage 3 bundle をそのまま prompt へ流せる purpose は現時点で存在しない。
+  **consumer 移行（Stage 5/6）の前に、対象 purpose が使う kind の block を足す必要がある。**
+  凍結対象は「今ある block の contract」であって「block 集合の完全性」ではない。
+- **Alternatives rejected:**
+  - *block を捨てて purpose ごとに route へ組み立てを戻す* — Canon §49 が禁じる集約関数へ回帰する。
+  - *Stage 2 で budget を enforce する* — E-P7 に反し、`basis: 'observed_only'` の見積り値で本文を切ることになる。
+- **Rollback implications:** runtime 未接続のため revert で production 影響ゼロ。
+
+## E-S26 — Context origin は kind / block 単位で持つ（単一 origin を廃止する）
+
+- **Status:** `LOCKED`（Wave 2 で実装 + QA 済み）
+- **Decision:** `ExamContextInput.origin`（context 全体で 1 値）を **fallback へ降格**し、origin を kind 単位（`origins?: Partial<Record<ExamSourceKind, ExamContextOrigin>>`）と、durable source を持たない slot 単位（`notServerCapableSlots?: readonly ExamNotServerCapableSlot[]`）で申告できるようにする。block は自分の `sourceKind` に対応する申告を受け取る。
+- **単一値では不十分であることの証明（Wave 2 / 実コード）:**
+  ```text
+  変更前 lib/examSpine/blocks/build.ts
+    const origin = input.origin ?? 'bridge';
+    return EXAM_CONTEXT_BLOCK_IDS.map((id) => createExamContextBlock(..., origin));
+      → 全 35 block に同一値をコピー。block 型は origin を持つが、build 経路が
+        block ごとに異なる origin を持てなくしていた。
+  ```
+  実際に同時成立する 3 origin:
+  ```text
+  basic_info      server              … tutor は既に server で読んでいる
+  activity        bridge              … server 経路はあるが canary OFF なら body 由来
+  statementDraft  not_server_capable  … durable table が存在しない（E-P3 で恒久）
+  ```
+  Canon §17 は「暗黙的 Mixed-Origin」を禁止し、`Definition of Done — Sync`（§68）は
+  「mixed-origin が追跡可能」を要求する。E-P7（server が空で bridge に中身があれば bridge を維持）は
+  **per-field の判断**を要求するため、単一値では移行期の実態を表現できない。
+- **推測しない:** 申告の無い kind を「server 経路があるはずだから server」と補完しない。補完すると Spine 自身が暗黙的 Mixed-Origin を作る。申告が無ければ fallback（既定 `'bridge'`）。
+- **Alternatives rejected:**
+  - *purpose 単位で origin を持つ* — 同一 purpose の中で kind ごとに origin が違うのが移行期の常態。
+  - *origin を観測ログにだけ持つ* — 型で持たないと暗黙的 Mixed-Origin を構造的に防げない。
+- **QA:** `scripts/exam-spine-stage2-check.ts` の E1〜E5（3 origin の同時成立 / 未申告 kind を補完しない / origin を変えても block content が 1 byte も変わらない）。
+- **Rollback implications:** origin は render に出ないため byte-equivalence に影響しない（888 checks PASS で確認済み）。Stage 4 の Context object 本体は **本 decision の範囲外**（型境界のみ）。
+
+## E-S27 — `essay` の read は field 単位 projection とし、本文を server projection に載せない
+
+- **Status:** `LOCKED`（Wave 2 で実装 + QA 済み）
+- **Decision:** `essayQuery` の SELECT を `workspace` 丸ごとから `reviews:workspace->reviews` へ絞り、`mapEssayRow(row, limits)` が各 review から **`essayBodySnapshot` を落として**採る。`ExamEssayServerRow` / `ExamEssayReviewServerRow` に `readonly bodyOnServer: false` を置き、「server 由来 essay に本文がある」と書いたコードが型検査で落ちるようにする（E-P8 と同じ手法）。reviews は append-only なので新しい順に並べ替え、`limits.recordItems` 件で cap し、`reviewCount` / `reviewsTruncated` を保持する。
+- **Reason（Wave 2 で判明した非自明点）:**
+  ```text
+  EssayWorkspace（types/essay.ts）の本文系:
+    workspace.body                                … 小論文本文（正本）
+    workspace.reviews[*].essayBodySnapshot        … 添削時点の本文の複製（reviews は最大 20 件）
+    workspace.improvementInProgress.rewriteDraft  … 改善後リライト本文
+    workspace.sparring.answers[]                  … 壁打ちへの本人回答
+  ```
+  変更前は `workspace` を丸ごと SELECT し、`mapEssayRow` が `asRecord()` で素通ししていたため、
+  cap 5 行 ＋ 1 の各行について上記すべてが bundle に載っていた。
+  **さらに重要な点:** shipping が採っていた `workspace->reviews` への絞り込み**だけでは足りない**。
+  `ReviewEntry.essayBodySnapshot` があるため、reviews に絞っても本文の複製が最大 20 件流れる。
+  query 側の絞り込みと mapper 側の除去は **1 組で初めて対策になる**。
+- **残余（意図的に受け入れる範囲）:** `workspace->reviews` は PostgREST 上で `essayBodySnapshot` を含んだまま転送される（jsonb の sub-field を除外する PostgREST 表現が無いため）。**bundle には載らない**が network 転送は残る。これを消すには生成列か正規化 table が要り、DB migration を伴うため本 Stage の範囲外とする。
+- **live 検証の限界（Canon §80）:** PostgREST は jsonb の sub-path を検証しない（存在しない `workspace->zzz` も 200 を返す）ことを Wave 2 で実測した。したがって `->reviews` の妥当性は **live schema check では証明できない**。根拠は shipping production で同じ projection が稼働している事実（`readLatestEssayReviewsRow`）である。
+- **Alternatives rejected:**
+  - *mapper 側だけで本文を落とす* — 転送は既に発生している。read layer の責務として境界の手前でも絞る。
+  - *cap を 1 行にする* — 1 行でも本文全体が載る。行数の問題ではない。
+  - *推測で生成列 / 正規化 table を前提にする* — 本番に存在しない column を production code に入れない。
+- **QA:** `scripts/exam-spine-stage3-check.ts` S15b/S15c/S15d（bundle に `essayBodySnapshot` が現れない / cap と truncated / `->` が text 返却・壊れた JSON・null でも throw しない）。
+
+## E-S28 — purpose gate を canonical contract として持ち、default deny とする
+
+- **Status:** `LOCKED`（Wave 2 で実装 + QA 済み）
+- **Decision:** `EXAM_CONTEXT_REGISTRY[purpose]` に `sources: readonly ExamSourceKind[]` と `sourceEvidence`（kind ごとの実コード根拠）を持たせ、`gateExamSourceKinds(purpose, requested)` を唯一の判定点とする。`readExamSources` / `readExamSourcesForRequest` は optional な `purpose` を受け、許可外 kind については **query を 1 本も発行せず** `status='skipped'` / `queryCount=0` のままにする。落とした kind は `deniedByPurpose` として返す（enum のみ / PII なし）。
+- **default deny:** registry に無い purpose、`sources` に無い kind はすべて拒否。未知の purpose に対して「全部読む」「基本情報だけ読む」等の暗黙の特権拡大をしない。gate は **減らす方向にしか働かない**（許可されているが要求されていない kind を足さない）。
+- **Reason:** Canon §55（available data ≠ prompt へ全部送る）と Stage 3 の共通契約「registry に無い kind は query を発行しない」を満たす data source が canonical 側に存在しなかった。shipping 側の `EXAM_PURPOSE_REGISTRY` は 8 purpose 分の `sources` を持つが orphan（E-S23-3）であり、内容も再検証が必要だった。
+- **★ shipping の宣言をそのまま移植しなかった理由（Wave 2 の実測）:**
+  ```text
+  shipping: interviewAi.sources = ['basic_info','self_analysis','statement_review','essay']
+            provenance「app/api/interview-ai/** は basicInfo / studentProfile / activityData を参照しない」
+
+  実際     : app/interview/ai/sourceData.ts:19-23 が client 側で 5 feature を集約する
+            self_analysis / activity / statement_review / essay / interview_record
+            → basic_info は **使っていない**（over-declaration）
+            → activity / interview_record が **欠落**（under-declaration）
+  ```
+  route の body field 名ではなく、その context を組み立てるために読まれている storage / table を根拠にする。
+- **同様に訂正した例:**
+  ```text
+  essay_review        : previousOutputSummary を送る client が存在しない
+                        （buildPreviousOutputSummary の呼び出しは
+                         app/statement/edit/page.tsx:482 と
+                         app/interview/record/.../InterviewRecordForm.tsx:151 の 2 箇所のみ）
+                        → sources は basic_info のみ
+  interview_feedback  : previousOutputSummary は getInterviewRecords() 由来
+                        → statement_review ではなく interview_record が正しい
+                        （同じ block id でも purpose が違えば source kind が違う）
+  ```
+- **Alternatives rejected:**
+  - *block の `sourceKind` から purpose の sources を導出する* — `previous_output_summary` のように **同じ block id が purpose によって別 kind から作られる**ため導出できない。purpose → kind を直接持つ。
+  - *「将来読みたい kind」も宣言しておく* — default deny の意味が消える。必要になった時点で Decision を起こす。
+- **QA:** `scripts/exam-spine-stage3-check.ts` S20/S20b/S20c/S20d/S21（許可外は query 0 本 / 未知 purpose は全拒否 / gate は拡張しない / gate は snapshot の手前 / registry の内部整合）。
+- **Rollback implications:** `purpose` を渡さなければ従来どおり `kinds` がそのまま使われる。runtime 未接続のため production 影響ゼロ。
+
 ---
 
 # 5. Policy / persistence decisions
@@ -518,6 +671,29 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** なし（Stage 3 は runtime に接続しない）。
 - **関連:** `E-P4`（氏名を将来 prompt から落とす）と混同しない。E-P4 は「載せるのをやめる」判断、本 decision は「無いものを作らない」判断。
 
+## E-P9 — Register に登録されていない contract を canonical に昇格させない
+
+- **Status:** `LOCKED`
+- **Decision:** Exam Spine の contract（型 / 契約 / cache 方式 / gate 方式 / 命名体系）を canonical として採用するには、本 Register に対応する Decision が存在することを必要条件とする。実装が先行した場合、canonical 昇格の前に Decision を起こす。実装が既存の `LOCKED` decision と矛盾する場合は、**実装ではなく Decision を先に改める**（Canon §60 の protocol に従う）。
+- **併せて固定する: Register は 1 本だけ**
+  ```text
+  canonical Register : docs/principles/exam_spine/EXAM_SPINE_DECISIONS.md（canonical lineage 上）
+  他 worktree / 他 branch の同名ファイル : 参照のみ。ID を採番しない。
+  採番は必ず canonical Register の実ファイルから最大値を確認して行う。
+  ```
+- **Reason:** Wave 2 の調査時点で、6 worktree に **3 種類**の Register が存在した。
+  ```text
+  e306eb5c（527 行 / E-S14 / E-P7 まで + E-H2 RESOLVED）… shipping・adversarial audit worktree
+  c0b3a106（589 行 / E-S22 / E-P8 まで）                … canonical lineage・sync 実装 worktree
+  10fd9909（477 行 / E-S14 / E-P7 まで）                … stage1 worktree
+  ```
+  この状態では誰が次に何を書いても採番が衝突する。実際 shipping 側は Phase 1〜3.5 の contract を 1 件も登録しておらず、その結果 `snapshot.server.ts` が E-S6 の reject した設計であることが Register から読めない状態になっていた。`EXAM_SPINE_ARCHITECTURE.md` §0 は「Register の Human Decision が最優先」と定めており、この非対称を放置すると権威文書が実態を説明できなくなる。
+- **Alternatives rejected:**
+  - *実装を正として Register を後追いで書き換える* — Canon §59 / §60 に反する。「実装できたから architecture が変わった」を許すと Register の意味が消える。
+  - *runtime に出ている実装を無条件で canonical とする* — Canon §82 は Authority 調査の順序を定めたものであり、contract 決定の権威を runtime に与えてはいない。
+- **補足:** これは「実装を先に書くな」ではない。**先に書いてよいが、canonical に昇格させる前に Decision を起こせ**という順序の固定である。
+- **Rollback implications:** なし（governance rule）。
+
 ---
 
 # 6. Human decisions（`PENDING_HUMAN`）
@@ -526,14 +702,56 @@ Claude Code はこれらを勝手に決めてはならない。
 
 ## E-H1 — 本番 DDL の完全検証（U1 の残り）
 
-- **Status:** `PENDING_HUMAN`
-- **問題:** Stage 0 の preflight では、anon key による PostgREST 経由の read-only 確認しかできなかった。**確認できたこと**: 対象 12 table の存在と `user_id` 列の存在、auth-scoped table が anon から 0 行であること。**確認できていないこと**: RLS policy の定義内容 / unique constraint / index / `supabase/schema.sql` との詳細 drift。
-- **必要な判断:** 誰が・どの手段で（Supabase ダッシュボード / CLI 導入 / DB 接続情報の提供）残りを検証するか。
-- **Blocker:** **Stage 3 以降**（server reader が実際に読む段階）。Stage 1〜2 は型と純関数のみなのでブロックしない。
+- **Status:** `PENDING_HUMAN`（Wave 2 で範囲を縮小。残るのは §残余の 1 点のみ）
+- **Wave 2 で解消した部分（live PostgREST / read-only / GET のみ / `limit=0` で行取得ゼロ）:**
+  `scripts/exam-spine-live-schema-check.ts` により、Stage 3 の canonical reader が発行する
+  **12 query すべて**（10 kind + presentation の enrichment 2 本）が本番 schema と互換であることを実証した。
+  select 文字列は `formatSelect()` を production と共有しているため、
+  「QA が通した select == reader が発行する select」である。
+  ```text
+  negative control : 存在しない table = 404 / 存在しない column = 400 / 存在しない order 列 = 400
+  12 query         : すべて 200（interview_ai の !inner embed を含む）
+  非読取列の実在    : statement_review_history.essay / interview_practice_records.{questions_asked,my_answers} /
+                     presentation_attempts.{transcript,storage_path} / presentation_sessions.script = すべて実在
+  ```
+  → **table 存在 / column 存在 / order 列 / embed relation / owner filter の構文は VERIFIED。**
+- **★ Wave 2 で判明した検証の限界（推測で PASS にしない / Canon §80）:**
+  - PostgREST は **jsonb の sub-path を検証しない**。`workspace->zzz_not_a_field` も 200 を返す。
+    したがって `essay` の `reviews:workspace->reviews`（E-S27）は live schema check では証明できない。
+    根拠は shipping production で同一 projection が稼働している事実に依存する。
+  - anon key では `authenticated` role の policy を区別できない。RLS が効いていれば
+    「policy が無い」も「policy があって条件不一致」も **どちらも 200 + 0 行**になる。
+- **残余（これだけが未解決）:** `authenticated` role の SELECT policy / UNIQUE constraint / index / trigger / GRANT。
+  特に **§E-H1-a の 4 table**（下記）。`supabase/schema.sql` は 4 table すべてに
+  `FOR SELECT TO authenticated USING (auth.uid() = user_id)` を宣言しているが、
+  **E-H2 の実例（schema.sql に無い anon SELECT policy が本番に存在した）が示すとおり、
+  schema.sql の宣言は本番の証拠にならない。**
+- **§E-H1-a — 一度も SELECT されたことがない 4 table（Wave 2 実測）:**
+  ```text
+  self_prs                    authenticated SELECT の実行実績 0
+  statement_review_history    同上
+  essay_workspaces            同上
+  interview_practice_records  同上
+  ```
+  理由: browser 側の `list*FromSupabase` はこの 4 件について caller 0（`self_analysis` だけは
+  `AuthProvider.tsx:201-202 → restoreSelfAnalysisLogsOnce → hydrateSelfAnalysisLogs` で到達する）。
+  shipping tutor の parity reader（`statement_review_history` / `essay_workspaces` /
+  `interview_practice_records`）は `includeParitySources: spineOnlyContext` でのみ実行され、
+  canary は default deny なので production では走っていない。`self_prs` はどの reader も読まない。
+  INSERT / UPDATE は動いているので書込 policy は実在するが、**SELECT policy には間接証拠が無い。**
+- **★ なぜ runtime で検出できないか（hard blocker である理由）:**
+  SELECT policy が存在しない場合、PostgREST は 403 ではなく **200 + 0 行**を返す。
+  Stage 3 reader はこれを `status='ok'` / `rows=[]` として扱い、
+  「ユーザーにデータが無い」と区別できない（Canon §40 EMPTY ≠ UNREADABLE）。
+  fail-open でも観測ログでも表面化しないため、**out-of-band の確認が必須**である。
+- **必要な判断 / 手段:** `supabase/exam_spine_rls_verification.sql`（Wave 2 で作成。**SELECT のみ**）を
+  本番 SQL Editor で 1 回実行する。誰が実行するかを決めること。
+  本セッションは SQL Editor へ到達できないため実施していない（`BLOCKED_BY_ENV`）。
+- **Blocker:** **Stage 4**（server reader を実際に通電する段階）。Stage 1〜3 は通電しないためブロックしない。
 
 ## E-H2 — anonymous mirror テーブルが anon から読める drift への対応
 
-- **Status:** `PENDING_HUMAN`
+- **Status:** `RESOLVED`（2026-08-26。本番適用 + 実測検証済み）
 - **観測（Stage 0 preflight・read-only）:** `supabase/schema.sql` は 4 つの `*_mirrors` テーブルについて "No SELECT policy by design" と宣言しているが、本番では anon key で行が読める。
   ```text
   student_profile_mirrors : 21 行が anon から読める
@@ -545,8 +763,57 @@ Claude Code はこれらを勝手に決めてはならない。
 - **確認できていないこと:** 原因（RLS 自体が無効なのか、schema.sql に無い SELECT policy が存在するのか）。anon key では `pg_policies` を読めない。
 - **性質:** anon key は client bundle に含まれる公開値であるため、これらの payload は事実上公開状態にある。`student_profile_mirrors.payload` は StudentProfile（summary / strengths / weaknesses / futureConnections / signatureEpisodes）を含む。
 - **注:** これは **Exam Spine とは独立した既存の問題**であり、Stage 0 の変更によって生じたものではない。Exam Spine はこれらの mirror を読まない（E-L5）。
-- **必要な判断:** 本番 RLS を schema.sql の宣言に合わせるか、schema.sql を実態に合わせるか。前者の場合の適用手順と影響。
-- **Blocker:** Exam Spine の Stage をブロックしない（Spine は mirror を読まない）。ただし**独立した対応が要る**。
+- **必要だった判断:** 本番 RLS を schema.sql の宣言に合わせるか、schema.sql を実態に合わせるか。前者の場合の適用手順と影響。
+- **Blocker:** Exam Spine の Stage をブロックしなかった（Spine は mirror を読まない）。独立対応として完了済み。
+
+### 判断と結果（2026-08-26 / production `oarzldvteiuyuwkdoauq`）
+
+**採った方針:** 本番 RLS を schema.sql の宣言（no anon read）に合わせる。
+
+確定した原因は「RLS 無効」ではなく、schema.sql に無い `"<table> anon select_for_upsert"`（`FOR SELECT TO anon USING (true)`）が 4 table すべてに存在していたこと。これは browser の anon client が `INSERT ... ON CONFLICT DO UPDATE` を実行するために追加されたもので、PostgreSQL が upsert に対応する SELECT アクセスを要求するため、**anon 直接 upsert を維持したまま SELECT policy だけを落とすことはできない**。したがって書き込みを server へ移してから policy を削除した。
+
+```text
+Anonymous mirror read exposure closed in production.
+
+Four mirror tables:
+- browser SELECT/INSERT/UPDATE removed
+- writes mediated through /api/mirrors
+- production write verified after RLS hardening
+
+mirror_events:
+- remains write-only telemetry sink
+- required browser roles may INSERT
+- no SELECT policy
+```
+
+**実測（適用後・本番）**
+
+| table | RLS | anon/public policy | anon SELECT | auth SELECT | anon INSERT | auth INSERT | rows |
+|---|---|---|---|---|---|---|---|
+| `student_profile_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 21 |
+| `basic_info_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 12 |
+| `activity_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 6 |
+| `diagnosis_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 3 |
+| `mirror_events` | enabled | INSERT のみ | 0 行 | 0 行 | 許可 | 許可 | 74 |
+
+UPDATE / DELETE は 4 table + `mirror_events` とも、anon / authenticated の双方で affected = 0（read policy が無いため対象行が 1 件も可視化されない）。既存行の削除は発生していない。
+
+**書き込み経路（現行）**
+
+```text
+browser → POST /api/mirrors → server-side service_role writer → *_mirrors
+browser → mirror_events（telemetry のみ・INSERT only）
+```
+
+本番実測: 基本情報保存 1 回で `basic_info_mirrors.updated_at = 2026-08-26T15:09:04Z` が更新され、同一操作の telemetry が `mirror_events` に `feature=basicInfo / mirror_status=success / environment=production / duration_ms=1143 / created_at=2026-08-26T15:09:05Z` として積まれた。
+
+**`mirror_events` 403 の副次 incident（同日クローズ）**
+
+policy 削除後、`mirror_events` への browser INSERT が `42501` になった。原因は role の取り違えで、`lib/supabase/auth.ts:ensureAnonymousUser()` が未ログイン訪問者にも `signInAnonymously()` を実行するため、browser client の Postgres role は常に `authenticated`（実測 JWT: `role=authenticated` / `is_anonymous=true`）であり、既存の anon 専用 INSERT policy が実トラフィックに一致していなかった。`supabase/mirror_events_authenticated_insert.sql` で `FOR INSERT TO authenticated WITH CHECK (true)` を 1 件追加して解消。SELECT / UPDATE / DELETE policy は作っていないため read exposure は広がらない。`mirror_events` は owner 列を持たない設計（`schema.sql §5`）のため owner 条件は書けず、anon policy と条件を揃えた。
+
+**関連:** `supabase/mirror_select_exposure_migration.sql` / `supabase/mirror_events_authenticated_insert.sql` / `app/api/mirrors/route.ts` / `lib/mirrors/mirrorWriteServer.ts` / `lib/supabase/mirrorEventSink.ts`
+
+**残存リスク:** `supabase/schema.sql` は 4 mirror について anon の INSERT / UPDATE policy を宣言したままで、本番実態（policy 0 件）と乖離している。新規 project へ schema.sql をそのまま適用すると本番より緩い状態が再生される。schema.sql 側の追随は別 STEP。
 
 ## E-H3 — vitest 導入の再判断
 
