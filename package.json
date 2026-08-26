@@ -24,6 +24,7 @@
     "qa:examSpine:tutorLoader:record": "npx tsx scripts/exam-spine-tutor-loader-qa.ts --record",
     "qa:examSpine:tutorComposition": "npx tsx scripts/exam-spine-tutor-composition-qa.ts --check",
     "qa:examSpine:tutorComposition:record": "npx tsx scripts/exam-spine-tutor-composition-qa.ts --record",
+    "qa:examSpine:liveSources": "npx tsx scripts/exam-spine-live-source-check.ts",
     "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
   },
   "dependencies": {
