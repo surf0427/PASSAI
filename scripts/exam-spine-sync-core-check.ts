@@ -25,7 +25,7 @@
 //   npm run qa:examSpine:syncCore
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 
 // ── 0. 外部通信 trap ───────────────────────────────────────────────
@@ -96,6 +96,14 @@ function eq<T>(label: string, actual: T, expected: T): void {
 
 const REPO_ROOT = process.cwd();
 const SYNC_DIR = join(REPO_ROOT, 'lib', 'examSpine', 'sync');
+
+// ★ 本 script が守るのは **generic core の 4 file だけ** ★
+//   Wave 2 以降 `lib/examSpine/sync/adapters/**` に kind 固有 adapter が入る。adapter は
+//   sourceData / read layer の型を **正当に** import するため、core と同じ「相対 import のみ」
+//   規則を当てると落ちる。目的（core が source を知らない純粋な層であること）は変えず、
+//   対象だけを core に絞る（Stage 1 QA が Stage 2/3 に対して行った Stage-scoped 化と同形）。
+//   adapter 側の境界は scripts/exam-spine-sync-adapters-check.ts が別途検査する。
+const CORE_FILES = ['hash.ts', 'fingerprint.ts', 'revision.ts', 'verification.ts'] as const;
 
 // ── 2. 非決定性 trap（clock / random を実行時に捕まえる）───────────
 //
@@ -213,9 +221,13 @@ const FORBIDDEN_TOKENS: readonly string[] = [
 ];
 
 function staticBoundaries(): void {
-  const files = listFiles(SYNC_DIR);
-  check('sync core が 4 file 構成である', files.length === 4,
-    files.map((f) => relative(REPO_ROOT, f)).join(', '));
+  const files = CORE_FILES.map((name) => join(SYNC_DIR, name));
+  const allSyncFiles = listFiles(SYNC_DIR);
+  const coreLevel = allSyncFiles.filter((f) => !relative(SYNC_DIR, f).includes(sep));
+  check('sync core が 4 file 構成である（sync/ 直下に core 以外を置かない）',
+    coreLevel.length === 4 &&
+      coreLevel.every((f) => (CORE_FILES as readonly string[]).includes(relative(SYNC_DIR, f))),
+    coreLevel.map((f) => relative(REPO_ROOT, f)).join(', '));
 
   const tokenHits: string[] = [];
   for (const file of files) {
