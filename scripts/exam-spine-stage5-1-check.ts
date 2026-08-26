@@ -92,6 +92,8 @@ const LEGACY = {
   basicInfo: DEVICE_BASIC,
   activityData: { clubActivities: [{ clubName: '吹奏楽部' }], volunteerActivities: [{ theme: '清掃' }] },
   studentProfile: { summary: '合唱に打ち込んだ', strengths: ['継続力'], weaknesses: ['計画性'] },
+  // legacy の Supabase 層 projection（Stage 5.4 で比較元をこちらへ移した）。
+  selfAnalysis: { summary: '合唱に打ち込んだ', strengths: ['継続力'], weaknesses: ['計画性'] },
   statementReviewLatest: { essay: '志望理由書の本文がここに入る', result: { weaknesses: ['具体性が不足'] } },
   essayReviewLatest: { weakPoints: ['論拠が薄い'] },
   interviewRecordLatest: { improvementSummary: '結論を先に' },
