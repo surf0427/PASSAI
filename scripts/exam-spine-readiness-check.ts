@@ -62,18 +62,37 @@ function r1Register(): void {
   console.log('\nR1. Decision Register');
   const path = join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_DECISIONS.md');
 
-  // ★ Register が repo 内に 1 本しか無いこと（E-S37）★
+  // ★ Register が **canonical tree 内**に 1 本しか無いこと（E-S37 / E-S38）★
   //   Stage 4 の分岐事故は「Register が 2 本に割れた」ことが起点だった。
   //   ID の一意性だけを見ても、Register 自体が複数あれば単一性は成立しない。
-  //   `## E-S<n>` 形式の decision を持つ file を Register とみなして数える。
+  //
+  //   ⚠️ 責務分界（E-S38-4）:
+  //     ここが検査するのは **今 checkout されている canonical tree** の状態だけである。
+  //     別 branch に別の Register があることは違反ではない（runtime に同時存在しない）。
+  //     non-canonical candidate branch を消さないと PASS しない設計にはしない。
+  //     branch を跨いだ単一性は ancestry rule（STATE §1.1）が担保する。
   const specDir = join(ROOT, 'docs/principles/exam_spine');
   const registerFiles = readdirSync(specDir)
     .filter((f) => f.endsWith('.md'))
     .filter((f) => /^## E-[LSPH]\d+/m.test(readFileSync(join(specDir, f), 'utf8')));
   check(
-    'Decision Register は repo 内に 1 本だけ',
+    'Decision Register は canonical tree 内に 1 本だけ',
     registerFiles.length === 1 && registerFiles[0] === 'EXAM_SPINE_DECISIONS.md',
     registerFiles.join(', '),
+  );
+
+  // ★ canonical branch / HEAD の宣言が STATE に存在すること（E-S38）★
+  //   Packet worker が「どの HEAD が canonical か」を推測せず解決できる状態を機械で守る。
+  //   宣言が消えると canonical の所在が再び不明になるため FAIL にする。
+  const stateText = readFileSync(
+    join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STATE.md'), 'utf8');
+  check(
+    'STATE が canonical implementation branch を宣言している',
+    /\|\s*Canonical implementation branch\s*\|\s*`[^`]+`/.test(stateText),
+  );
+  check(
+    'STATE が canonical ancestry root を宣言している',
+    /\|\s*Canonical ancestry root\s*\|/.test(stateText),
   );
 
   const text = readFileSync(path, 'utf8');

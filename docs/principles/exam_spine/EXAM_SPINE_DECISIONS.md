@@ -837,6 +837,54 @@ Exam-specific differences / Rollback implications
   - *worker branch を canonical と呼ぶ運用を続ける* — 2 回とも同じ失敗をした。
 - **Rollback implications:** なし（運用規約）。
 
+## E-S38 — Stage 4 canonical は arbitration で 1 本に確定し、branch-local な decision ID を canonical に持ち込まない
+
+- **Status:** `LOCKED`（Stage 4 final arbitration で制定）
+- **背景:** E-S37 で canonical lineage の単一性を規約化した後も、並列 branch が
+  **同じ次番 ID を同時に採番**する事故が起きた。branch が分岐している間、双方が
+  「次の空き ID は E-S35」と判断できてしまうためである。
+  ```text
+  canonical (exam-spine-stage4-stabilize)     A branch (exam-spine-w1-convergence-v2)
+    E-S35 外部 verdict を 4 値へ畳む            E-S35 device projection authority
+    E-S36 usability を宣言層に閉じる            E-S36 shadow comparison は observer
+    E-S37 canonical lineage / fork governance   E-S37 shadow 結果を consumer へ渡さない
+  ```
+- **Decision:**
+  ```text
+  1. decision ID の採番権は **Stage 4 canonical branch の Register だけ**が持つ。
+     canonical branch は EXAM_SPINE_STATE.md §1.1 が指すものとする（E-S37）。
+
+  2. canonical における E-S35 / E-S36 / E-S37 は本 Register の定義が正であり、
+     他 branch が同じ ID に割り当てた decision は **NON_CANONICAL** とする。
+
+  3. non-canonical branch の decision を後から昇格させる場合、
+     **ID をそのまま持ち込んではならない**（verbatim merge 禁止）。手順は次で固定する。
+       a. canonical Register の現 HEAD を解決する
+       b. その時点の未使用 ID を新たに採番する
+       c. branch-local の ID は捨てる（本文・QA・コード内の参照もすべて付け替える）
+       d. 登録を済ませてから canonical lineage へ統合する（E-P9）
+
+  4. 「branch が存在する」ことは canonical 性の根拠にならない（E-S37 の再確認）。
+     canonical tip 数は **branch 数ではなく ancestry で数える**。
+     non-canonical candidate branch が何本あっても canonical は 1 本である。
+  ```
+- **Reason:** ID 衝突を放置すると、同じ `E-S35` が文脈によって別の contract を指す。
+  Register は「参照される ID が一意である」ことに全面的に依存しており、これが壊れると
+  decision 参照そのものが機能しなくなる。採番権を canonical 1 本に固定し、昇格時の
+  再採番を義務化すれば、分岐中に何本 branch があっても canonical の ID 空間は壊れない。
+- **なぜ「新しい方の ID を採る」ではないのか:** commit が新しいことと decision が正しいことは
+  無関係である（Canon §31 / E-S37）。採番権は lineage の地位で決まり、時刻では決まらない。
+- **Implementation evidence:** `EXAM_SPINE_STATE.md` §1.1（canonical branch 宣言 / deferred lineage 記録）。
+  `scripts/exam-spine-readiness-check.ts` R1（canonical tree 内の Register 単一性・ID 一意性・
+  canonical branch 宣言の存在）。
+- **Failure semantics:** ID を解決できない場合、後続 packet は推測せず停止する。
+- **Stage:** 運用規約（実装を持たない）。
+- **Alternatives rejected:**
+  - *両方の ID を残し文脈で区別する* — 参照時に必ず曖昧になる。
+  - *A branch を書き換えて採番し直させる* — 他 worker の履歴改変にあたる。昇格時の再採番で足りる。
+  - *canonical 側を E-S38 以降へずらす* — 既に登録・QA 済みの canonical 側を動かす理由が無い。
+- **Rollback implications:** なし（運用規約）。
+
 ---
 
 # 5. Policy / persistence decisions
@@ -1134,7 +1182,24 @@ policy 削除後、`mirror_events` への browser INSERT が `42501` になっ�
   1. `verdict.ts` の入力を「claim 参照の最小 interface」へ narrow し、A の `toDeviceClaims` 出力で満たす。B は transport としては廃止し、型のみ残すか削除する。
   2. B を正式に登録し、A を B へ寄せる（E-S33 の改訂が必要）。
   3. 両方を維持し、用途境界（production transport = A / 内部判定入力 = B）を Decision として固定する。
-- **Blocker:** Stage 4 stabilization の blocker では**ない**（QA は全 green）。Stage 5 で claim を実際に消費し始める前に決めること。
+- **Blocker 分類（Stage 4 final arbitration で確定）:**
+  ```text
+  BLOCKS_PACKET_E            = NO
+  BLOCKS_STAGE5_CONSUMPTION  = YES
+  ```
+  根拠（コード実測）:
+  ```text
+  production path で使われている transport は claim/** だけ
+    app/tutor/page.tsx      → sync/claim/serialize, sync/claim/types
+    app/api/tutor/route.ts  → sync/claim/parse
+  signal.ts の production importer = 0
+    唯一の参照は lib/examSpine/sync/verdict.ts（Spine 内部）
+  ```
+  重複は **Spine 内部に閉じており、runtime path に 2 つの wire format が同時に出ない**。
+  Packet E は `lib/examSpine/**` を runtime importer 0 のまま shipping へ置く作業なので、
+  内部に未使用 module が 1 本多いことは import の可否に影響しない。
+  一方 Stage 5 で claim を実際に消費し始める時点では、どちらが transport かが
+  確定していないと consumer が二重定義に依存するため、そこでは blocker になる。
 - **Claude が勝手に決めてはいけない理由:** E-S33 は LOCKED であり、A を B へ寄せる案は LOCKED decision の改訂にあたる。
 
 ---

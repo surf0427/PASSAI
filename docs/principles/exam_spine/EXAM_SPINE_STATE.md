@@ -25,7 +25,7 @@
 
 | 項目 | 値 |
 |---|---|
-| Canonical implementation branch | `exam-spine-stage4-stabilize` |
+| Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
 | Canonical HEAD at this convergence | `68ba224da4b47cf4f21ab3532361dc6575c18c8e` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
@@ -42,6 +42,40 @@ git merge-base --is-ancestor <candidate> exam-spine-stage4-stabilize
 git log --oneline exam-spine-stage4-stabilize..<candidate>
 ```
 
+## non-canonical candidate branch（削除しない / canonical でもない）
+
+`exam-spine-stage4-stabilize` の ancestry に入っていない branch は **non-canonical** である。
+branch が存在すること自体は違反ではなく、canonical tip 数にも数えない（E-S38-4）。
+
+| branch | HEAD（arbitration 時点） | 分類 | 理由 |
+|---|---|---|---|
+| `exam-spine-w1-convergence-v2` | `d7b1100` | **NON_CANONICAL_STAGE5_1_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1 / Packet J 相当（shadow comparison）を追加した |
+| `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
+
+### Deferred Stage 5.1 candidate（成果は保全する）
+
+```text
+branch : exam-spine-w1-convergence-v2
+HEAD   : d7b1100a8b491371601dd855b88e1bacc654df91
+unique commits（canonical に含まれないもの）:
+  42cdf18  feat(spine): compare tutor legacy and canonical context in shadow
+  6d5eee5  test(spine): verify tutor shadow migration readiness
+  d7b1100  docs(exam-spine): freeze stage 5.1 comparison contract
+
+内容 : lib/examSpine/context/shadow/**（compareTutor / types）
+        app/api/tutor/route.ts の shadow comparison wiring
+        scripts/exam-spine-stage5-1-check.ts
+
+canonical に入れない理由:
+  Stage 4 canonical stabilization の freeze 対象（Packet J / shadow harness /
+  new context behavior）に該当する。Stage 4 は loader / gate / verification までであり、
+  shadow comparison は Packet J の entry gate で扱う。
+
+⚠️ 「捨てる」ではない。branch も commit も保持する。revert しない。
+   再検討時は E-S38-3 の手順（canonical Register HEAD 解決 → 未使用 ID を再採番 →
+   branch-local ID は捨てる → 登録してから統合）に従うこと。
+   この branch の E-S35 / E-S36 / E-S37 は **canonical decision ID ではない**。
+
 ## ancestry rule
 
 ```text
@@ -52,6 +86,11 @@ Stage 4 の implementation packet は、この branch から分岐するか、
   a. contract が Register へ登録され（E-P9）、かつ
   b. 本 lineage へ統合される
 まで **non-canonical** である。branch 名・commit 数・commit date は根拠にならない。
+
+canonical tip 数は **branch 数ではなく ancestry で数える**（E-S38-4）。
+non-canonical candidate branch が何本存在しても
+  CANONICAL_TIP_COUNT = 1
+である。並列 branch を削除しないと canonical にならない設計にはしない。
 ```
 
 ## この収束に含まれる lineage（機械検証済み）
