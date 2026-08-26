@@ -1,0 +1,47 @@
+{
+  "canaryOff": {
+    "block1CacheControl": "ephemeral",
+    "block1IsStaticPrompt": true,
+    "contextString": "【受験生の基本情報】\n高校3年\n第一志望: CLIENTONLYUNIV / クライアント学部",
+    "finalPromptLength": 45649,
+    "laterBlocksHaveCacheControl": false,
+    "studentContextSection": "【PASSAI内の生徒情報】\n・志望校: CLIENTONLYUNIV クライアント学部\n・自己分析の要約: client 側の自己分析サマリー\n・自己分析で出ている強み: CLIENTONLYSTRENGTH\n・自己分析で見えている課題: client 側の弱み\n・志望理由書レビューの直近の課題: 未入力\n・面接練習の課題: 未入力\n・活動経験: 未入力\n・小論文添削の直近の課題: 未入力\n・マイページの利用状況: 未入力\n・最近よく使っている機能: 未入力\n・まだ未着手の機能: 未入力\n・最近の成長傾向: 未入力\n\nこの生徒情報の扱い方:\n・受験・進路の話題では積極的に活用し、その生徒に合わせた個別最適化された助言を行ってください。\n・ただし単なる復唱・列挙や毎回の引用は避け、より良い助言のための背景知識として使ってください。\n・雑談・受験外の話題では無理に参照しないでください（利用頻度は低めに）。\n・これは参考情報です。ユーザーの現在の発言を常に最優先し、矛盾する場合は最新発言を信じてください。\n・情報が古い可能性があるため、断定しすぎないでください。\n・「あなたのデータによると」のように機械的に言いすぎないでください。\n・ここに無い個人情報を推測・補完しないでください。\n・「未入力」の項目を責めたり、入力を急かしたりしないでください。",
+    "supabaseStudentContextSection": "【保存済みの生徒情報】\n以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。\n保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。\n\n・保存情報では、高校3年 のようです。\n・過去入力では、志望校として「SPINEONLYUNIV」が挙がっています。\n・保存情報では、志望分野として「スパイン学部」への関心が見られます。\n・保存情報では、強みとして「SPINEONLYSTRENGTH」が整理されています。\n・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。\n\nこの生徒情報の扱い方:\n・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。\n・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。",
+    "systemBlockCount": 3,
+    "userPrompt": "【受験生の基本情報】\n高校3年\n第一志望: CLIENTONLYUNIV / クライアント学部\n\n【受験生からの最新メッセージ】\n志望校について相談したいです。"
+  },
+  "canaryOn": {
+    "block1CacheControl": "ephemeral",
+    "block1IsStaticPrompt": true,
+    "contextString": "",
+    "finalPromptLength": 45018,
+    "laterBlocksHaveCacheControl": false,
+    "studentContextSection": "",
+    "supabaseStudentContextSection": "【保存済みの生徒情報】\n以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。\n保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。\n\n・保存情報では、高校3年 のようです。\n・過去入力では、志望校として「SPINEONLYUNIV」が挙がっています。\n・保存情報では、志望分野として「スパイン学部」への関心が見られます。\n・保存情報では、強みとして「SPINEONLYSTRENGTH」が整理されています。\n・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。\n\nこの生徒情報の扱い方:\n・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。\n・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。",
+    "systemBlockCount": 2,
+    "userPrompt": "【受験生からの最新メッセージ】\n志望校について相談したいです。"
+  },
+  "description": "★最重要: client と Spine が食い違う。ON では Spine 側だけが残ること",
+  "fixtureId": "D-conflicting-client-vs-spine",
+  "intent": "general",
+  "promptLength": {
+    "off": 45649,
+    "on": 45018
+  },
+  "sentinels": {
+    "off": {
+      "CLIENT_ONLY_STRENGTH": 1,
+      "CLIENT_ONLY_UNIV": 2,
+      "SPINE_ONLY_STRENGTH": 1,
+      "SPINE_ONLY_UNIV": 1,
+      "WORK_ONLY_DRAFT": 0
+    },
+    "on": {
+      "CLIENT_ONLY_STRENGTH": 0,
+      "CLIENT_ONLY_UNIV": 0,
+      "SPINE_ONLY_STRENGTH": 1,
+      "SPINE_ONLY_UNIV": 1,
+      "WORK_ONLY_DRAFT": 0
+    }
+  }
+}
