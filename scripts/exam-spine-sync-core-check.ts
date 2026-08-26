@@ -105,6 +105,14 @@ const SYNC_DIR = join(REPO_ROOT, 'lib', 'examSpine', 'sync');
 //   adapter 側の境界は scripts/exam-spine-sync-adapters-check.ts が別途検査する。
 const CORE_FILES = ['hash.ts', 'fingerprint.ts', 'revision.ts', 'verification.ts'] as const;
 
+// Wave 4 で sync/ 直下へ加わった contract layer（core ではない）。
+//   signal.ts  … wire の serialize / parse（untrusted 入力の境界）
+//   verdict.ts … 内部 5 値 → E-S2 の外部 4 値
+//   enable.ts  … fail-closed usability decision
+// core の guard（相対 import のみ / forbidden token / DB 動詞）は **core 4 file にだけ**
+// 当て続ける。これら 3 file の境界は scripts/exam-spine-sync-signal-check.ts が検査する。
+const SYNC_CONTRACT_FILES = ['signal.ts', 'verdict.ts', 'enable.ts'] as const;
+
 // ── 2. 非決定性 trap（clock / random を実行時に捕まえる）───────────
 //
 // static grep だけでは「別名経由で時計を触る」を捕まえられないため、
@@ -224,10 +232,13 @@ function staticBoundaries(): void {
   const files = CORE_FILES.map((name) => join(SYNC_DIR, name));
   const allSyncFiles = listFiles(SYNC_DIR);
   const coreLevel = allSyncFiles.filter((f) => !relative(SYNC_DIR, f).includes(sep));
-  check('sync core が 4 file 構成である（sync/ 直下に core 以外を置かない）',
-    coreLevel.length === 4 &&
-      coreLevel.every((f) => (CORE_FILES as readonly string[]).includes(relative(SYNC_DIR, f))),
-    coreLevel.map((f) => relative(REPO_ROOT, f)).join(', '));
+  const allowedTopLevel = new Set<string>([...CORE_FILES, ...SYNC_CONTRACT_FILES]);
+  eq('sync/ 直下の file 集合が宣言と一致する（未宣言の file を置かない）',
+    coreLevel.map((f) => relative(SYNC_DIR, f)).sort(),
+    [...allowedTopLevel].sort());
+  check('core 4 file が実在する',
+    files.every((f) => allSyncFiles.includes(f)),
+    files.map((f) => relative(REPO_ROOT, f)).join(', '));
 
   const tokenHits: string[] = [];
   for (const file of files) {

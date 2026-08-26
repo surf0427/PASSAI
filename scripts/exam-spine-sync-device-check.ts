@@ -884,17 +884,38 @@ function essayEnableInvariant(): void {
   eq('runtime enable 禁止は essay のみ',
     Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
 
-  // ★ 宣言であって gate ではない: production / Spine runtime に消費者が居ないこと
+  // ★ 宣言を読んでよいのは「宣言元」と「pure な decision layer」だけ ★
+  //   Wave 3 時点では consumer 0 本を要求していたが、Wave 4 で pure decision layer
+  //   （lib/examSpine/sync/enable.ts）が宣言を参照するようになった。これは Wave 3 が
+  //   「有効化 gate を実装する Wave 4 が、この宣言を必ず参照すること」と書いた予定どおりであり、
+  //   守るべき不変条件は「consumer が 0」ではなく **production runtime が gate を持たない**こと。
+  //   したがって allowlist を 2 file に固定し、それ以外を落とす（強度は下げていない）。
+  const DECLARATION_CONSUMERS = [
+    join('lib', 'examSpine', 'sync', 'adapters', 'registry.ts'),
+    join('lib', 'examSpine', 'sync', 'enable.ts'),
+  ];
   const consumers: string[] = [];
   for (const dir of ['app', 'lib']) {
     for (const file of listFiles(join(REPO_ROOT, dir))) {
       const rel = relative(REPO_ROOT, file);
-      if (rel === join('lib', 'examSpine', 'sync', 'adapters', 'registry.ts')) continue;
+      if (DECLARATION_CONSUMERS.includes(rel)) continue;
       if (readFileSync(file, 'utf8').includes('EXAM_SYNC_RUNTIME_ENABLE_BLOCKED')) consumers.push(rel);
     }
   }
-  check('essay: 禁止宣言に runtime consumer が居ない（gate を作っていない）',
+  check('essay: 禁止宣言を読むのは宣言元と pure decision layer だけ',
     consumers.length === 0, consumers.join(', '));
+
+  // decision layer 自体が production から呼ばれていないこと（= runtime gate が存在しない）
+  const enableConsumers: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    for (const file of listFiles(join(REPO_ROOT, dir))) {
+      const rel = relative(REPO_ROOT, file);
+      if (rel.startsWith(join('lib', 'examSpine'))) continue;
+      if (/examSpine\/sync\/enable/.test(readFileSync(file, 'utf8'))) enableConsumers.push(rel);
+    }
+  }
+  check('essay: decision layer が production から呼ばれていない（runtime gate 0）',
+    enableConsumers.length === 0, enableConsumers.join(', '));
 }
 
 function failClosed(): void {
