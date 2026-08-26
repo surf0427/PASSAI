@@ -227,10 +227,27 @@ const ALLOWED_IMPORTS: readonly RegExp[] = [
   /^\.\.\/\.\.\/read\/(types|rowMappers|readSources|guards)$/,
 ];
 
+/**
+ * Wave 3: device view が使う domain 型。**type-only import に限って**許可する。
+ * 「device 側の shape を発明しない」ために実 storage の型を使う必要がある一方、
+ * runtime dependency は 1 本も作らない（`import type` は runtime に残らない）。
+ * allowlist は列挙で持つ（`@/lib/**` を丸ごと開けない）。
+ */
+const ALLOWED_TYPE_ONLY_IMPORTS: readonly string[] = [
+  '@/types/basicInfo',
+  '@/types/activity',
+  '@/types/selfAnalysisLog',
+  '@/types/selfPR',
+  '@/types/essay',
+  '@/lib/diagnosisStorage',
+  '@/lib/statement/review/statementStorage',
+  '@/lib/interviewRecordStorage',
+];
+
 function staticBoundaries(): void {
   const files = listFiles(ADAPTERS_DIR);
-  eq('adapters が 4 file 構成である', files.map((f) => relative(ADAPTERS_DIR, f)).sort(),
-    ['normalize.ts', 'registry.ts', 'types.ts', 'views.ts']);
+  eq('adapters が 6 file 構成である', files.map((f) => relative(ADAPTERS_DIR, f)).sort(),
+    ['deviceSources.ts', 'deviceViews.ts', 'normalize.ts', 'registry.ts', 'types.ts', 'views.ts']);
 
   const tokenHits: string[] = [];
   for (const file of files) {
@@ -244,17 +261,25 @@ function staticBoundaries(): void {
     tokenHits.length === 0, tokenHits.join(' | '));
 
   const importHits: string[] = [];
+  const valueImportHits: string[] = [];
   for (const file of files) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/gm)) {
       const spec = m[1];
-      if (!ALLOWED_IMPORTS.some((re) => re.test(spec))) {
-        importHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+      const typeOnly = /^\s*import\s+type\s/.test(m[0]);
+      if (ALLOWED_IMPORTS.some((re) => re.test(spec))) continue;
+      if (ALLOWED_TYPE_ONLY_IMPORTS.includes(spec)) {
+        // domain 型は type-only でしか許さない（値を import したら runtime 依存になる）
+        if (!typeOnly) valueImportHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+        continue;
       }
+      importHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
     }
   }
-  check('adapters の import は sync core + Spine 内部の純粋 contract のみ',
+  check('adapters の import は sync core + Spine 内部 contract + 許可 domain 型のみ',
     importHits.length === 0, importHits.join(' | '));
+  check('domain 型は type-only import に限る（runtime 依存 0）',
+    valueImportHits.length === 0, valueImportHits.join(' | '));
 
   const dbVerbs: string[] = [];
   const BUILTIN_FROM = new Set(['Array', 'Uint8Array', 'Uint32Array', 'Object', 'String', 'Set', 'Map']);
