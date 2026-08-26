@@ -12,6 +12,7 @@
 |---|---|
 | `LOCKED` | 確定。変更には本ファイルの更新（＝明示的な決定）が要る |
 | `PENDING_HUMAN` | Human の判断が必要。Claude Code が勝手に決めてはならない |
+| `RESOLVED` | `PENDING_HUMAN` だった項目が決定され、対応が完了・検証済み（判断内容と実測を本文に残す） |
 | `SUPERSEDED` | 後続 Decision に置き換えられた（履歴として残す） |
 
 # 2. ID 体系
@@ -408,9 +409,9 @@ Exam-specific differences / Rollback implications
 
 ---
 
-# 6. Human decisions（`PENDING_HUMAN`）
+# 6. Human decisions（`PENDING_HUMAN` / `RESOLVED`）
 
-Claude Code はこれらを勝手に決めてはならない。
+Claude Code はこれらを勝手に決めてはならない。決定済みのものは `RESOLVED` として、判断内容と実測を残したまま本節に置く。
 
 ## E-H1 — 本番 DDL の完全検証（U1 の残り）
 
@@ -421,7 +422,7 @@ Claude Code はこれらを勝手に決めてはならない。
 
 ## E-H2 — anonymous mirror テーブルが anon から読める drift への対応
 
-- **Status:** `PENDING_HUMAN`
+- **Status:** `RESOLVED`（2026-08-26。本番適用 + 実測検証済み）
 - **観測（Stage 0 preflight・read-only）:** `supabase/schema.sql` は 4 つの `*_mirrors` テーブルについて "No SELECT policy by design" と宣言しているが、本番では anon key で行が読める。
   ```text
   student_profile_mirrors : 21 行が anon から読める
@@ -433,8 +434,57 @@ Claude Code はこれらを勝手に決めてはならない。
 - **確認できていないこと:** 原因（RLS 自体が無効なのか、schema.sql に無い SELECT policy が存在するのか）。anon key では `pg_policies` を読めない。
 - **性質:** anon key は client bundle に含まれる公開値であるため、これらの payload は事実上公開状態にある。`student_profile_mirrors.payload` は StudentProfile（summary / strengths / weaknesses / futureConnections / signatureEpisodes）を含む。
 - **注:** これは **Exam Spine とは独立した既存の問題**であり、Stage 0 の変更によって生じたものではない。Exam Spine はこれらの mirror を読まない（E-L5）。
-- **必要な判断:** 本番 RLS を schema.sql の宣言に合わせるか、schema.sql を実態に合わせるか。前者の場合の適用手順と影響。
-- **Blocker:** Exam Spine の Stage をブロックしない（Spine は mirror を読まない）。ただし**独立した対応が要る**。
+- **必要だった判断:** 本番 RLS を schema.sql の宣言に合わせるか、schema.sql を実態に合わせるか。前者の場合の適用手順と影響。
+- **Blocker:** Exam Spine の Stage をブロックしなかった（Spine は mirror を読まない）。独立対応として完了済み。
+
+### 判断と結果（2026-08-26 / production `oarzldvteiuyuwkdoauq`）
+
+**採った方針:** 本番 RLS を schema.sql の宣言（no anon read）に合わせる。
+
+確定した原因は「RLS 無効」ではなく、schema.sql に無い `"<table> anon select_for_upsert"`（`FOR SELECT TO anon USING (true)`）が 4 table すべてに存在していたこと。これは browser の anon client が `INSERT ... ON CONFLICT DO UPDATE` を実行するために追加されたもので、PostgreSQL が upsert に対応する SELECT アクセスを要求するため、**anon 直接 upsert を維持したまま SELECT policy だけを落とすことはできない**。したがって書き込みを server へ移してから policy を削除した。
+
+```text
+Anonymous mirror read exposure closed in production.
+
+Four mirror tables:
+- browser SELECT/INSERT/UPDATE removed
+- writes mediated through /api/mirrors
+- production write verified after RLS hardening
+
+mirror_events:
+- remains write-only telemetry sink
+- required browser roles may INSERT
+- no SELECT policy
+```
+
+**実測（適用後・本番）**
+
+| table | RLS | anon/public policy | anon SELECT | auth SELECT | anon INSERT | auth INSERT | rows |
+|---|---|---|---|---|---|---|---|
+| `student_profile_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 21 |
+| `basic_info_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 12 |
+| `activity_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 6 |
+| `diagnosis_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 3 |
+| `mirror_events` | enabled | INSERT のみ | 0 行 | 0 行 | 許可 | 許可 | 74 |
+
+UPDATE / DELETE は 4 table + `mirror_events` とも、anon / authenticated の双方で affected = 0（read policy が無いため対象行が 1 件も可視化されない）。既存行の削除は発生していない。
+
+**書き込み経路（現行）**
+
+```text
+browser → POST /api/mirrors → server-side service_role writer → *_mirrors
+browser → mirror_events（telemetry のみ・INSERT only）
+```
+
+本番実測: 基本情報保存 1 回で `basic_info_mirrors.updated_at = 2026-08-26T15:09:04Z` が更新され、同一操作の telemetry が `mirror_events` に `feature=basicInfo / mirror_status=success / environment=production / duration_ms=1143 / created_at=2026-08-26T15:09:05Z` として積まれた。
+
+**`mirror_events` 403 の副次 incident（同日クローズ）**
+
+policy 削除後、`mirror_events` への browser INSERT が `42501` になった。原因は role の取り違えで、`lib/supabase/auth.ts:ensureAnonymousUser()` が未ログイン訪問者にも `signInAnonymously()` を実行するため、browser client の Postgres role は常に `authenticated`（実測 JWT: `role=authenticated` / `is_anonymous=true`）であり、既存の anon 専用 INSERT policy が実トラフィックに一致していなかった。`supabase/mirror_events_authenticated_insert.sql` で `FOR INSERT TO authenticated WITH CHECK (true)` を 1 件追加して解消。SELECT / UPDATE / DELETE policy は作っていないため read exposure は広がらない。`mirror_events` は owner 列を持たない設計（`schema.sql §5`）のため owner 条件は書けず、anon policy と条件を揃えた。
+
+**関連:** `supabase/mirror_select_exposure_migration.sql` / `supabase/mirror_events_authenticated_insert.sql` / `app/api/mirrors/route.ts` / `lib/mirrors/mirrorWriteServer.ts` / `lib/supabase/mirrorEventSink.ts`
+
+**残存リスク:** `supabase/schema.sql` は 4 mirror について anon の INSERT / UPDATE policy を宣言したままで、本番実態（policy 0 件）と乖離している。新規 project へ schema.sql をそのまま適用すると本番より緩い状態が再生される。schema.sql 側の追随は別 STEP。
 
 ## E-H3 — vitest 導入の再判断
 

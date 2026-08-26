@@ -145,7 +145,7 @@ Stage 3 以降（server reader が実際に Supabase を読む段階）に入る
 | PP-3 | auth-scoped table が anon から読めない（RLS が効いている） | ✅ 検証済み（12 table すべて 0 行） |
 | PP-4 | RLS policy の定義内容が `supabase/schema.sql` と一致する | ⚠️ **未検証**（`E-H1`） |
 | PP-5 | unique constraint / index が `supabase/schema.sql` と一致する | ⚠️ **未検証**（`E-H1`） |
-| PP-6 | `*_mirrors` の anon 可読 drift への対応方針が決まっている | ⚠️ **未決**（`E-H2`。Spine はこれらを読まないため Stage をブロックしない） |
+| PP-6 | `*_mirrors` の anon 可読 drift への対応方針が決まっている | ✅ **解決済**（`E-H2` = `RESOLVED`。2026-08-26 に本番の anon policy を削除し、書き込みを `/api/mirrors` へ移設） |
 
 ---
 
@@ -218,6 +218,55 @@ mirror_events           :  0 行
 
 → `E-H2`（Human decision）。**Exam Spine の Stage はブロックしないが、独立した対応が必要**。
 
+## 9.5 E-H2 の解消（2026-08-26・本番適用済み）
+
+```text
+E-H2 = RESOLVED
+```
+
+原因は「RLS 無効」ではなく、`schema.sql` に無い `"<table> anon select_for_upsert"`（`FOR SELECT TO anon USING (true)`）が 4 table すべてに存在したこと。browser の anon 直接 upsert（`INSERT ... ON CONFLICT DO UPDATE`）が対応する SELECT アクセスを要求するため置かれていた。書き込みを server route へ移設した上で anon policy を全削除した。
+
+```text
+Anonymous mirror read exposure closed in production.
+
+Four mirror tables:
+- browser SELECT/INSERT/UPDATE removed
+- writes mediated through /api/mirrors
+- production write verified after RLS hardening
+
+mirror_events:
+- remains write-only telemetry sink
+- required browser roles may INSERT
+- no SELECT policy
+```
+
+**適用後の本番実測**
+
+| table | RLS | anon/public policy | anon SELECT | auth SELECT | anon INSERT | auth INSERT | rows |
+|---|---|---|---|---|---|---|---|
+| `student_profile_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 21 |
+| `basic_info_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 12 |
+| `activity_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 6 |
+| `diagnosis_mirrors` | enabled | 0 | 0 行 | 0 行 | `42501` | `42501` | 3 |
+| `mirror_events` | enabled | INSERT のみ | 0 行 | 0 行 | 許可 | 許可 | 74 |
+
+UPDATE / DELETE は全 5 table・両 role で affected = 0。既存行の削除なし。
+
+**現行の書き込み経路**
+
+```text
+browser → POST /api/mirrors → server-side service_role writer → *_mirrors
+browser → mirror_events（telemetry のみ・INSERT only）
+```
+
+本番検証: 基本情報保存 1 回で `basic_info_mirrors.updated_at = 2026-08-26T15:09:04Z` が更新され、同一操作の telemetry が `mirror_events` に `feature=basicInfo / mirror_status=success / environment=production / duration_ms=1143 / created_at=2026-08-26T15:09:05Z` として記録された。
+
+**副次 incident（同日クローズ）:** policy 削除後、`mirror_events` への browser INSERT が `42501` になった。`ensureAnonymousUser()` が未ログイン訪問者にも `signInAnonymously()` を実行するため browser の Postgres role は常に `authenticated`（実測 JWT: `role=authenticated` / `is_anonymous=true`）であり、anon 専用 INSERT policy が実トラフィックに一致していなかった。`supabase/mirror_events_authenticated_insert.sql` で authenticated INSERT policy を 1 件追加して解消。SELECT policy は追加していない。
+
+**残存:** `supabase/schema.sql` は 4 mirror の anon INSERT / UPDATE policy を宣言したままで本番実態と乖離している（新規 project 適用時に本番より緩い状態を再生する）。追随は別 STEP。
+
+詳細は `EXAM_SPINE_DECISIONS.md` の `E-H2`。
+
 ---
 
 # 10. Unknowns
@@ -225,7 +274,7 @@ mirror_events           :  0 行
 | ID | 内容 | Blocker |
 |---|---|---|
 | `E-H1` | RLS policy 定義 / constraint / index の検証手段 | **Stage 3** |
-| `E-H2` | `*_mirrors` の anon 可読 drift への対応方針 | なし（独立対応） |
+| ~~`E-H2`~~ | ~~`*_mirrors` の anon 可読 drift への対応方針~~ | ✅ `RESOLVED`（2026-08-26。§9.4 参照） |
 | `E-H3` | vitest 導入の再判断 | **Stage 5** |
 | `E-H4` | Layer 2 永続化の再判断 | なし |
 | `E-H5` | `statement_drafts` の要否 | なし |
