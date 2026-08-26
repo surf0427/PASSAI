@@ -61,6 +61,21 @@ function walk(dir: string, out: string[] = []): string[] {
 function r1Register(): void {
   console.log('\nR1. Decision Register');
   const path = join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_DECISIONS.md');
+
+  // ★ Register が repo 内に 1 本しか無いこと（E-S37）★
+  //   Stage 4 の分岐事故は「Register が 2 本に割れた」ことが起点だった。
+  //   ID の一意性だけを見ても、Register 自体が複数あれば単一性は成立しない。
+  //   `## E-S<n>` 形式の decision を持つ file を Register とみなして数える。
+  const specDir = join(ROOT, 'docs/principles/exam_spine');
+  const registerFiles = readdirSync(specDir)
+    .filter((f) => f.endsWith('.md'))
+    .filter((f) => /^## E-[LSPH]\d+/m.test(readFileSync(join(specDir, f), 'utf8')));
+  check(
+    'Decision Register は repo 内に 1 本だけ',
+    registerFiles.length === 1 && registerFiles[0] === 'EXAM_SPINE_DECISIONS.md',
+    registerFiles.join(', '),
+  );
+
   const text = readFileSync(path, 'utf8');
   const ids = [...text.matchAll(/^## (E-[LSPH])(\d+)/gm)].map((m) => ({
     prefix: m[1],
