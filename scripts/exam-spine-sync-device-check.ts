@@ -645,26 +645,25 @@ function fieldSetFreeze(): void {
 
 function schemaVersionPin(): void {
   // writer の module private 定数と device 側の宣言が一致すること（ずれると全ユーザー永久 mismatch）
-  // ★ basic_info は regex pin から外す（Stage 5.1 収束）★
-  //   writer が `BASIC_INFO_SCHEMA_VERSION` を export し、deviceViews がそれを
-  //   import するようになったため、値のずれは **構造的に起こり得ない**。
-  //   regex で writer の書き方に依存する検査より強い保証なので、
-  //   ここでは「import して使っていること」を検査する。
+  // ★ 3 kind とも regex pin で writer と突き合わせる（Stage 5.1 stabilization）★
+  //   adapter が writer module を import すると layer inversion になり
+  //   sync-adapters の import 不変条件を破るため、deviceViews は値を宣言する。
+  //   そのぶん drift 検出はここが唯一の防壁なので、3 kind すべてを対象にする。
+  //   basic_info の writer は `SCHEMA_VERSION` を export 定数から導出しているため、
+  //   宣言側（`BASIC_INFO_SCHEMA_VERSION = "1"`）を読む。
   const deviceViewsSrc = readFileSync(
     join(REPO_ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  check('schema_version pin basic_info: writer の export を import している',
-    deviceViewsSrc.includes('BASIC_INFO_SCHEMA_VERSION') &&
-      /basic_info:\s*BASIC_INFO_SCHEMA_VERSION/.test(deviceViewsSrc));
-  check('schema_version pin basic_info: 値を再宣言していない',
-    !/basic_info:\s*'[0-9]+'/.test(deviceViewsSrc));
+  check('schema_version pin basic_info: adapter が writer module を import していない',
+    !deviceViewsSrc.includes("from '@/lib/supabase/"));
 
-  const pins: Array<[keyof typeof EXAM_DEVICE_SCHEMA_VERSIONS, string]> = [
-    ['activity', 'lib/supabase/activityLogs.ts'],
-    ['diagnosis', 'lib/supabase/diagnosisLogs.ts'],
+  const pins: Array<[keyof typeof EXAM_DEVICE_SCHEMA_VERSIONS, string, RegExp]> = [
+    ['basic_info', 'lib/supabase/basicInfoLogs.ts', /BASIC_INFO_SCHEMA_VERSION = "([^"]+)"/],
+    ['activity', 'lib/supabase/activityLogs.ts', /const SCHEMA_VERSION = "([^"]+)"/],
+    ['diagnosis', 'lib/supabase/diagnosisLogs.ts', /const SCHEMA_VERSION = "([^"]+)"/],
   ];
-  for (const [kind, file] of pins) {
+  for (const [kind, file, re] of pins) {
     const src = readFileSync(join(REPO_ROOT, file), 'utf8');
-    const m = /const SCHEMA_VERSION = "([^"]+)"/.exec(src);
+    const m = re.exec(src);
     check(`schema_version pin ${kind}: writer から読める`, m !== null, file);
     if (!m) continue;
     eq(`schema_version pin ${kind}: device 宣言と writer が一致`,

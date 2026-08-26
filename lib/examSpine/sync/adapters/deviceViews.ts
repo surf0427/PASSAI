@@ -60,7 +60,6 @@ import {
   selfPrItemView,
   statementReviewItemView,
 } from './views';
-import { BASIC_INFO_SCHEMA_VERSION } from '@/lib/supabase/basicInfoLogs';
 
 /**
  * ★ writer の schema_version 定数（device 側にも同じ値が要る）★
@@ -72,14 +71,12 @@ import { BASIC_INFO_SCHEMA_VERSION } from '@/lib/supabase/basicInfoLogs';
  *     lib/supabase/diagnosisLogs.ts:36  const SCHEMA_VERSION = "3"
  */
 export const EXAM_DEVICE_SCHEMA_VERSIONS = {
-  // ★ basic_info は writer が export した定数をそのまま使う（Stage 5.1 収束）★
-  //   Stage 5.0 で `BASIC_INFO_SCHEMA_VERSION` が export されたため、
-  //   ここで値を再宣言する必要が無くなった。import にすることで
-  //   「writer が bump したのに device が古い値のまま」という状態が
-  //   **型として起こり得なくなる**（QA の pin 検査より強い保証）。
-  basic_info: BASIC_INFO_SCHEMA_VERSION,
-  // activity / diagnosis の定数は writer 側でまだ module private のため、
-  //   値を宣言したうえで QA が writer の実ソースと突き合わせる。
+  // ★ 3 kind とも「値を宣言し、QA が writer の実ソースと突き合わせる」で統一する ★
+  //   adapter が writer module（persistence 実装）を import すると layer inversion に
+  //   なり、`adapters の import は sync core + Spine 内部 contract + 許可 domain 型のみ`
+  //   という不変条件（sync-adapters QA）を破る。adapter を pure に保つ方を優先し、
+  //   drift は QA の pin 検査（writer の実ソースを読んで一致を確認）で塞ぐ。
+  basic_info: '1',
   activity: '1',
   diagnosis: '3',
 } as const;
