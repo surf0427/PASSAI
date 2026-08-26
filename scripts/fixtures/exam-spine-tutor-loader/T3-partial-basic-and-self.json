@@ -1,0 +1,95 @@
+{
+  "context": {
+    "basicInfo": {
+      "grade": "高校2年",
+      "targetSchools": [
+        "サンプル大学X"
+      ]
+    },
+    "selfAnalysis": {
+      "strengths": [
+        "サンプル強みのみ"
+      ]
+    },
+    "sourceSummary": {
+      "hasActivity": false,
+      "hasBasicInfo": true,
+      "hasDiagnosis": false,
+      "hasEssay": false,
+      "hasInterviewAi": false,
+      "hasInterviewPractice": false,
+      "hasPresentation": false,
+      "hasSelfAnalysis": true,
+      "hasStatementReview": false
+    }
+  },
+  "description": "一部 source のみ（basic_info + self_analysis）。他は空",
+  "fixtureId": "T3-partial-basic-and-self",
+  "parity": false,
+  "queries": [
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "activity_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "basic_info_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "diagnosis_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000",
+        "status=completed"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, interview_type, interview_ai_results(feedback)",
+      "table": "interview_ai_sessions",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, feedback, attempt_id",
+      "table": "presentation_results",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "analysis, summary, created_at",
+      "table": "self_analysis_logs",
+      "terminal": "await"
+    }
+  ],
+  "section": "【保存済みの生徒情報】\n以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。\n保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。\n\n・保存情報では、高校2年 のようです。\n・過去入力では、志望校として「サンプル大学X」が挙がっています。\n・保存情報では、強みとして「サンプル強みのみ」が整理されています。\n・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。\n\nこの生徒情報の扱い方:\n・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。\n・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。",
+  "sectionLength": 320,
+  "trailingInstructionsPresent": true
+}

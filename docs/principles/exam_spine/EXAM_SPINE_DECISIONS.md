@@ -12,6 +12,7 @@
 |---|---|
 | `LOCKED` | 確定。変更には本ファイルの更新（＝明示的な決定）が要る |
 | `PENDING_HUMAN` | Human の判断が必要。Claude Code が勝手に決めてはならない |
+| `RESOLVED` | `PENDING_HUMAN` だった項目が決定され、対応が完了・検証済み（判断内容と実測を本文に残す） |
 | `SUPERSEDED` | 後続 Decision に置き換えられた（履歴として残す） |
 
 # 2. ID 体系
@@ -1255,9 +1256,9 @@ Exam-specific differences / Rollback implications
 
 ---
 
-# 6. Human decisions（`PENDING_HUMAN`）
+# 6. Human decisions（`PENDING_HUMAN` / `RESOLVED`）
 
-Claude Code はこれらを勝手に決めてはならない。
+Claude Code はこれらを勝手に決めてはならない。決定済みのものは `RESOLVED` として、判断内容と実測を残したまま本節に置く。
 
 ## E-H1 — 本番 DDL の完全検証（U1 の残り）
 

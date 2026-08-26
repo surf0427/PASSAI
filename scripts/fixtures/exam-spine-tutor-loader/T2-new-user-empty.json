@@ -1,0 +1,84 @@
+{
+  "context": {
+    "sourceSummary": {
+      "hasActivity": false,
+      "hasBasicInfo": false,
+      "hasDiagnosis": false,
+      "hasEssay": false,
+      "hasInterviewAi": false,
+      "hasInterviewPractice": false,
+      "hasPresentation": false,
+      "hasSelfAnalysis": false,
+      "hasStatementReview": false
+    }
+  },
+  "description": "新規ユーザー。全 table が空（fail-open で空 context を返すこと）",
+  "fixtureId": "T2-new-user-empty",
+  "parity": false,
+  "queries": [
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "activity_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "basic_info_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "diagnosis_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000",
+        "status=completed"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, interview_type, interview_ai_results(feedback)",
+      "table": "interview_ai_sessions",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, feedback, attempt_id",
+      "table": "presentation_results",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "analysis, summary, created_at",
+      "table": "self_analysis_logs",
+      "terminal": "await"
+    }
+  ],
+  "section": "",
+  "sectionLength": 0,
+  "trailingInstructionsPresent": true
+}

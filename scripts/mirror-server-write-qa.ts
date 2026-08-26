@@ -10,6 +10,8 @@
 //   3. 4 writer が anon 直接書き込みを持たないこと（静的 grep）
 //   4. service_role が client bundle 経路へ露出しないこと（静的 grep）
 //   5. route が payload をレスポンスへ返さないこと（静的 grep）
+//   6. supabase/schema.sql の RLS 宣言が production security model と一致すること
+//      （4 mirror table に browser-role policy 0 件 / mirror_events は INSERT のみ）
 //
 // 厳守:
 //   - network / Supabase / AI 呼び出しゼロ（fetch を trap して機械的に担保）。
@@ -207,6 +209,89 @@ check(
 );
 check('rate limit を通す', route.includes('checkServerRateLimit'));
 check('table 名を body から受け取らない', !route.includes('body.table') && !route.includes('.table'));
+
+// ── 6. schema.sql の policy 宣言が production security model と一致 ──
+//    drift 再発防止: schema.sql を fresh project / DR / test bootstrap へ
+//    適用したときに、production で削除済みの browser-role policy が
+//    再生成されないことを機械検証する。
+console.log('\n[6] schema.sql の RLS 宣言（drift ガード）');
+
+/** schema.sql から CREATE POLICY 宣言を抽出する（SQL コメント行は除去済み）。 */
+function parsePolicies(sql: string): Array<{ name: string; table: string; cmd: string; roles: string[] }> {
+  const body = sql
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('--'))
+    .join('\n');
+  const re =
+    /CREATE\s+POLICY\s+"([^"]+)"\s+ON\s+([A-Za-z0-9_.]+)\s+FOR\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\s+TO\s+([A-Za-z0-9_,\s]+?)\s+(?:USING|WITH\s+CHECK)\b/gi;
+  const out: Array<{ name: string; table: string; cmd: string; roles: string[] }> = [];
+  for (const m of body.matchAll(re)) {
+    out.push({
+      name: m[1],
+      table: m[2].replace(/^public\./, ''),
+      cmd: m[3].toUpperCase(),
+      roles: m[4].split(',').map((r) => r.trim()).filter(Boolean),
+    });
+  }
+  return out;
+}
+
+const schemaSql = read('supabase/schema.sql');
+const policies = parsePolicies(schemaSql);
+// 少なくとも他 table の policy は拾えているはず（parser が壊れたら drift を
+// 見逃すため、負のコントロールとして下限を置く）。
+check('policy parser が宣言を抽出できている', policies.length >= 10, `parsed=${policies.length}`);
+
+const MIRROR_TABLES = MIRROR_KINDS.map((k) => MIRROR_KIND_TABLE[k]);
+for (const table of MIRROR_TABLES) {
+  const own = policies.filter((p) => p.table === table);
+  check(
+    `${table}: CREATE POLICY が 0 件（browser direct write なし）`,
+    own.length === 0,
+    own.map((p) => `"${p.name}" ${p.cmd} TO ${p.roles.join('/')}`).join(' | '),
+  );
+  check(
+    `${table}: RLS が有効化されている`,
+    new RegExp(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`).test(schemaSql),
+  );
+}
+
+// mirror_events は write-only telemetry sink。INSERT 2 件のみ。
+const events = policies.filter((p) => p.table === 'mirror_events');
+check(
+  'mirror_events: anon INSERT policy が 1 件',
+  events.filter((p) => p.cmd === 'INSERT' && p.roles.includes('anon')).length === 1,
+);
+check(
+  'mirror_events: authenticated INSERT policy が 1 件',
+  events.filter((p) => p.cmd === 'INSERT' && p.roles.includes('authenticated')).length === 1,
+);
+check(
+  'mirror_events: INSERT 以外の policy が 0 件（SELECT/UPDATE/DELETE/ALL なし）',
+  events.filter((p) => p.cmd !== 'INSERT').length === 0,
+  events.filter((p) => p.cmd !== 'INSERT').map((p) => `"${p.name}" ${p.cmd}`).join(' | '),
+);
+check(
+  'mirror_events: RLS が有効化されている',
+  /ALTER TABLE mirror_events ENABLE ROW LEVEL SECURITY/.test(schemaSql),
+);
+
+// 旧 drift の固有名。production から削除済みなので宣言側にも残らないこと。
+check(
+  'schema.sql に select_for_upsert が残っていない',
+  !schemaSql.includes('select_for_upsert') ||
+    // 履歴コメントとしての言及は許容（宣言でなければよい）
+    !/CREATE\s+POLICY\s+"[^"]*select_for_upsert/i.test(schemaSql),
+);
+
+// mirror 系 table への GRANT / REVOKE は本 QA の責務外だが、
+// 宣言が増えていたら気付けるようにしておく（現状 0 件）。
+check(
+  'schema.sql は mirror table へ GRANT / REVOKE を宣言していない',
+  !new RegExp(`(GRANT|REVOKE)[^;]*(${[...MIRROR_TABLES, 'mirror_events'].join('|')})`, 'i').test(
+    schemaSql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n'),
+  ),
+);
 
 // ── 結果 ──────────────────────────────────────────────────────────
 console.log(`\n[network] fetch calls = ${fetchCalls}（外部通信ゼロ）`);
