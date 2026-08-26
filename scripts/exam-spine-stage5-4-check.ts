@@ -455,20 +455,18 @@ async function t10Isolation(): Promise<void> {
   console.log(`  info  canonical query count = ${withClaim.ctx.diagnostics.sourceQueryCount}`);
 }
 
-// ── 11. truncation blocker（明示的に固定する）────────────────────────
+// ── 11. overflow semantics（E-S43 で解消済み）─────────────────────────
 async function t11TruncationBlocker(): Promise<void> {
-  console.log('\n11. Truncation blocker');
-  // server の行数が cap を超えると Stage 3 は truncated を立て、Stage 4 は
-  // それを unreadable に落とす（E-S8 / E-S30）。claim が一致していても available にならない。
+  console.log('\n11. Overflow semantics (E-S43)');
+  // ★ Stage 5.4 時点では「行数 > cap → unreadable」が blocker（E-S41）だった。
+  //   Stage 5.5 の E-S43 で「cap は比較 window」と定め、overflow は unreadable に
+  //   しないようにした。ここではその解消後の挙動を固定する。
   const over = await assemble({ logs: DEVICE_LOGS, claim: deviceSelfAnalysisToken(DEVICE_LOGS) });
-  eq('T11 行数 > cap の server は unreadable', over.source?.state, 'unreadable');
-  eq('T11 unreadable では sync 判定に進まない', over.source?.syncStatus, null);
-  eq('T11 unreadable では origin は bridge のまま', over.source?.origin, 'bridge');
-  check('T11 truncated が readStatus に残る', over.source?.readStatus === 'truncated',
-    String(over.source?.readStatus));
-  // ★ これは欠陥ではなく E-S8 の設計どおりの挙動。ただし self_analysis は
-  //   log が貯まる kind なので、実運用では大半の user が該当し得る。
-  //   claim wiring とは別の migration blocker として報告する。
+  eq('T11 行数 > cap でも unreadable にしない', over.source?.state, 'available');
+  eq('T11 window 同士が一致すれば verified', over.source?.syncStatus, 'verified');
+  eq('T11 overflow の観測は readStatus に残る', over.source?.readStatus, 'truncated');
+  eq('T11 truncated flag が provenance に残る', over.source?.truncated, true);
+  eq('T11 origin は server', over.source?.origin, 'server');
 }
 
 
