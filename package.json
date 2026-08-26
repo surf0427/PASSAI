@@ -21,6 +21,7 @@
     "qa:examSpine:characterization": "npx tsx scripts/exam-spine-characterization.ts --check",
     "qa:examSpine:characterization:record": "npx tsx scripts/exam-spine-characterization.ts --record",
     "qa:examSpine:stage1": "npx tsx scripts/exam-spine-stage1-check.ts",
+    "qa:examSpine:stage2": "npx tsx scripts/exam-spine-stage2-check.ts",
     "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
   },
   "dependencies": {

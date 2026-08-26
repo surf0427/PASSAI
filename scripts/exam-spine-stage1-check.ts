@@ -20,7 +20,7 @@
 // Upstream architecture reference: PASSAI-CAREER/scripts/（QA script 方式）
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 // ── 外部通信 trap（AI calls = 0 の機械的証明）──────────────────────
 let fetchCallCount = 0;
@@ -248,17 +248,55 @@ function main(): void {
   check(`CAREER runtime dependency = 0（走査 ${spineFiles.length} file）`,
     boundaryHits.length === 0, boundaryHits.join('\n          '));
 
-  const importHits: string[] = [];
-  for (const file of spineFiles) {
+  // Stage 1 の宣言層（types / purpose / budget / sourceData）は **完全に自己完結**でなければ
+  // ならない。ここに外部 import が生えると「現行挙動の宣言」がいつの間にか実装依存になる。
+  const declarationFiles = spineFiles.filter((f) => {
+    const rel = relative(REPO_ROOT, f);
+    return !rel.includes(`${sep}blocks${sep}`) && !rel.includes(`${sep}orchestrator${sep}`);
+  });
+  const declarationImportHits: string[] = [];
+  for (const file of declarationFiles) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/gm)) {
       const spec = m[1];
       const local = spec.startsWith('.') || spec.startsWith('@/lib/examSpine');
-      if (!local) importHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+      if (!local) declarationImportHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
     }
   }
-  check('lib/examSpine/** の import は Spine 内部のみ（外部 runtime 依存ゼロ）',
-    importHits.length === 0, importHits.join('\n          '));
+  check('Stage 1 宣言層の import は Spine 内部のみ（外部 runtime 依存ゼロ）',
+    declarationImportHits.length === 0, declarationImportHits.join('\n          '));
+
+  // Stage 2 の block / orchestrator 層は、**現行の共有 formatter を呼ぶ**ことが仕事なので
+  // 外部 import を持つ（同じ section を Spine 側で二重実装しないため）。
+  // ただし「何を import してよいか」は無制限にしない:
+  //   - server / DB / AI / storage 系を引き込んだ瞬間に Stage 2 が pure でなくなる
+  //   - Stage 2 は shadow implementation であり、production が Spine を import しないことは
+  //     直後の「8. Runtime wiring」で別途担保される
+  const FORBIDDEN_IMPORT_PATTERNS = [
+    'server-only',
+    '@supabase',
+    '@/lib/supabase',
+    '@anthropic-ai',
+    'openai',
+    '@/lib/billing',
+    'Storage',
+    'next/',
+  ];
+  const stage2Files = spineFiles.filter((f) => !declarationFiles.includes(f));
+  const impureImportHits: string[] = [];
+  for (const file of stage2Files) {
+    const text = readFileSync(file, 'utf8');
+    for (const m of text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/gm)) {
+      const spec = m[1];
+      // type-only import は runtime dependency を作らないため対象外。
+      if (/^\s*import\s+type\s/.test(m[0])) continue;
+      for (const bad of FORBIDDEN_IMPORT_PATTERNS) {
+        if (spec.includes(bad)) impureImportHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+      }
+    }
+  }
+  check('Stage 2 実装層は server / DB / AI / storage を import しない',
+    impureImportHits.length === 0, impureImportHits.join('\n          '));
 
   // ── 8. Stage 1 は dead module である ────────────────────────────
   console.log('\n8. Runtime wiring');
