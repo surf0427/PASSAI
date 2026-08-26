@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `0cd63f94289c17830baca0dd073f0495218669fe` |
+| Canonical HEAD at this arbitration | `90fff84eb1d48acf30d4408b36af2504b4508deb` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -51,7 +51,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 |---|---|---|---|
 | `exam-spine-w1-convergence-v2` | `3285d55`（継続前進中） | **NON_CANONICAL_STAGE5_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1（shadow comparison / Packet J 相当）と Stage 5.2（canonical diagnosis block）を追加した |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
-| `exam-spine-w5-r5-evidence` | `398e7f4` | **REQUIRED_FOR_LATER_STAGE5** | R5（essay の jsonb sub-path）を production evidence で closing し、`EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` から essay を外す。**runtime code を含む**（`sync/adapters/registry.ts`）ため evidence-only ではない。最初の切替（tutor / basic_info・E-S40）には essay が関与しないので Stage 5 entry の blocker ではない |
+| `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
 
 ### Deferred Stage 5 candidate（成果は保全する）
