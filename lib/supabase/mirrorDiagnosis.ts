@@ -19,7 +19,7 @@
  * `lib/diagnosisStorage.ts:saveDiagnosisResult()` after a successful canonical
  * localStorage write. The dynamic import keeps the browser-only Supabase
  * client out of server route bundles — this file statically imports
- * `./browserClient` (a `"use client"` module), so it must remain reachable
+ * the observability sink chain, so it must remain reachable
  * only via that lazy chunk.
  *
  * Phase1 contract enforced by this file:
@@ -31,12 +31,16 @@
  *   - No payload stripping, no normalisation, no PII filter layer.
  *   - No auth UX, no session checks, no user-visible error path.
  *
- * PROVISIONAL TABLE IDENTIFIER:
- *   `MIRROR_TABLE` below points at `diagnosis_mirrors`. The table DDL is
- *   defined by docs/supabase/diagnosis_mirror_schema_preview.md and will be
- *   added to `supabase/schema.sql` in a follow-up STEP. Until then, upsert
- *   resolves with PostgREST `{ error }` and is reported as
- *   `failure / network_error` in `mirror_events`; canonical UX is unaffected.
+ * WRITE PATH (anon 直接 upsert は廃止):
+ *   本 helper は Supabase へ直接書かない。`postMirror` で POST /api/mirrors へ送り、
+ *   server-only writer (lib/mirrors/mirrorWriteServer.ts) が service_role で upsert する。
+ *   理由: `INSERT ... ON CONFLICT DO UPDATE` は RLS 下で対応する SELECT アクセスを要求し、
+ *   そのために置かれていた `"<table> anon select_for_upsert"` (FOR SELECT TO anon USING (true))
+ *   が mirror 全行を anon key へ露出させていたため。
+ *   書き込み先 table は kind から server 側の固定 map が解決する（client は table 名を送らない）。
+ *
+ *   ★ `client_unavailable` は本経路では発生しない（browser Supabase client を使わないため）。
+ *     mirror_events への観測書き込みだけは従来どおり browser client を使う。
  *
  * sourceHash strategy:
  *   `source_hash = sha256(JSON.stringify({ answers, resultType }) + SCHEMA_VERSION)`
@@ -59,7 +63,7 @@
  *   `RESULT_TYPES` title / description copy edits do NOT trigger a bump.
  */
 
-import { getBrowserSupabaseClient } from "./browserClient";
+import { postMirror } from "./mirrorTransport";
 import { isSupabaseEnvAvailable } from "./env";
 import { isMirrorRuntimeEnabled } from "./mirrorConfig";
 import { finalize } from "./mirrorFinalize";
@@ -72,7 +76,9 @@ import type { MirrorResult } from "./mirrorTypes";
 const MIRROR_FEATURE = "diagnosis";
 
 // PROVISIONAL — see header.
-const MIRROR_TABLE = "diagnosis_mirrors";
+// 書き込み先は kind でのみ指定する。table 名の解決は server 側
+// (lib/mirrors/mirrorKinds.ts の固定 map) が単独で行う。
+const MIRROR_KIND = "diagnosis" as const;
 
 // Pin the current diagnosis canonical shape version. Bump on any change to
 // `QUESTIONS` array, `DiagnosisType` enum, or `calcResultType` logic.
@@ -128,11 +134,6 @@ export async function mirrorDiagnosisToSupabase(
     return finalize(MIRROR_FEATURE, mirrorFailed("missing_env"), meta);
   }
 
-  const client = getBrowserSupabaseClient();
-  if (!client) {
-    return finalize(MIRROR_FEATURE, mirrorFailed("client_unavailable"), meta);
-  }
-
   try {
     // Hash input deliberately narrows to `{ answers, resultType }`. See
     // header for what is and is not in the hash and why.
@@ -143,19 +144,18 @@ export async function mirrorDiagnosisToSupabase(
       }) + SCHEMA_VERSION;
     const sourceHash = await sha256Hex(hashInput);
 
-    const { error } = await client.from(MIRROR_TABLE).upsert(
-      {
-        source_hash: sourceHash,
-        schema_version: SCHEMA_VERSION,
-        payload: input.payload,
-      },
-      { onConflict: "source_hash" },
-    );
+    // 書き込みは server route 経由（anon の直接 upsert は廃止）。
+    const result = await postMirror({
+      kind: MIRROR_KIND,
+      sourceHash,
+      schemaVersion: SCHEMA_VERSION,
+      payload: input.payload,
+    });
 
-    if (error) {
+    if (!result.ok) {
       return finalize(
         MIRROR_FEATURE,
-        mirrorFailed("network_error", error.code),
+        mirrorFailed("network_error", result.code),
         meta,
       );
     }
