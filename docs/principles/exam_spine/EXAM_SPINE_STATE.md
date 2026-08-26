@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `90fff84eb1d48acf30d4408b36af2504b4508deb` |
+| Canonical HEAD at this arbitration | `S5-P2 lineage convergence 時点の tip`（記録: `exam-spine-s5p2-lineage-convergence`。前回記録は `90fff84`） |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -52,7 +52,25 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 | `exam-spine-w1-convergence-v2` | `3285d55`（継続前進中） | **NON_CANONICAL_STAGE5_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1（shadow comparison / Packet J 相当）と Stage 5.2（canonical diagnosis block）を追加した |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
-| `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
+| `exam-spine-s5p1-transport-convergence` | `fb32d50` | **PROMOTED（S5-P2 で昇格済み）** | code commit `ac1ef85` を cherry-pick で canonical へ取り込み、**E-S42**（人間裁定 / E-H7 = OPTION C）として登録した。`E-S39` Decision 2 を supersede する |
+| `exam-spine-w1-packet-e` | `ea20e07` | **MERGED（S5-P2 で統合済み）** | unique commit 13 本を列挙・審査のうえ merge。legacy read layer の退避先（`lib/contextBuilders/tutor/serverRead/**` 4 file）と shipping tutor runtime / QA を canonical へ合流させ、**single integration base** を成立させた。**branch は削除しない** |
+
+### Single Integration Base（S5-P2 で成立）
+
+```text
+SINGLE_INTEGRATION_BASE            = YES
+CANONICAL_NAMESPACE_PRESENT        = YES   lib/examSpine/**（40 file）
+LEGACY_SERVERREAD_PRESENT          = YES   lib/contextBuilders/tutor/serverRead/**（4 file）
+CONSUMER_AUTHORITY                 = legacy（tutorContext → serverRead）
+CANONICAL_RUNTIME                  = pilot / shadow のみ（E-S34 allowlist 2 file）
+ACTIVE_DEVICE_CLAIM_WIRE_FORMATS   = 1（edc1 / E-S33 + E-S42）
+CONSUMER_SWITCH_PERFORMED          = NO
+LEGACY_SERVERREAD_DELETE_READY     = NO   （Packet 3 の consumer verification 後）
+```
+
+canonical implementation と legacy implementation が **意図的に共存**する移行状態である。
+どちらが authority かは path ではなく consumer が決めており、現時点の consumer authority は
+legacy 側にある。この共存は Packet 3（runtime consumption integration）まで維持する。
 
 ### Deferred Stage 5 candidate（成果は保全する）
 

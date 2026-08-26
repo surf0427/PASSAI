@@ -79,6 +79,24 @@ check(
   shadowLeak.join(', '),
 );
 
+// ── 2b. relocation が巻き戻っていないこと（E-S24 / Packet E の核心）───
+//   Packet E は legacy L1 read layer を lib/examSpine/** の外へ退避して path 衝突を 0 にした。
+//   同名 file が canonical namespace へ戻ると、どちらが authority か path から読めなくなる
+//   （Canon §84）。lineage convergence で巻き戻っていないことを構造で固定する。
+const RELOCATED_BASENAMES = [
+  'reader.server.ts',
+  'snapshotCache.server.ts',
+  'sourceState.ts',
+];
+const relocationRegression = spineFiles.filter((f) =>
+  RELOCATED_BASENAMES.some((b) => f.endsWith(`/${b}`)),
+);
+check(
+  'legacy read layer が canonical namespace へ戻っていない（E-S24）',
+  relocationRegression.length === 0,
+  relocationRegression.join(', '),
+);
+
 // ── 3. production runtime importer は E-S34 の allowlist だけ（Packet E の核心）──
 //   scripts/** は QA であり production runtime ではないので対象外。
 //   lib/examSpine/** 内部の相互 import も当然除外する。

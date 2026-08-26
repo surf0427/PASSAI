@@ -130,6 +130,25 @@ function r1Register(): void {
     wireCodecs.join(', '),
   );
 
+  // ★ E-S33 が固定した wire 定数の **値** を pin する ★
+  //   宣言の場所だけを見ていると、値の rename を検出できない。header 名や wire version を
+  //   黙って変えると、既にデプロイ済みの client は旧 header を送り続け、server は
+  //   1 件も claim を受け取らない。結果は全 kind `unclaimed` という **正常な状態**なので
+  //   runtime では観測できない（fail-open が吸収する）。したがって値を契約として固定する。
+  const claimTypes = readFileSync(join(ROOT, 'lib/examSpine/sync/claim/types.ts'), 'utf8');
+  check(
+    "E-S33: claim header 名が 'x-exam-spine-device-claim' で固定されている",
+    /EXAM_DEVICE_CLAIM_HEADER\s*=\s*'x-exam-spine-device-claim'/.test(claimTypes),
+  );
+  check(
+    "E-S33: wire version が 'edc1' で固定されている",
+    /EXAM_DEVICE_CLAIM_VERSION\s*=\s*'edc1'/.test(claimTypes),
+  );
+  check(
+    'E-S33: token pattern が efp1 の 64 hex で固定されている',
+    /EXAM_DEVICE_CLAIM_TOKEN_PATTERN\s*=\s*\/\^efp1:\[0-9a-f\]\{64\}\$\//.test(claimTypes),
+  );
+
   // ★ 退役した wire format が active code に残っていないこと（E-S42）★
   //   docs の歴史記述は許す。active code に残ることは許さない。
   const retiredWire: string[] = [];
