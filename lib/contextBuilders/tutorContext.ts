@@ -73,6 +73,9 @@ import {
   readLatestInterviewAiRow,
   readLatestPresentationResultRow,
   readLatestSelfAnalysisRow,
+  readLatestStatementReviewRow,
+  readLatestEssayReviewsRow,
+  readLatestInterviewPracticeRow,
   readPresentationSessionByAttempt,
   resolveExamSpineClient,
   type ExamSpineReadOptions,
@@ -94,6 +97,9 @@ export type TutorStudentContext = {
   // basic_info_logs 由来（snapshot）。PII（氏名 / 評定 / 欠席）は含めない。
   basicInfo?: {
     grade?: string;
+    // 文系 / 理系 / 未定。basic_info_logs.payload に durable に存在する
+    // （境界が strip するのは name のみ）。Phase 3.5 で projection へ復帰。
+    track?: string;
     examType?: string;
     targetSchools?: string[];
     targetFields?: string[];
@@ -135,6 +141,21 @@ export type TutorStudentContext = {
     // カテゴリ評価（存在時のみ）。weak/normal/strong を日本語ラベル化済み。
     categories?: { label: string; level: string }[];
   };
+  // statement_review_history 由来（最新 1 件）。Phase 3.5 parity source。
+  //   - 志望理由書の本文 / 点数 / 良かった点は含めない。課題（weaknesses）のみ。
+  statementReview?: {
+    weaknesses: string[];
+  };
+  // essay_workspaces 由来（最新 workspace の最新 review）。Phase 3.5 parity source。
+  //   - 小論文本文 / essayBodySnapshot / 点数は含めない。課題（weakPoints）のみ。
+  essay?: {
+    weakPoints: string[];
+  };
+  // interview_practice_records 由来（対人の面接練習・最新 1 件）。Phase 3.5 parity source。
+  //   ⚠️ interviewAi（AI 面接）とは別。Q&A 本文 / betterAnswer は含めない。
+  interviewPractice?: {
+    issues: string[];
+  };
   // どの source が取得できたかの真偽サマリ（section 構築・観測用）。
   sourceSummary: {
     hasSelfAnalysis: boolean;
@@ -143,6 +164,10 @@ export type TutorStudentContext = {
     hasActivity: boolean;
     hasInterviewAi: boolean;
     hasPresentation: boolean;
+    // Phase 3.5 parity source（canary OFF では常に false = 読みに行かない）。
+    hasStatementReview: boolean;
+    hasEssay: boolean;
+    hasInterviewPractice: boolean;
   };
 };
 
@@ -162,6 +187,17 @@ const MAX_TOTAL_LENGTH = 1200;
 const MAX_INTERVIEW_AI_GOOD = 3;
 const MAX_INTERVIEW_AI_IMPROVE = 3;
 const MAX_INTERVIEW_AI_NEXT = 2;
+// Phase 3.5 parity source の上限。legacy block2（lib/contextBuilders/tutorStudentContext.ts）
+// と同じ件数・文字数にそろえる。ここを変えると canary ON の prompt 文言が変わる。
+const MAX_REVIEW_WEAKNESSES = 2; // 志望理由書レビューの課題（legacy と同じ）
+const MAX_REVIEW_WEAKNESS_LENGTH = 60;
+const MAX_ESSAY_WEAKPOINTS = 1; // 小論文添削の課題（legacy は先頭 1 件のみ）
+const MAX_PRACTICE_ITEMS = 3; // 対人面接練習の課題
+const MAX_PRACTICE_ITEM_LENGTH = 80;
+// canary ON では parity source の分だけ section が伸びる。OFF の既定 1200 のままだと
+// 末尾の「この生徒情報の扱い方」（AI への指示）が hard cut されうるため、ON だけ広げる。
+const MAX_TOTAL_LENGTH_PARITY = 1800;
+
 // プレゼン結果サマリの件数上限（録画 / STT 全文 / Q&A 履歴は渡さない。結果画面の主要項目だけ短く渡す）。
 const MAX_PRESENTATION_GOOD = 3;
 const MAX_PRESENTATION_IMPROVE = 3;
@@ -283,6 +319,9 @@ function projectBasicInfo(
   if (!payload) return {};
 
   const grade = truncate(toTrimmedString(payload.grade), MAX_ITEM_LENGTH);
+  // track（文系 / 理系 / 未定）。payload に durable に存在する。
+  // ⚠️ 同じ payload にある overallGpa / subjectGrades / name は評定・PII のため読まない。
+  const track = truncate(toTrimmedString(payload.track), MAX_ITEM_LENGTH);
   const examType = toStringArray(payload.examTypes, MAX_TARGETS, MAX_ITEM_LENGTH).join('・');
 
   const prefs = Array.isArray(payload.preferences) ? payload.preferences : [];
@@ -299,6 +338,7 @@ function projectBasicInfo(
 
   const hasAny =
     grade !== '' ||
+    track !== '' ||
     examType !== '' ||
     targetSchools.length > 0 ||
     targetFields.length > 0;
@@ -307,6 +347,7 @@ function projectBasicInfo(
   return {
     basicInfo: {
       ...(grade !== '' ? { grade } : {}),
+      ...(track !== '' ? { track } : {}),
       ...(examType !== '' ? { examType } : {}),
       ...(targetSchools.length > 0 ? { targetSchools } : {}),
       ...(targetFields.length > 0 ? { targetFields } : {}),
@@ -491,6 +532,107 @@ function projectPresentationSession(
   };
 }
 
+// ── projection: Phase 3.5 parity source ───────────────────────────
+//
+// legacy block2（lib/contextBuilders/tutorStudentContext.ts）と同じ意味論・同じ上限で
+// 課題だけを取り出す。本文・点数・良かった点は載せない。
+
+// statement_review_history.result（StatementResult）→ 課題 2 件。
+// legacy: buildStatementWeaknessLine（weaknesses 上位 2 件 / 各 60 字）。
+function projectStatementReview(
+  rec: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
+  if (!rec) return {};
+  const result = asRecord(rec.result);
+  if (!result) return {};
+  const weaknesses = toStringArray(
+    result.weaknesses,
+    MAX_REVIEW_WEAKNESSES,
+    MAX_REVIEW_WEAKNESS_LENGTH,
+  );
+  if (weaknesses.length === 0) return {};
+  return { statementReview: { weaknesses } };
+}
+
+// essay_workspaces の reviews 配列 → 最新 review の課題 1 件。
+// legacy: buildEssayWeaknessLine（weakPoints 先頭 1 件 / 60 字）。
+//
+// reviews は append-only なので **末尾が最新**。
+// PostgREST の `->` は json / text のどちらで返ることもあるため両方を受ける。
+function projectEssay(
+  rec: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
+  if (!rec) return {};
+
+  let raw: unknown = rec.reviews;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return {};
+
+  const latest = asRecord(raw[raw.length - 1]);
+  if (!latest) return {};
+
+  const weakPoints = toStringArray(
+    latest.weakPoints,
+    MAX_ESSAY_WEAKPOINTS,
+    MAX_REVIEW_WEAKNESS_LENGTH,
+  );
+  if (weakPoints.length === 0) return {};
+  return { essay: { weakPoints } };
+}
+
+// interview_practice_records → 対人面接練習の課題。
+// legacy: buildInterviewLine の優先順位をそのまま踏襲する。
+//   1. feedback_json.improvements（AI フィードバックの改善点）
+//   2. 自己記録（improvement_summary → what_went_wrong）
+//   3. どちらも無ければ出さない
+function projectInterviewPractice(
+  rec: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
+  if (!rec) return {};
+
+  // 優先順位 1: feedback_json.improvements
+  //   column は jsonb。文字列で入っている旧データも考慮して両方を受ける。
+  let feedbackRaw: unknown = rec.feedback_json;
+  if (typeof feedbackRaw === 'string') {
+    try {
+      feedbackRaw = JSON.parse(feedbackRaw);
+    } catch {
+      feedbackRaw = null;
+    }
+  }
+  const feedback = asRecord(feedbackRaw);
+  if (feedback) {
+    const improvements = toStringArray(
+      feedback.improvements,
+      MAX_PRACTICE_ITEMS,
+      MAX_PRACTICE_ITEM_LENGTH,
+    );
+    if (improvements.length > 0) {
+      return { interviewPractice: { issues: improvements } };
+    }
+  }
+
+  // 優先順位 2: 自己記録
+  const selfNoted = [
+    toTrimmedString(rec.improvement_summary),
+    toTrimmedString(rec.what_went_wrong),
+  ]
+    .filter((v) => v !== '')
+    .slice(0, MAX_PRACTICE_ITEMS)
+    .map((v) => truncate(v, MAX_PRACTICE_ITEM_LENGTH));
+  if (selfNoted.length > 0) {
+    return { interviewPractice: { issues: selfNoted } };
+  }
+
+  return {};
+}
+
 // ISO 文字列 → JST の年月日（不正値は ''）。section builder は純粋関数のため日時整形はここで行う。
 function formatDateJst(iso: string): string {
   if (!iso) return '';
@@ -600,6 +742,30 @@ async function runPresentationUnit(
   };
 }
 
+async function runStatementReviewUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readLatestStatementReviewRow(client, userId, TUTOR_READ_OPTIONS);
+  return projectStatementReview(sourceValueOrNull(state));
+}
+
+async function runEssayUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readLatestEssayReviewsRow(client, userId, TUTOR_READ_OPTIONS);
+  return projectEssay(sourceValueOrNull(state));
+}
+
+async function runInterviewPracticeUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readLatestInterviewPracticeRow(client, userId, TUTOR_READ_OPTIONS);
+  return projectInterviewPractice(sourceValueOrNull(state));
+}
+
 // ── 主 entry: loadTutorStudentContext ────────────────────────────
 //
 // userId scope で Supabase の各 auth-scoped durable から保存済み生徒情報を取得し、
@@ -615,9 +781,21 @@ function emptyTutorStudentContext(): TutorStudentContext {
       hasActivity: false,
       hasInterviewAi: false,
       hasPresentation: false,
+      hasStatementReview: false,
+      hasEssay: false,
+      hasInterviewPractice: false,
     },
   };
 }
+
+/** Phase 3.5: canary ON のときだけ読む parity source を含めるかどうか。 */
+export type LoadTutorStudentContextOptions = {
+  /**
+   * true … statement_review / essay / interview_record も読む（canary ON 用）。
+   * false（既定）… Phase 3 までの 6 source のみ。**query を 3 本増やさない。**
+   */
+  includeParitySources?: boolean;
+};
 
 export async function loadTutorStudentContext(
   userId: string,
@@ -626,6 +804,7 @@ export async function loadTutorStudentContext(
   //   （= cookie 再パース）を避けられる。未指定なら従来どおり自前で生成する（後方互換）。
   //   ⚠️ 注入してよいのは anon key + RLS の user-scoped client のみ（service_role 禁止）。
   injectedClient?: SupabaseClient | null,
+  options?: LoadTutorStudentContextOptions,
 ): Promise<TutorStudentContext> {
   const empty = emptyTutorStudentContext();
 
@@ -647,6 +826,20 @@ export async function loadTutorStudentContext(
       { timingKey: 'activity_ms', run: () => runActivityUnit(client, userId) },
       { timingKey: 'interviewAi_ms', run: () => runInterviewAiUnit(client, userId) },
       { timingKey: 'presentation_ms', run: () => runPresentationUnit(client, userId) },
+      // Phase 3.5 parity source。canary OFF では unit ごと積まない = query ゼロ。
+      ...(options?.includeParitySources
+        ? [
+            {
+              timingKey: 'statementReview_ms',
+              run: () => runStatementReviewUnit(client, userId),
+            },
+            { timingKey: 'essay_ms', run: () => runEssayUnit(client, userId) },
+            {
+              timingKey: 'interviewPractice_ms',
+              run: () => runInterviewPracticeUnit(client, userId),
+            },
+          ]
+        : []),
     ],
     {
       timingLabel: '[TutorContextSources]',
@@ -688,6 +881,18 @@ export async function loadTutorStudentContext(
       merged.presentation = v.presentation;
       merged.sourceSummary.hasPresentation = true;
     }
+    if (v.statementReview) {
+      merged.statementReview = v.statementReview;
+      merged.sourceSummary.hasStatementReview = true;
+    }
+    if (v.essay) {
+      merged.essay = v.essay;
+      merged.sourceSummary.hasEssay = true;
+    }
+    if (v.interviewPractice) {
+      merged.interviewPractice = v.interviewPractice;
+      merged.sourceSummary.hasInterviewPractice = true;
+    }
   }
 
   return merged;
@@ -717,7 +922,10 @@ function hasAnySource(ctx: TutorStudentContext): boolean {
     s.hasDiagnosis ||
     s.hasActivity ||
     s.hasInterviewAi ||
-    s.hasPresentation
+    s.hasPresentation ||
+    s.hasStatementReview ||
+    s.hasEssay ||
+    s.hasInterviewPractice
   );
 }
 
@@ -737,16 +945,21 @@ const contextCache = createExamSpineSnapshotCache<TutorStudentContext>({
 export async function loadTutorStudentContextCached(
   userId: string,
   injectedClient?: SupabaseClient | null,
+  options?: LoadTutorStudentContextOptions,
 ): Promise<{ context: TutorStudentContext; cacheHit: boolean }> {
   if (!userId) return { context: emptyTutorStudentContext(), cacheHit: false };
 
+  // cache key に parity mode を含める。含めないと canary OFF で作られた
+  // 「parity source 抜き」の context を ON の request へ配ってしまう（逆も同様）。
+  const cacheKey = options?.includeParitySources ? `${userId}|parity` : userId;
+
   // now は load の前後で共有する（load 後に取り直すと実効 TTL が伸びる）。
   const now = Date.now();
-  const cached = contextCache.get(userId, now);
+  const cached = contextCache.get(cacheKey, now);
   if (cached) return { context: cached, cacheHit: true };
 
-  const context = await loadTutorStudentContext(userId, injectedClient);
-  contextCache.set(userId, context, now);
+  const context = await loadTutorStudentContext(userId, injectedClient, options);
+  contextCache.set(cacheKey, context, now);
   return { context, cacheHit: false };
 }
 
@@ -764,9 +977,21 @@ export async function loadTutorStudentContextCached(
 //   - 「保存情報では」「過去入力では」を使う。section 全体 1200 字以内。
 //
 // 純粋関数: fetch / Supabase / Date / Math.random なし。
+export type BuildTutorSupabaseContextSectionOptions = {
+  /**
+   * Phase 3.5: canary ON のときだけ true。
+   *   true  … track と parity source（志望理由書 / 小論文 / 対人面接練習）を描画し、
+   *           section 全体の上限を MAX_TOTAL_LENGTH_PARITY へ広げる。
+   *   false（既定）… Phase 3 までと **byte-identical** な出力（rollback path）。
+   */
+  includeParity?: boolean;
+};
+
 export function buildTutorSupabaseContextSection(
   context: TutorStudentContext,
+  options?: BuildTutorSupabaseContextSectionOptions,
 ): string {
+  const includeParity = options?.includeParity === true;
   const lines: string[] = [];
 
   // 1. 基本情報（学年 / 受験方式 / 志望校 / 志望分野）
@@ -774,6 +999,8 @@ export function buildTutorSupabaseContextSection(
   if (bi) {
     const head: string[] = [];
     if (bi.grade) head.push(bi.grade);
+    // track は Phase 3.5 で復帰。OFF では描画しない（legacy 出力を 1 byte も変えない）。
+    if (includeParity && bi.track) head.push(bi.track);
     if (bi.examType) head.push(`受験方式は${bi.examType}`);
     if (head.length > 0) {
       lines.push(`・保存情報では、${head.join('・')} のようです。`);
@@ -909,6 +1136,25 @@ export function buildTutorSupabaseContextSection(
     }
   }
 
+  // 6. Phase 3.5 parity source（canary ON のみ）。
+  //    legacy block2 と同じ意味論。本文・点数は載せず課題だけを短く出す。
+  if (includeParity) {
+    const sr = context.statementReview;
+    if (sr && sr.weaknesses.length > 0) {
+      lines.push(
+        `・志望理由書レビューの直近の課題: ${sr.weaknesses.join(' / ')}`,
+      );
+    }
+    const es = context.essay;
+    if (es && es.weakPoints.length > 0) {
+      lines.push(`・小論文添削の直近の課題: ${es.weakPoints.join(' / ')}`);
+    }
+    const ip = context.interviewPractice;
+    if (ip && ip.issues.length > 0) {
+      lines.push(`・面接練習（対人）の課題: ${ip.issues.join(' / ')}`);
+    }
+  }
+
   if (lines.length === 0) return '';
 
   const section = [
@@ -924,5 +1170,9 @@ export function buildTutorSupabaseContextSection(
     '・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。',
   ].join('\n');
 
-  return truncate(section, MAX_TOTAL_LENGTH);
+  // parity ON では出力が増えるため上限を広げる。既定（OFF）は 1200 のまま。
+  return truncate(
+    section,
+    includeParity ? MAX_TOTAL_LENGTH_PARITY : MAX_TOTAL_LENGTH,
+  );
 }

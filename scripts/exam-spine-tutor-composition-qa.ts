@@ -71,14 +71,42 @@ import {
   COMPOSITION_FIXTURES,
   CLIENT_ONLY_UNIV,
   CLIENT_ONLY_STRENGTH,
+  CLIENT_ONLY_TRACK,
+  CLIENT_ONLY_STATEMENT,
+  CLIENT_ONLY_ESSAY,
+  CLIENT_ONLY_PRACTICE,
   SPINE_ONLY_UNIV,
   SPINE_ONLY_STRENGTH,
+  SPINE_ONLY_TRACK,
+  SPINE_ONLY_STATEMENT,
+  SPINE_ONLY_ESSAY,
+  SPINE_ONLY_PRACTICE,
   WORK_ONLY_DRAFT,
   type CompositionFixture,
 } from './fixtures/examSpineTutorComposition';
 
-const CLIENT_SENTINELS = [CLIENT_ONLY_UNIV, CLIENT_ONLY_STRENGTH];
-const SPINE_SENTINELS = [SPINE_ONLY_UNIV, SPINE_ONLY_STRENGTH];
+const CLIENT_SENTINELS = [
+  CLIENT_ONLY_UNIV,
+  CLIENT_ONLY_STRENGTH,
+  CLIENT_ONLY_TRACK,
+  CLIENT_ONLY_STATEMENT,
+  CLIENT_ONLY_ESSAY,
+  CLIENT_ONLY_PRACTICE,
+];
+
+// Spine sentinel → 「その sentinel が ON の prompt に出る条件」。
+// sourceSummary から期待出現数を導き、`絶対 1 回`を assert する（重複投入の再発防止）。
+const SPINE_SENTINEL_GATES: ReadonlyArray<{
+  value: string;
+  gate: (s: CompositionFixture['spineContext']['sourceSummary']) => boolean;
+}> = [
+  { value: SPINE_ONLY_UNIV, gate: (s) => s.hasBasicInfo },
+  { value: SPINE_ONLY_TRACK, gate: (s) => s.hasBasicInfo },
+  { value: SPINE_ONLY_STRENGTH, gate: (s) => s.hasSelfAnalysis },
+  { value: SPINE_ONLY_STATEMENT, gate: (s) => s.hasStatementReview },
+  { value: SPINE_ONLY_ESSAY, gate: (s) => s.hasEssay },
+  { value: SPINE_ONLY_PRACTICE, gate: (s) => s.hasInterviewPractice },
+];
 
 // ── 4. helper ─────────────────────────────────────────────────────
 
@@ -149,9 +177,9 @@ function assertInvariants(
       }
     }
     // ③ Spine 由来 context を block 1 へ混ぜていない。
-    for (const s of SPINE_SENTINELS) {
-      if (b0 && occurrences(b0.text, s) !== 0) {
-        f.push(`${tag}/${mode}: block1 に Spine context (${s}) が混入している`);
+    for (const { value } of SPINE_SENTINEL_GATES) {
+      if (b0 && occurrences(b0.text, value) !== 0) {
+        f.push(`${tag}/${mode}: block1 に Spine context (${value}) が混入している`);
       }
     }
   }
@@ -162,17 +190,15 @@ function assertInvariants(
     if (n !== 0) f.push(`${tag}/ON: client-only sentinel ${s} が ${n} 回残っている`);
   }
 
-  // ⑤ ON でも Spine 由来は残る。かつ重複しない（1 系統のみ）。
-  for (const s of SPINE_SENTINELS) {
-    const present = fixture.spineContext.sourceSummary;
-    const expected =
-      (s === SPINE_ONLY_UNIV && present.hasBasicInfo) ||
-      (s === SPINE_ONLY_STRENGTH && present.hasSelfAnalysis)
-        ? 1
-        : 0;
-    const n = occurrences(onText, s);
+  // ⑤ ON でも Spine 由来は残る。かつ重複しない（必ず 1 回 = 1 系統のみ）。
+  const summary = fixture.spineContext.sourceSummary;
+  for (const { value, gate } of SPINE_SENTINEL_GATES) {
+    // fixture がその sentinel を持っていない場合は対象外。
+    if (!JSON.stringify(fixture.spineContext).includes(value)) continue;
+    const expected = gate(summary) ? 1 : 0;
+    const n = occurrences(onText, value);
     if (n !== expected) {
-      f.push(`${tag}/ON: spine sentinel ${s} の出現数が ${n}（期待 ${expected}）`);
+      f.push(`${tag}/ON: spine sentinel ${value} の出現数が ${n}（期待 ${expected}）`);
     }
   }
 
@@ -276,8 +302,16 @@ function buildSnapshot(fixture: CompositionFixture): Record<string, unknown> {
   const sentinelCounts = (text: string) => ({
     CLIENT_ONLY_UNIV: occurrences(text, CLIENT_ONLY_UNIV),
     CLIENT_ONLY_STRENGTH: occurrences(text, CLIENT_ONLY_STRENGTH),
+    CLIENT_ONLY_TRACK: occurrences(text, CLIENT_ONLY_TRACK),
+    CLIENT_ONLY_STATEMENT: occurrences(text, CLIENT_ONLY_STATEMENT),
+    CLIENT_ONLY_ESSAY: occurrences(text, CLIENT_ONLY_ESSAY),
+    CLIENT_ONLY_PRACTICE: occurrences(text, CLIENT_ONLY_PRACTICE),
     SPINE_ONLY_UNIV: occurrences(text, SPINE_ONLY_UNIV),
     SPINE_ONLY_STRENGTH: occurrences(text, SPINE_ONLY_STRENGTH),
+    SPINE_ONLY_TRACK: occurrences(text, SPINE_ONLY_TRACK),
+    SPINE_ONLY_STATEMENT: occurrences(text, SPINE_ONLY_STATEMENT),
+    SPINE_ONLY_ESSAY: occurrences(text, SPINE_ONLY_ESSAY),
+    SPINE_ONLY_PRACTICE: occurrences(text, SPINE_ONLY_PRACTICE),
     WORK_ONLY_DRAFT: occurrences(text, WORK_ONLY_DRAFT),
   });
 

@@ -76,10 +76,17 @@ export const EXAM_PURPOSE_REGISTRY: Readonly<
       'activity',
       'interview_ai',
       'presentation',
+      // ↓ Phase 3.5 で追加した parity source。
+      //   canary（TUTOR_SPINE_CONTEXT_ENABLED）が ON のときだけ読む。
+      //   OFF では query を発行しない = rollback path のコストと出力を変えない。
+      'statement_review',
+      'essay',
+      'interview_record',
     ],
     status: 'wired',
     provenance:
-      'lib/contextBuilders/tutorContext.ts:loadTutorStudentContext（Promise.allSettled の 6 source）',
+      'lib/contextBuilders/tutorContext.ts:loadTutorStudentContext（allSettled の 6 source ' +
+      '＋ canary ON 時の parity 3 source）',
   },
 
   statementReview: {

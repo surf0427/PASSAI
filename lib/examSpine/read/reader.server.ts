@@ -252,6 +252,103 @@ export async function readPresentationSessionByAttempt(
   }
 }
 
+// ── 3b. kind reader（Phase 3.5 parity source）────────────────────
+//
+// canary ON の Tutor が legacy と同等の情報量を持つために追加した 3 source。
+// いずれも「最新 1 行 / 必要 column のみ」。履歴全件・本文全文は読まない。
+
+/**
+ * statement_review_history の最新 1 件。
+ * result（StatementResult 全体）と created_at のみ。essay 本文 column は読まない。
+ */
+export async function readLatestStatementReviewRow(
+  client: SupabaseClient,
+  userId: string,
+  opts: ExamSpineReadOptions,
+): Promise<SourceState<Record<string, unknown>>> {
+  try {
+    const res = await client
+      .from('statement_review_history')
+      .select('result, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (res.error) {
+      warn(opts, 'statement_review read error', { code: res.error.code });
+      return SOURCE_UNAVAILABLE;
+    }
+    const rec = firstRecord(res.data);
+    return rec ? sourceReady(rec) : SOURCE_ABSENT;
+  } catch {
+    warn(opts, 'statement_review read threw');
+    return SOURCE_UNAVAILABLE;
+  }
+}
+
+/**
+ * essay_workspaces の最新 1 件から **reviews 配列だけ**を読む。
+ *
+ * ⚠️ `workspace` jsonb を丸ごと select してはいけない。小論文の本文
+ *    （workspace.body / reviews[].essayBodySnapshot）まで毎 request 転送してしまう。
+ *    PostgREST の JSON 演算子で sub-field に絞る。
+ *    `->` の戻りが json / text のどちらで来ても呼び出し側が解釈できるよう、
+ *    ここでは raw のまま返す（projection 側で両方を受ける）。
+ */
+export async function readLatestEssayReviewsRow(
+  client: SupabaseClient,
+  userId: string,
+  opts: ExamSpineReadOptions,
+): Promise<SourceState<Record<string, unknown>>> {
+  try {
+    const res = await client
+      .from('essay_workspaces')
+      .select('updated_at, reviews:workspace->reviews')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) {
+      warn(opts, 'essay read error', { code: res.error.code });
+      return SOURCE_UNAVAILABLE;
+    }
+    const rec = firstRecord(res.data);
+    return rec ? sourceReady(rec) : SOURCE_ABSENT;
+  } catch {
+    warn(opts, 'essay read threw');
+    return SOURCE_UNAVAILABLE;
+  }
+}
+
+/**
+ * interview_practice_records（対人の面接練習記録）の最新 1 件。
+ *
+ * ⚠️ interview_ai（AI 面接）とは別物。混同しないこと。
+ * Q&A 本文（questions_asked / my_answers）や betterAnswer は読まない。
+ * 課題の要約に必要な column だけを取る。
+ */
+export async function readLatestInterviewPracticeRow(
+  client: SupabaseClient,
+  userId: string,
+  opts: ExamSpineReadOptions,
+): Promise<SourceState<Record<string, unknown>>> {
+  try {
+    const res = await client
+      .from('interview_practice_records')
+      .select('improvement_summary, what_went_wrong, feedback_json, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (res.error) {
+      warn(opts, 'interview_record read error', { code: res.error.code });
+      return SOURCE_UNAVAILABLE;
+    }
+    const rec = firstRecord(res.data);
+    return rec ? sourceReady(rec) : SOURCE_ABSENT;
+  } catch {
+    warn(opts, 'interview_record read threw');
+    return SOURCE_UNAVAILABLE;
+  }
+}
+
 // ── 4. 並列実行 + 観測 ────────────────────────────────────────────
 //
 // 「複数 source を並列に読み、1 つ失敗しても全体を止めない」構造を Spine 側に持つ。

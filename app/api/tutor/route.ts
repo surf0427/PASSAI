@@ -327,6 +327,13 @@ export async function POST(req: Request): Promise<Response> {
   //   - context load は never-throw（失敗・未ログイン・データ不足は空に倒れる）。60 秒 per-user
   //     cache 付き。auth 済の user-scoped supabase client を共有して client 再生成を避ける。
   //   - quota reject 時は context load 結果を破棄して即 return（Claude には進まない＝AI 課金なし）。
+  //
+  // ── Exam Spine Phase 3 / 3.5: 生徒情報 context の source of truth 切替（default deny）──
+  //   false（既定 / env 未設定）… legacy 合成。body 由来の人物情報 + block2 + block3。
+  //   true （明示 opt-in）      … Spine 由来（block3）のみ。parity source も読む。
+  // context load より前に 1 回だけ判定する（loader に渡すため。request 内で揺れさせない）。
+  const spineOnlyContext = isTutorSpineContextEnabled(userId);
+
   const tGateCtx = lat.now();
   const [gate, contextResult] = await Promise.all([
     (async () => {
@@ -337,7 +344,10 @@ export async function POST(req: Request): Promise<Response> {
     })(),
     (async () => {
       const t = lat.now();
-      const r = await loadTutorStudentContextCached(userId, auth.supabase);
+      // canary OFF では parity source を読まない = query 本数は Phase 3 と同じ。
+      const r = await loadTutorStudentContextCached(userId, auth.supabase, {
+        includeParitySources: spineOnlyContext,
+      });
       lat.record('context_load_ms', t);
       return r;
     })(),
@@ -350,12 +360,6 @@ export async function POST(req: Request): Promise<Response> {
 
   // 以降の prompt build〜Claude 呼び出しの所要時間計測の起点。
   const tBuild = lat.now();
-
-  // ── Exam Spine Phase 3: 生徒情報 context の source of truth 切替（default deny）──
-  //   false（既定 / env 未設定）… legacy 合成。body 由来の人物情報 + block2 + block3。
-  //   true （明示 opt-in）      … Spine 由来（block3）のみを人物情報の source にする。
-  // 判定は 1 回だけ行い、以降の分岐すべてで同じ値を使う（request 内で揺れさせない）。
-  const spineOnlyContext = isTutorSpineContextEnabled(userId);
 
   // ── prompt 合成（lib/tutor/composeTutorPrompt.ts）──
   // 合成そのものは純関数へ抽出済み。route は「何を渡すか」と「失敗をどう log するか」だけを持つ。

@@ -11,13 +11,17 @@
       "hasActivity": false,
       "hasBasicInfo": false,
       "hasDiagnosis": false,
+      "hasEssay": false,
       "hasInterviewAi": false,
+      "hasInterviewPractice": false,
       "hasPresentation": true,
-      "hasSelfAnalysis": false
+      "hasSelfAnalysis": false,
+      "hasStatementReview": false
     }
   },
   "description": "プレゼン core は取れるが attempt→session の enrichment が失敗（core だけ返ること）",
   "fixtureId": "T6-presentation-enrichment-fails",
+  "parity": false,
   "queries": [
     {
       "filters": [

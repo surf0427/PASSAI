@@ -20,7 +20,8 @@
         "サンプル大学A",
         "サンプル大学B",
         "サンプル大学C"
-      ]
+      ],
+      "track": "文系"
     },
     "diagnosis": {
       "typeHint": "経験を言語化する支援が役立ちそうです"
@@ -116,13 +117,17 @@
       "hasActivity": true,
       "hasBasicInfo": true,
       "hasDiagnosis": true,
+      "hasEssay": false,
       "hasInterviewAi": true,
+      "hasInterviewPractice": false,
       "hasPresentation": true,
-      "hasSelfAnalysis": true
+      "hasSelfAnalysis": true,
+      "hasStatementReview": false
     }
   },
   "description": "6 source すべてが揃っているユーザー（最大構成）",
   "fixtureId": "T1-all-sources",
+  "parity": false,
   "queries": [
     {
       "filters": [

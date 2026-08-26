@@ -29,6 +29,11 @@ export type TutorLoaderFixture = {
   description: string;
   /** table 名 → stub 応答。未指定の table は {kind:'ok', data:null} 扱い。 */
   tables: Record<string, StubTableResult>;
+  /**
+   * Phase 3.5: parity source（statement_review / essay / interview_record）も読むか。
+   * 既定 false = Phase 3 までの 6 source のみ（canary OFF 相当）。
+   */
+  parity?: boolean;
 };
 
 // 固定日時（JST 変換結果が安定するよう UTC 正午を使う）。
@@ -264,6 +269,109 @@ export const TUTOR_LOADER_FIXTURES: readonly TutorLoaderFixture[] = [
         ],
       },
       presentation_attempts: { kind: 'throw' },
+    },
+  },
+
+  // ── Phase 3.5: parity source を読むケース ─────────────────────────
+
+  {
+    id: 'T7-parity-all-sources',
+    description:
+      'canary ON 相当。parity 3 source（志望理由書 / 小論文 / 対人面接練習）も読む',
+    parity: true,
+    tables: {
+      self_analysis_logs: { kind: 'ok', data: [] },
+      basic_info_logs: {
+        kind: 'ok',
+        data: { payload: { grade: '高校3年', track: '理系' } },
+      },
+      diagnosis_logs: { kind: 'ok', data: null },
+      activity_logs: { kind: 'ok', data: null },
+      interview_ai_sessions: { kind: 'ok', data: [] },
+      presentation_results: { kind: 'ok', data: [] },
+      statement_review_history: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            result: {
+              weaknesses: [
+                'サンプル志望理由書の課題1',
+                'サンプル志望理由書の課題2',
+                'サンプル志望理由書の課題3（切り捨て対象）',
+              ],
+              strengths: ['読まれてはいけない強み'],
+              totalScore: 72,
+            },
+          },
+        ],
+      },
+      essay_workspaces: {
+        kind: 'ok',
+        data: [
+          {
+            updated_at: T2,
+            // PostgREST `workspace->reviews` の戻り（json 配列）。append-only で末尾が最新。
+            reviews: [
+              { weakPoints: ['古い小論文の課題'], essayBodySnapshot: '読まれてはいけない本文' },
+              { weakPoints: ['最新の小論文の課題', '2件目（切り捨て対象）'] },
+            ],
+          },
+        ],
+      },
+      interview_practice_records: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            improvement_summary: '自己記録の改善点（feedback があるので使われない想定）',
+            what_went_wrong: '自己記録の反省',
+            feedback_json: {
+              improvements: ['対人面接の改善点1', '対人面接の改善点2'],
+              betterAnswer: '読まれてはいけない模範解答',
+            },
+          },
+        ],
+      },
+    },
+  },
+
+  {
+    id: 'T8-parity-fallbacks-and-failures',
+    description:
+      'parity: essay reviews が string で返る / feedback_json 無しで自己記録へ fallback / statement は error',
+    parity: true,
+    tables: {
+      self_analysis_logs: { kind: 'ok', data: [] },
+      basic_info_logs: { kind: 'ok', data: null },
+      diagnosis_logs: { kind: 'ok', data: null },
+      activity_logs: { kind: 'ok', data: null },
+      interview_ai_sessions: { kind: 'ok', data: [] },
+      presentation_results: { kind: 'ok', data: [] },
+      // 取得失敗しても Tutor 全体は継続すること。
+      statement_review_history: { kind: 'error', code: '42P01' },
+      // `->` が text で返る環境の想定（JSON 文字列）。
+      essay_workspaces: {
+        kind: 'ok',
+        data: [
+          {
+            updated_at: T2,
+            reviews: '[{"weakPoints":["文字列で返った小論文の課題"]}]',
+          },
+        ],
+      },
+      // feedback_json 無し → 自己記録へ fallback。
+      interview_practice_records: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            improvement_summary: '自己記録の改善点',
+            what_went_wrong: '自己記録の反省',
+            feedback_json: null,
+          },
+        ],
+      },
     },
   },
 ];

@@ -180,9 +180,14 @@ export function composeTutorPrompt(
   //     ここでは pre-loaded な spineContext を section 文字列へ整形するだけ（同期・DB なし）。
   //   - buildTutorSupabaseContextSection は throw しない純粋関数だが、念のため try で包み、
   //     例外時は '' に倒して Tutor は通常動作させる（空 context も '' を返すので従来挙動と同一）。
+  //
+  // Phase 3.5: canary ON では track と parity source（志望理由書 / 小論文 /
+  // 対人面接練習）も描画する。OFF では既定のまま = Phase 3 と byte-identical。
   let supabaseStudentContextSection = '';
   try {
-    supabaseStudentContextSection = buildTutorSupabaseContextSection(spineContext);
+    supabaseStudentContextSection = buildTutorSupabaseContextSection(spineContext, {
+      includeParity: spineOnlyContext,
+    });
   } catch (error) {
     onBuildError?.('supabase_context', error);
     supabaseStudentContextSection = '';

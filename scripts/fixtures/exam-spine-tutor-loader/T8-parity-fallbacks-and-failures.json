@@ -1,0 +1,124 @@
+{
+  "context": {
+    "essay": {
+      "weakPoints": [
+        "文字列で返った小論文の課題"
+      ]
+    },
+    "interviewPractice": {
+      "issues": [
+        "自己記録の改善点",
+        "自己記録の反省"
+      ]
+    },
+    "sourceSummary": {
+      "hasActivity": false,
+      "hasBasicInfo": false,
+      "hasDiagnosis": false,
+      "hasEssay": true,
+      "hasInterviewAi": false,
+      "hasInterviewPractice": true,
+      "hasPresentation": false,
+      "hasSelfAnalysis": false,
+      "hasStatementReview": false
+    }
+  },
+  "description": "parity: essay reviews が string で返る / feedback_json 無しで自己記録へ fallback / statement は error",
+  "fixtureId": "T8-parity-fallbacks-and-failures",
+  "parity": true,
+  "queries": [
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "activity_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "basic_info_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "diagnosis_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "updated_at:desc",
+      "select": "updated_at, reviews:workspace->reviews",
+      "table": "essay_workspaces",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000",
+        "status=completed"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, interview_type, interview_ai_results(feedback)",
+      "table": "interview_ai_sessions",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "improvement_summary, what_went_wrong, feedback_json, created_at",
+      "table": "interview_practice_records",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, feedback, attempt_id",
+      "table": "presentation_results",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "analysis, summary, created_at",
+      "table": "self_analysis_logs",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "result, created_at",
+      "table": "statement_review_history",
+      "terminal": "await"
+    }
+  ],
+  "section": "【保存済みの生徒情報】\n以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。\n保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。\n\n・小論文添削の直近の課題: 文字列で返った小論文の課題\n・面接練習（対人）の課題: 自己記録の改善点 / 自己記録の反省\n・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。\n\nこの生徒情報の扱い方:\n・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。\n・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。",
+  "sectionLength": 294
+}

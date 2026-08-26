@@ -24,13 +24,17 @@
       "hasActivity": false,
       "hasBasicInfo": true,
       "hasDiagnosis": false,
+      "hasEssay": false,
       "hasInterviewAi": true,
+      "hasInterviewPractice": false,
       "hasPresentation": false,
-      "hasSelfAnalysis": true
+      "hasSelfAnalysis": true,
+      "hasStatementReview": false
     }
   },
   "description": "jsonb の shape が契約外（数値 / null / ネスト配列 / 巨大文字列）。defensive parsing を固定する",
   "fixtureId": "T5-adversarial-shapes",
+  "parity": false,
   "queries": [
     {
       "filters": [

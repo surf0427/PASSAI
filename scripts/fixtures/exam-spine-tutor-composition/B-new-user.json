@@ -30,16 +30,32 @@
   },
   "sentinels": {
     "off": {
+      "CLIENT_ONLY_ESSAY": 0,
+      "CLIENT_ONLY_PRACTICE": 0,
+      "CLIENT_ONLY_STATEMENT": 0,
       "CLIENT_ONLY_STRENGTH": 0,
+      "CLIENT_ONLY_TRACK": 0,
       "CLIENT_ONLY_UNIV": 0,
+      "SPINE_ONLY_ESSAY": 0,
+      "SPINE_ONLY_PRACTICE": 0,
+      "SPINE_ONLY_STATEMENT": 0,
       "SPINE_ONLY_STRENGTH": 0,
+      "SPINE_ONLY_TRACK": 0,
       "SPINE_ONLY_UNIV": 0,
       "WORK_ONLY_DRAFT": 0
     },
     "on": {
+      "CLIENT_ONLY_ESSAY": 0,
+      "CLIENT_ONLY_PRACTICE": 0,
+      "CLIENT_ONLY_STATEMENT": 0,
       "CLIENT_ONLY_STRENGTH": 0,
+      "CLIENT_ONLY_TRACK": 0,
       "CLIENT_ONLY_UNIV": 0,
+      "SPINE_ONLY_ESSAY": 0,
+      "SPINE_ONLY_PRACTICE": 0,
+      "SPINE_ONLY_STATEMENT": 0,
       "SPINE_ONLY_STRENGTH": 0,
+      "SPINE_ONLY_TRACK": 0,
       "SPINE_ONLY_UNIV": 0,
       "WORK_ONLY_DRAFT": 0
     }

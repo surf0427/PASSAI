@@ -4,13 +4,17 @@
       "hasActivity": false,
       "hasBasicInfo": false,
       "hasDiagnosis": false,
+      "hasEssay": false,
       "hasInterviewAi": false,
+      "hasInterviewPractice": false,
       "hasPresentation": false,
-      "hasSelfAnalysis": false
+      "hasSelfAnalysis": false,
+      "hasStatementReview": false
     }
   },
   "description": "新規ユーザー。全 table が空（fail-open で空 context を返すこと）",
   "fixtureId": "T2-new-user-empty",
+  "parity": false,
   "queries": [
     {
       "filters": [

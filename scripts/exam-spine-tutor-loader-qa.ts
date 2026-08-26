@@ -239,14 +239,21 @@ async function buildSnapshot(
 ): Promise<Record<string, unknown>> {
   const { client, traces } = makeStubClient(fixture);
 
+  const parity = fixture.parity === true;
   const context = await silenced(() =>
-    tutorContext.loadTutorStudentContext(USER_ID, client as never),
+    tutorContext.loadTutorStudentContext(USER_ID, client as never, {
+      includeParitySources: parity,
+    }),
   );
-  const section = tutorContext.buildTutorSupabaseContextSection(context);
+  // section は canary と同じ条件で描画する（parity fixture は ON 相当）。
+  const section = tutorContext.buildTutorSupabaseContextSection(context, {
+    includeParity: parity,
+  });
 
   return {
     fixtureId: fixture.id,
     description: fixture.description,
+    parity,
     // 1. 発行された SELECT の shape。query が増減したら差分になる。
     queries: sortTraces(traces),
     // 2. loader の戻り値。

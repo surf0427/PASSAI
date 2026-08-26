@@ -14,13 +14,17 @@
       "hasActivity": true,
       "hasBasicInfo": true,
       "hasDiagnosis": false,
+      "hasEssay": false,
       "hasInterviewAi": false,
+      "hasInterviewPractice": false,
       "hasPresentation": false,
-      "hasSelfAnalysis": false
+      "hasSelfAnalysis": false,
+      "hasStatementReview": false
     }
   },
   "description": "一部 source が error / throw（fail-open: 他 source は通常どおり返ること）",
   "fixtureId": "T4-source-failures",
+  "parity": false,
   "queries": [
     {
       "filters": [

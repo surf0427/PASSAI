@@ -25,6 +25,16 @@ export const SPINE_ONLY_UNIV = 'SPINEONLYUNIV';
 export const SPINE_ONLY_STRENGTH = 'SPINEONLYSTRENGTH';
 export const WORK_ONLY_DRAFT = 'WORKONLYDRAFT';
 
+// Phase 3.5 parity source の sentinel。
+export const CLIENT_ONLY_TRACK = 'CLIENTONLYTRACK';
+export const CLIENT_ONLY_STATEMENT = 'CLIENTONLYSTATEMENT';
+export const CLIENT_ONLY_ESSAY = 'CLIENTONLYESSAY';
+export const CLIENT_ONLY_PRACTICE = 'CLIENTONLYPRACTICE';
+export const SPINE_ONLY_TRACK = 'SPINEONLYTRACK';
+export const SPINE_ONLY_STATEMENT = 'SPINEONLYSTATEMENT';
+export const SPINE_ONLY_ESSAY = 'SPINEONLYESSAY';
+export const SPINE_ONLY_PRACTICE = 'SPINEONLYPRACTICE';
+
 export type CompositionFixture = {
   id: string;
   description: string;
@@ -41,6 +51,9 @@ const EMPTY_SUMMARY: TutorStudentContext['sourceSummary'] = {
   hasActivity: false,
   hasInterviewAi: false,
   hasPresentation: false,
+  hasStatementReview: false,
+  hasEssay: false,
+  hasInterviewPractice: false,
 };
 
 export const COMPOSITION_FIXTURES: readonly CompositionFixture[] = [
@@ -185,6 +198,53 @@ export const COMPOSITION_FIXTURES: readonly CompositionFixture[] = [
     spineContext: {
       basicInfo: { grade: '高校3年', targetSchools: [SPINE_ONLY_UNIV] },
       sourceSummary: { ...EMPTY_SUMMARY, hasBasicInfo: true },
+    },
+  },
+
+  {
+    id: 'F-parity-conflict',
+    description:
+      '★Phase 3.5 最重要: track / 志望理由書 / 小論文 / 対人面接練習 が client と DB で食い違う。'
+      + ' ON では DB 側だけが残ること',
+    intent: 'general',
+    userMessage: '今の課題を整理したいです。',
+    body: {
+      basicInfo: {
+        grade: '高校3年',
+        track: CLIENT_ONLY_TRACK,
+        preferences: [{ university: CLIENT_ONLY_UNIV, faculty: 'クライアント学部' }],
+      },
+      studentProfile: {
+        summary: 'client 側の自己分析',
+        strengths: [CLIENT_ONLY_STRENGTH],
+        weaknesses: [],
+        futureConnections: [],
+        valueKeywords: [],
+        signatureEpisodes: [],
+      },
+      // legacy block2 が読む compact projection（app/tutor/page.tsx と同じ shape）。
+      statementReviewLatest: { weaknesses: [CLIENT_ONLY_STATEMENT] },
+      essayReviewLatest: { weakPoints: [CLIENT_ONLY_ESSAY] },
+      interviewFeedbackLatest: { improvements: [CLIENT_ONLY_PRACTICE] },
+    },
+    spineContext: {
+      basicInfo: {
+        grade: '高校3年',
+        track: SPINE_ONLY_TRACK,
+        targetSchools: [SPINE_ONLY_UNIV],
+      },
+      selfAnalysis: { strengths: [SPINE_ONLY_STRENGTH] },
+      statementReview: { weaknesses: [SPINE_ONLY_STATEMENT] },
+      essay: { weakPoints: [SPINE_ONLY_ESSAY] },
+      interviewPractice: { issues: [SPINE_ONLY_PRACTICE] },
+      sourceSummary: {
+        ...EMPTY_SUMMARY,
+        hasBasicInfo: true,
+        hasSelfAnalysis: true,
+        hasStatementReview: true,
+        hasEssay: true,
+        hasInterviewPractice: true,
+      },
     },
   },
 ];
