@@ -76,6 +76,20 @@ void originalFetch;
 type TutorContextModule = typeof import('@/lib/contextBuilders/tutorContext');
 let tutorContext: TutorContextModule;
 
+// ── Tutor context section の固定領域（Phase 3.6）─────────────────────
+//
+// これらは AI の振る舞いを制御するルール。生徒情報がどれだけ多くても
+// **1 行も欠けてはいけない**。文言はコード側の実文字列をそのまま写している。
+// ここが production 側と食い違ったら、どちらかが書き換えられたということ。
+const HANDLING_RULES: readonly string[] = [
+  '・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。',
+  'この生徒情報の扱い方:',
+  '・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。',
+  '・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。',
+];
+// 最後のルール。ここが落ちるのが以前の defect の典型症状だった。
+const LAST_RULE = HANDLING_RULES[HANDLING_RULES.length - 1];
+
 import {
   TUTOR_LOADER_FIXTURES,
   type StubTableResult,
@@ -269,6 +283,58 @@ async function buildSnapshot(
   };
 }
 
+// ── 7b. section integrity assert（Phase 3.6）──────────────────────
+//
+// snapshot とは独立に「常に真であるべき性質」を検査する。
+//   1. section が cap を超えない
+//   2. 空でない限り、扱い方ルールが **1 行残らず** 含まれる
+//   3. 最後のルールで終わる（末尾が欠けていない）
+//   4. 改行が壊れていない（ルール block が連続した塊として存在する）
+
+function assertSectionIntegrity(
+  fixture: TutorLoaderFixture,
+  section: string,
+): string[] {
+  const f: string[] = [];
+  const parity = fixture.parity === true;
+  const cap = parity
+    ? tutorContext.TUTOR_CONTEXT_SECTION_CAPS.parity
+    : tutorContext.TUTOR_CONTEXT_SECTION_CAPS.default;
+
+  if (section.length > cap) {
+    f.push(`${fixture.id}: section が cap 超過（${section.length} > ${cap}）`);
+  }
+
+  // 空 section は「生徒情報なし」。ルール検査の対象外。
+  if (section === '') return f;
+
+  for (const rule of HANDLING_RULES) {
+    if (!section.includes(rule)) {
+      f.push(`${fixture.id}: 扱い方ルールが欠落 -> ${rule.slice(0, 24)}…`);
+    }
+  }
+
+  if (!section.endsWith(LAST_RULE)) {
+    f.push(
+      `${fixture.id}: 最後のルールで終わっていない（末尾が切れている疑い）。tail=${JSON.stringify(section.slice(-30))}`,
+    );
+  }
+
+  // ルール block が 1 つの塊として繋がっていること（間に可変行が割り込まない）。
+  const rulesBlock = [
+    HANDLING_RULES[0],
+    '',
+    HANDLING_RULES[1],
+    HANDLING_RULES[2],
+    HANDLING_RULES[3],
+  ].join('\n');
+  if (!section.endsWith(rulesBlock)) {
+    f.push(`${fixture.id}: ルール block の改行構造が崩れている`);
+  }
+
+  return f;
+}
+
 // ── 8. TTL cache セマンティクスの assert ───────────────────────────
 //
 // snapshot ではなく不変条件として検査する（Date.now に依存するため）。
@@ -349,7 +415,17 @@ async function main(): Promise<void> {
 
   for (const fixture of TUTOR_LOADER_FIXTURES) {
     const path = snapshotPath(fixture.id);
-    const actual = serialize(await buildSnapshot(fixture));
+    const snapshot = await buildSnapshot(fixture);
+    const actual = serialize(snapshot);
+
+    // 不変条件は record / check の両モードで検査する。
+    // 「壊れた出力を --record で固定してしまう」事故を防ぐため。
+    const integrityFailures = assertSectionIntegrity(
+      fixture,
+      String(snapshot.section ?? ''),
+    );
+    for (const msg of integrityFailures) console.error(`  FAIL      ${msg}`);
+    failures += integrityFailures.length;
 
     if (mode === 'record') {
       writeFileSync(path, actual, 'utf8');

@@ -977,6 +977,49 @@ export async function loadTutorStudentContextCached(
 //   - 「保存情報では」「過去入力では」を使う。section 全体 1200 字以内。
 //
 // 純粋関数: fetch / Supabase / Date / Math.random なし。
+/**
+ * Tutor context section の文字数上限（characters。token ではない）。
+ *   default … canary OFF。Phase 3 までと同じ 1200。
+ *   parity  … canary ON。parity source の分だけ広げた 1800。
+ *
+ * QA から参照できるよう export する（cap を test 側で重複定義して drift させないため）。
+ */
+export const TUTOR_CONTEXT_SECTION_CAPS = {
+  default: MAX_TOTAL_LENGTH,
+  parity: MAX_TOTAL_LENGTH_PARITY,
+} as const;
+
+/**
+ * 可変の生徒情報行を、与えられた budget（characters）に収まるところまで残す。
+ *
+ * 方針:
+ *   - **行単位で落とす。** 行の途中で slice しない。
+ *     日本語 / サロゲートペア / 「」の対応が壊れないことをこれで保証する。
+ *   - 前から詰めて、入らなくなった時点で以降を落とす（順序＝重要度）。
+ *     lines は basicInfo → selfAnalysis → activity → diagnosis → interviewAi →
+ *     presentation → parity の順に積まれているため、素性に近い情報ほど残る。
+ *   - 省略マーカーは付けない。既存 truncate helper にマーカーの慣習が無く、
+ *     ここで独自表現を足すと prompt 文言を増やすことになるため。
+ *     落ちた行は「未入力」と同じく **情報が無い**ものとして扱われ、
+ *     rulesBlock の「推測・補完しない」「未入力を責めない」で安全側に倒れる。
+ *
+ * @param budget 使ってよい文字数。0 以下なら空文字。
+ */
+function fitContextLines(lines: readonly string[], budget: number): string {
+  if (budget <= 0) return '';
+
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    // 2 行目以降は連結する改行 1 文字も予算に含める。
+    const cost = kept.length === 0 ? line.length : line.length + 1;
+    if (used + cost > budget) break;
+    kept.push(line);
+    used += cost;
+  }
+  return kept.join('\n');
+}
+
 export type BuildTutorSupabaseContextSectionOptions = {
   /**
    * Phase 3.5: canary ON のときだけ true。
@@ -1157,12 +1200,25 @@ export function buildTutorSupabaseContextSection(
 
   if (lines.length === 0) return '';
 
-  const section = [
+  // ── 組み立て（固定領域は truncate 対象にしない）────────────────────
+  //
+  // 以前は header + 可変行 + 扱い方ルール を 1 本に連結してから section 全体を
+  // truncate していた。その結果、保存情報が多い生徒では **末尾のルールが丸ごと
+  // 消え**、AI に「生徒データだけ渡してその扱い方を渡さない」状態が起きていた
+  // （canary 以前からの本番不具合）。
+  //
+  // 削ってよいのは生徒ごとに伸び縮みする可変行だけで、ルールは常に完全に残す。
+  // そのため先にルール分の budget を確保し、残りを可変行に割り当てる。
+  const headerBlock = [
     '【保存済みの生徒情報】',
     '以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。',
     '保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。',
     '',
-    ...lines,
+  ].join('\n');
+
+  // ⚠️ この block は atomic。1 行たりとも欠けさせない・文言を書き換えない。
+  //    AI の振る舞いを制御するルールであり、内容改善ではなく「必ず残す」が目的。
+  const rulesBlock = [
     '・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。',
     '',
     'この生徒情報の扱い方:',
@@ -1171,8 +1227,16 @@ export function buildTutorSupabaseContextSection(
   ].join('\n');
 
   // parity ON では出力が増えるため上限を広げる。既定（OFF）は 1200 のまま。
-  return truncate(
-    section,
-    includeParity ? MAX_TOTAL_LENGTH_PARITY : MAX_TOTAL_LENGTH,
-  );
+  const cap = includeParity ? MAX_TOTAL_LENGTH_PARITY : MAX_TOTAL_LENGTH;
+
+  // 可変行に使える文字数。固定 2 block と、それらを繋ぐ改行 2 文字を先に引く。
+  const budget = cap - headerBlock.length - rulesBlock.length - 2;
+  const body = fitContextLines(lines, budget);
+
+  // 可変行が 1 行も入らないなら section 自体を出さない。
+  // 「生徒情報」と言いながら中身が無い block を prompt に置かないため
+  //   （lines.length === 0 のときに '' を返す既存挙動と同じ意味論）。
+  if (body === '') return '';
+
+  return [headerBlock, body, rulesBlock].join('\n');
 }
