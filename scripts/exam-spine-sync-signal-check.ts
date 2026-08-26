@@ -675,11 +675,39 @@ function staticBoundaries(): void {
   // ★ transport 止まりであることの behavioral 検査（条件緩和ではない）★
   const routeSrc = readFileSync(join(REPO_ROOT, 'app/api/tutor/route.ts'), 'utf8');
 
-  //   1. shadow 組み立ての戻り値を **受け取らない**（= AI へ渡らない）。
-  //      `const x = await buildCanonicalExamContext` の形になっていたら FAIL。
-  check('shadow build の結果を変数へ束縛していない（結果は破棄）',
-    /(?:^|\n)\s*await buildCanonicalExamContext\(/.test(routeSrc) &&
-      !/=\s*await buildCanonicalExamContext\(/.test(routeSrc));
+  //   1. shadow 組み立ての結果が shadow ブロックの外へ出ないこと。
+  //
+  //      ★ retarget の理由（条件緩和ではない）★
+  //        Stage 5.0 では shadow の戻り値が本当に未使用だったため
+  //        「変数へ束縛していない」を proxy として検査していた。
+  //        Packet J（shadow comparison）は **比較のために戻り値を束縛する必要がある**。
+  //        束縛したかどうかは本来の不変条件ではなく、本来の不変条件は
+  //        「shadow 由来の値が consumer 経路へ出ないこと」である。
+  //        そこで proxy を捨て、**脱出面**を直接検査する形へ retarget した。
+  //        より強い近接検査（prompt 近傍に comparison / shadowResolvedInput が
+  //        現れないこと等）は scripts/exam-spine-stage5-1-check.ts が担当する。
+  //
+  //      脱出してよいのは観測用の enum と件数だけ（E-S12 / E-S13）。
+  //      ★ コメント行を除いた実コードだけを見る（見出しコメントに builder 名が出るため）。
+  const routeCode = routeSrc
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const shadowStart = routeCode.indexOf('isExamSpineShadowEnabled(');
+  const promptStart = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('shadow ブロックが prompt 組み立てより前にある',
+    shadowStart >= 0 && promptStart > shadowStart);
+  if (shadowStart >= 0 && promptStart > shadowStart) {
+    const afterPrompt = routeCode.slice(promptStart);
+    for (const leaked of ['shadowResolvedInput', 'compareTutorShadow', '.context.blocks']) {
+      check(`prompt 以降に ${leaked} が現れない`, !afterPrompt.includes(leaked));
+    }
+  }
+  //      観測へ出る値は enum（string）と件数（number）に限る。
+  check('shadow の観測値は enum（string）として宣言されている',
+    /\bshadowOverall\s*:\s*string \| undefined/.test(routeCode));
+  check('shadow の観測値は件数（number）として宣言されている',
+    /\bshadowMismatchCount\s*:\s*number \| undefined/.test(routeCode));
 
   //   2. shadow は default deny gate の内側だけで動く。
   check('shadow 組み立ては canary gate の内側にある',
