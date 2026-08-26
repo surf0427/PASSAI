@@ -237,7 +237,7 @@ mirror_events           :  0 行
 
 | ID | 内容 | Blocker |
 |---|---|---|
-| `E-H1` | `authenticated` SELECT policy / constraint / index の検証（Wave 2 で範囲を縮小。table・column・order・embed は live 検証済み） | **Stage 4** |
+| ~~`E-H1`~~ | ~~`authenticated` SELECT policy / constraint / index の検証~~ | ✅ `RESOLVED`（2026-08-26。live schema check ＋ 本番 SQL Editor で 4 table の owner SELECT policy を確認） |
 | ~~`E-H2`~~ | ~~`*_mirrors` の anon 可読 drift~~ | ✅ `RESOLVED`（2026-08-26 本番適用済み。canonical Register へ統合） |
 | `E-H3` | vitest 導入の再判断 | **Stage 5** |
 | `E-H4` | Layer 2 永続化の再判断 | なし |
@@ -312,8 +312,14 @@ revert commit 1  → docs/principles/exam_spine/ が消える
 ## Stage 4 — Source-Sync + canary gate + loader
 
 着手条件は `EXAM_SPINE_WAVE2_CONVERGENCE.md` §8 の readiness matrix を参照。
-2026-08-26 時点の hard blocker は **1 件**（`E-H1` の `authenticated` SELECT policy 検証。
-`supabase/exam_spine_rls_verification.sql` を本番 SQL Editor で 1 回実行することで閉じる）。
+2026-08-26 時点の hard blocker は **0 件**。
+`E-H1` は本番 SQL Editor で `supabase/exam_spine_rls_verification.sql` を実行し、
+4 table の owner 限定 authenticated SELECT policy を確認して `RESOLVED` になった
+（`EXAM_SPINE_WAVE2_CONVERGENCE.md` §14）。
+
+```text
+STAGE4_READY = YES
+```
 
 Stage 4 の設計上の固定事項（Wave 2 で確定）:
 

@@ -18,6 +18,10 @@ HARD_BLOCKERS = 1   （E-H1 の authenticated SELECT policy 検証 / BLOCKED_BY_
 CANON_CHANGE  = NONE
 ```
 
+> **この §0 は Wave 2 実施時点（2026-08-26）の結果であり、書き換えない。**
+> 残っていた R6 はその後 production SQL Editor で確認され、クローズした。
+> 現在の readiness は **§14 POST-WAVE2 R6 VERIFICATION** を参照すること。
+
 Wave 1 で 6 件挙げた Stage 4 blocker のうち **5 件を本 Wave で解消**し、残る 1 件は
 本セッションから到達できない手段（本番 SQL Editor）を必要とする。
 
@@ -623,3 +627,51 @@ interview_practice_records）の authenticated SELECT policy 実在を確認す�
   - shipping worktree での E-S24 relocation（担当 session へ引き継ぎ）
   - D3 / D4 の doc 追随
 ```
+
+---
+
+## 14. POST-WAVE2 R6 VERIFICATION（追記 / 2026-08-26）
+
+**本節は Wave 2 本文の事後訂正ではない。** §0 / §6 / §9 は実施時点の記録として
+そのまま残し、その後に得られた production evidence を追記する。
+
+### 14.1 実施内容
+
+`supabase/exam_spine_rls_verification.sql` を **本番 Supabase の SQL Editor で実行**した
+（実行者: human。本セッションからは SQL Editor へ到達できないため Wave 2 では未実施だった）。
+
+### 14.2 evidence
+
+E-H1 残余の 4 table すべてについて、次が確認された。
+
+| table | `authenticated` SELECT grant | RLS enabled | SELECT policy | roles | cmd | qual |
+|---|---|---|---|---|---|---|
+| `self_prs` | YES | `true` | `self_prs owner select` | `{authenticated}` | `SELECT` | `(auth.uid() = user_id)` |
+| `statement_review_history` | YES | `true` | `statement_review_history owner select` | `{authenticated}` | `SELECT` | `(auth.uid() = user_id)` |
+| `essay_workspaces` | YES | `true` | `essay_workspaces owner select` | `{authenticated}` | `SELECT` | `(auth.uid() = user_id)` |
+| `interview_practice_records` | YES | `true` | `interview_practice_records owner select` | `{authenticated}` | `SELECT` | `(auth.uid() = user_id)` |
+
+→ 4 table とも **RLS 有効 ＋ owner 限定の authenticated SELECT policy が実在**する。
+Stage 3 canonical reader（anon key + cookie session = Postgres role `authenticated`）は
+これらを owner scope で読める。`service_role` は不要（E-L4 / Canon §20 を満たしたまま）。
+
+§6.4 で述べた「policy 不在なら 200 + 0 行になり runtime では検出できない」という
+silent failure のリスクは、**policy 実在が確認されたことで解消**した。
+
+### 14.3 readiness の更新
+
+```text
+R6  required authenticated reads proven   BLOCKED_BY_ENV  →  PASS
+
+HARD_BLOCKERS = 1 → 0
+STAGE4_READY  = NO → YES
+```
+
+他の gate（R1〜R5 / R7〜R10）の判定は Wave 2 実施時点から変更なし。
+R7（namespace collision）は `DEFERRED_WITH_REASON` のままで、Stage 4 の hard blocker ではない。
+
+### 14.4 Register への反映
+
+`E-H1` を `PENDING_HUMAN` → `RESOLVED` に更新した（本 evidence を decision 本文へ記録）。
+`supabase/exam_spine_rls_verification.sql` は再検証用として保持する
+（schema drift の再発時に同じ手順で確認できるようにするため）。

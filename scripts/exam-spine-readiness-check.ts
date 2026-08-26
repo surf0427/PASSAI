@@ -21,7 +21,7 @@
 //
 // 使い方: npm run qa:examSpine:readiness
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { EXAM_CONTEXT_PURPOSES } from '@/lib/examSpine/types';
@@ -97,6 +97,28 @@ function r1Register(): void {
   // E-H2 は canonical Register 上で RESOLVED であること（shipping からの統合）。
   const eh2 = text.slice(text.indexOf('## E-H2'), text.indexOf('## E-H3'));
   check('R1 E-H2 が canonical Register 上で RESOLVED', eh2.includes('`RESOLVED`'));
+
+  // ── R6: authenticated SELECT policy の production evidence ─────────
+  //
+  // ★ 4 kind（self_prs / statement_review_history / essay_workspaces /
+  //   interview_practice_records）は policy が無くても 200 + 0 行になり、
+  //   runtime では検出できない。したがって Register 上に evidence が
+  //   記録されていること自体を gate にする。
+  const eh1 = text.slice(text.indexOf('## E-H1'), text.indexOf('## E-H2'));
+  check('R6 E-H1 が RESOLVED', eh1.includes('`RESOLVED`'));
+  for (const table of [
+    'self_prs',
+    'statement_review_history',
+    'essay_workspaces',
+    'interview_practice_records',
+  ]) {
+    check(`R6 ${table} の owner SELECT policy evidence が記録されている`,
+      eh1.includes(`${table} owner select`), 'E-H1 に policy 名が無い');
+  }
+  check('R6 policy の qual が owner 条件として記録されている',
+    (eh1.match(/\(auth\.uid\(\) = user_id\)/g) ?? []).length >= 4);
+  check('R6 再検証手段（SQL）が保持されている',
+    existsSync(join(ROOT, 'supabase/exam_spine_rls_verification.sql')));
 }
 
 // ── R2 / R7. canonical lineage / namespace ────────────────────────────

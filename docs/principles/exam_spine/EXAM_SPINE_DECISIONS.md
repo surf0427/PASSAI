@@ -702,11 +702,11 @@ Claude Code はこれらを勝手に決めてはならない。
 
 ## E-H1 — 本番 DDL の完全検証（U1 の残り）
 
-- **Status:** `PENDING_HUMAN`（Wave 2 で範囲を縮小。残るのは §残余の 1 点のみ）
+- **Status:** `RESOLVED`（2026-08-26。live PostgREST 検証 ＋ 本番 SQL Editor 実行で確定）
 - **Wave 2 で解消した部分（live PostgREST / read-only / GET のみ / `limit=0` で行取得ゼロ）:**
   `scripts/exam-spine-live-schema-check.ts` により、Stage 3 の canonical reader が発行する
   **12 query すべて**（10 kind + presentation の enrichment 2 本）が本番 schema と互換であることを実証した。
-  select 文字列は `formatSelect()` を production と共有しているため、
+  select 文字列は `formatSelect()` を production と共有しているため
   「QA が通した select == reader が発行する select」である。
   ```text
   negative control : 存在しない table = 404 / 存在しない column = 400 / 存在しない order 列 = 400
@@ -714,40 +714,30 @@ Claude Code はこれらを勝手に決めてはならない。
   非読取列の実在    : statement_review_history.essay / interview_practice_records.{questions_asked,my_answers} /
                      presentation_attempts.{transcript,storage_path} / presentation_sessions.script = すべて実在
   ```
-  → **table 存在 / column 存在 / order 列 / embed relation / owner filter の構文は VERIFIED。**
-- **★ Wave 2 で判明した検証の限界（推測で PASS にしない / Canon §80）:**
-  - PostgREST は **jsonb の sub-path を検証しない**。`workspace->zzz_not_a_field` も 200 を返す。
-    したがって `essay` の `reviews:workspace->reviews`（E-S27）は live schema check では証明できない。
-    根拠は shipping production で同一 projection が稼働している事実に依存する。
-  - anon key では `authenticated` role の policy を区別できない。RLS が効いていれば
-    「policy が無い」も「policy があって条件不一致」も **どちらも 200 + 0 行**になる。
-- **残余（これだけが未解決）:** `authenticated` role の SELECT policy / UNIQUE constraint / index / trigger / GRANT。
-  特に **§E-H1-a の 4 table**（下記）。`supabase/schema.sql` は 4 table すべてに
-  `FOR SELECT TO authenticated USING (auth.uid() = user_id)` を宣言しているが、
-  **E-H2 の実例（schema.sql に無い anon SELECT policy が本番に存在した）が示すとおり、
-  schema.sql の宣言は本番の証拠にならない。**
-- **§E-H1-a — 一度も SELECT されたことがない 4 table（Wave 2 実測）:**
+- **★ Post-Wave 2 に本番 SQL Editor で確定した部分（R6 のクローズ）:**
+  `supabase/exam_spine_rls_verification.sql` を本番で実行し、
+  一度も authenticated SELECT が実行されたことのなかった 4 table について次を確認した。
   ```text
-  self_prs                    authenticated SELECT の実行実績 0
-  statement_review_history    同上
-  essay_workspaces            同上
-  interview_practice_records  同上
+  table                       grant  RLS    policy                                  roles            cmd     qual
+  self_prs                    YES    true   self_prs owner select                   {authenticated}  SELECT  (auth.uid() = user_id)
+  statement_review_history    YES    true   statement_review_history owner select   {authenticated}  SELECT  (auth.uid() = user_id)
+  essay_workspaces            YES    true   essay_workspaces owner select           {authenticated}  SELECT  (auth.uid() = user_id)
+  interview_practice_records  YES    true   interview_practice_records owner select {authenticated}  SELECT  (auth.uid() = user_id)
   ```
-  理由: browser 側の `list*FromSupabase` はこの 4 件について caller 0（`self_analysis` だけは
-  `AuthProvider.tsx:201-202 → restoreSelfAnalysisLogsOnce → hydrateSelfAnalysisLogs` で到達する）。
-  shipping tutor の parity reader（`statement_review_history` / `essay_workspaces` /
-  `interview_practice_records`）は `includeParitySources: spineOnlyContext` でのみ実行され、
-  canary は default deny なので production では走っていない。`self_prs` はどの reader も読まない。
-  INSERT / UPDATE は動いているので書込 policy は実在するが、**SELECT policy には間接証拠が無い。**
-- **★ なぜ runtime で検出できないか（hard blocker である理由）:**
-  SELECT policy が存在しない場合、PostgREST は 403 ではなく **200 + 0 行**を返す。
-  Stage 3 reader はこれを `status='ok'` / `rows=[]` として扱い、
-  「ユーザーにデータが無い」と区別できない（Canon §40 EMPTY ≠ UNREADABLE）。
-  fail-open でも観測ログでも表面化しないため、**out-of-band の確認が必須**である。
-- **必要な判断 / 手段:** `supabase/exam_spine_rls_verification.sql`（Wave 2 で作成。**SELECT のみ**）を
-  本番 SQL Editor で 1 回実行する。誰が実行するかを決めること。
-  本セッションは SQL Editor へ到達できないため実施していない（`BLOCKED_BY_ENV`）。
-- **Blocker:** **Stage 4**（server reader を実際に通電する段階）。Stage 1〜3 は通電しないためブロックしない。
+  → Stage 3 reader（anon key + cookie session = Postgres role `authenticated`）は
+  4 kind すべてを owner scope で読める。**`service_role` は不要**（E-L4 / Canon §20 を維持）。
+  「policy 不在なら 200 + 0 行になり runtime では検出できない」という silent failure のリスクは、
+  policy 実在が確認されたことで解消した。
+- **★ 残る検証の限界（推測で PASS にしない / Canon §80）— Stage をブロックしない:**
+  - PostgREST は **jsonb の sub-path を検証しない**。`workspace->zzz_not_a_field` も 200 を返す。
+    したがって `essay` の `reviews:workspace->reviews`（E-S27）の妥当性は live schema check では
+    証明できず、shipping production で同一 projection が稼働している事実に依存する。
+  - UNIQUE constraint / index / trigger は correctness ではなく
+    「`maybeSingle()` が 406 に倒れないか」「性能」に効く。破れても fail-open が吸収する
+    （その kind だけ `status='error'`）。
+- **Blocker:** なし（Stage 4 の hard blocker から外れた）。
+- **再検証手段:** `supabase/exam_spine_rls_verification.sql` を保持する。schema drift の
+  再発時（E-H2 の前例あり）に同じ手順で確認できるようにするため。
 
 ## E-H2 — anonymous mirror テーブルが anon から読める drift への対応
 
