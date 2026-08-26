@@ -868,6 +868,44 @@ function verificationCompatibility(): void {
   check('A7 revision 由来の mismatch が発生しない',
     verified.signals.revision === 'unknown');
 
+  // ★ Wave 1 の 5 status 空間と E-S2 の 4 verdict 空間の整合 ★
+  //   Wave 1 の verification は判定材料が足りないとき `incomparable` を返すが、
+  //   E-S2 が列挙する verdict は unreadable / unclaimed / mismatch / verified の 4 つである。
+  //   adapter 経路では present candidate の fingerprint が必ず非 null になるため、
+  //   `incomparable` は **構造的に発生しない**。ここを実測で固定しておく
+  //   （Canon 側の ruling が出るまで Wave 1 の実装は変更しない）。
+  const statuses: readonly ExamSourceReadStatus[] = ['ok', 'truncated', 'error', 'skipped'];
+  const deviceOptions: Array<[boolean, ExamSyncObservation | null]> = [
+    [false, null],
+    [true, null],
+    [true, deviceObs],
+    [true, deviceOther],
+  ];
+  const mirrorOptions: Array<ExamSyncObservation | null> = [null, serverObs, deviceOther === null ? null : examSyncObservation({
+    kind: 'self_pr',
+    source: 'server_mirror',
+    view: listSyncView([selfPrRow({ body: '別本文' })], selfPrItemView),
+  })];
+  const produced = new Set<string>();
+  let combos = 0;
+  for (const status of statuses) {
+    for (const [claimPresented, obs] of deviceOptions) {
+      for (const mirrorObs of mirrorOptions) {
+        combos += 1;
+        const r = verifyExamSourcePair({
+          canonical: deviceCanonicalCandidate({ claimPresented, observation: obs }),
+          mirror: serverMirrorCandidate({ status, observation: mirrorObs }),
+        });
+        produced.add(r.status);
+      }
+    }
+  }
+  check(`adapter 経路で incomparable が発生しない（${combos} 組を全探索）`,
+    !produced.has('incomparable'), [...produced].join(', '));
+  check('adapter 経路が E-S2 の 4 verdict 空間に収まる',
+    [...produced].every((v) => ['verified', 'mismatch', 'unclaimed', 'unreadable'].includes(v)),
+    [...produced].join(', '));
+
   // stale mirror シナリオ（device が更新済み / mirror が古い）
   const stale = verifyExamSourcePair({
     canonical: deviceCanonicalCandidate({
