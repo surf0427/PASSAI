@@ -22,10 +22,46 @@
 # 2. Stage
 
 ```text
-現在地: Stage 4（Canonical Context Assembly）完了
-        Stage 0-3 完了 / Wave 1-2 convergence 完了 / Stage 4 完了
-次:     Stage 5（consumer migration の前段）
+現在地: Stage 5.0（Device Revision Claim Wiring）完了
+        Stage 0-4 完了 / Wave 1-2 convergence 完了 / Stage 5.0 完了
+次:     Stage 5.1（pilot purpose の shadow comparison）
 ```
+
+## Stage 5.0 で成立したもの
+
+```text
+PILOT_PURPOSE = tutor / kind = basic_info
+
+lib/examSpine/sync/claim/**        header contract / serializer / parser / device view
+lib/examSpine/context/shadowGate.server.ts  default deny の activation gate（E-S11）
+app/tutor/page.tsx                 claim header を既存 fetch に 1 本追加
+app/api/tutor/route.ts             parse + auth binding + gate 済み shadow assembly
+```
+
+経路:
+
+```text
+localStorage basicFormData
+→ stripName → mapBasicInfoRow → basicInfoSyncView → examSyncObservation（server と同一）
+→ token（efp1:<hex64>）
+→ header x-exam-spine-device-claim（120 bytes）
+→ parse + auth binding + purpose gate filter
+→ Source-Sync verification
+→ Canonical Exam Context（shadow / default OFF）
+```
+
+## Stage 5.0 時点の保証
+
+```text
+consumer 出力経路   : 変更なし（prompt / response / 回答生成はすべて legacy のまま）
+production 挙動     : shadow OFF（既定）では query 数も latency も不変
+DB mutation         : なし
+AI API call         : なし
+service_role        : 不要のまま
+global mutable cache: なし（claim は request-scoped）
+Stage 2 prompt 経路 : production から未接続（QA が機械的に固定）
+```
+
 
 ## Stage 4 で成立したもの
 

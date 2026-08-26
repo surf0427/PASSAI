@@ -689,6 +689,89 @@ Exam-specific differences / Rollback implications
   - *veto を例外（throw）で表現する* — 呼び出し側が握り潰せる。contract として返す。
 - **Rollback implications:** なし（純関数の判定）。
 
+## E-S33 — device revision claim は request-scoped の advisory signal であり、header 1 本で運ぶ
+
+- **Status:** `LOCKED`（Stage 5.0 で実装 + QA 済み。pilot = `tutor` / kind = `basic_info`）
+- **Decision:** E-S2 が要求する device 申告の transport を次に固定する。
+  ```text
+  header   x-exam-spine-device-claim   （canonical。1 個だけ）
+  wire     {"v":"edc1","c":[{"kind":"<ExamSourceKind>","token":"efp1:<hex64>"}]}
+  上限     2048 bytes / 12 entries     （超過は切り詰めず破棄）
+  token    content 由来 fingerprint（`efp1:` + SHA-256 hex 64）
+  ```
+  実測サイズは pilot（1 kind）で **120 bytes**。
+- **token を content 由来にする根拠:** `sync/adapters/registry.ts` が全 class 1 kind について
+  「往復する revision token が存在しないため生成しない（E-S2 は content 由来 token を
+  signal とする）」と宣言している（`updated_at` は trigger 上書き、`source_hash` は
+  key 順依存で server 再算出不能）。E-S2 が却下した *content hash を送る* は
+  「**本文が network を通る**」ことへの拒否であり、本文を 1 byte も送らない
+  fingerprint はこれに当たらない。
+- **★ claim は verification input であって policy input ではない ★**
+  型に `userId` / `authority` / `table` / `purpose` / `verified` が存在しないため、
+  claim では次のいずれも **構造的にできない**。
+  ```text
+  他 user を名乗る        … owner scoping は server auth のみ（E-L3）
+  purpose gate を広げる   … toDeviceClaims が purpose の許可 source で filter（E-S28）
+  authority / table を指定 … registry だけが決める（E-S15）
+  自分を verified にする   … 判定は server 側の照合結果だけ
+  RLS を迂回する          … claim は query を 1 本も変えない
+  ```
+- **request-scoped:** claim は request ごとに評価する。`Map<userId, claim>` /
+  `lastClaimByUser` / `globalCurrentRevision` のような cross-request state を作らない。
+  同一 user の別 tab が別 revision を持っていても独立に評価される（QA 済み）。
+- **fail-safe（E-S1）:** missing / malformed / unknown version / unknown kind /
+  duplicate / oversize / invalid token のいずれでも throw せず request を落とさない。
+  その kind を `unclaimed` にして続行し、結果として server 値は採用されない。
+  **壊れた claim で request が落ちることも、壊れた claim で verified になることもない。**
+- **class 2 の申告を受け取らない:** `interview_ai` / `presentation` は server route が
+  著者であり client canonical が存在しない。申告を受け取ると「server 著作データを
+  client の申告で検証する」逆向きの誤りになる（E-S3）。parser が `not_syncable` で捨てる。
+- **device view を書き起こさない:** device 側 token は server が同じ行から算出する値と
+  完全一致しなければ意味が無い。したがって device 側も
+  `mapBasicInfoRow → basicInfoSyncView → examSyncObservation` という
+  **server と同一の経路**を通す。device 固有なのは「`name` を strip して
+  `schema_version` を添える」ところだけで、どちらも writer 契約から決まる。
+  `BASIC_INFO_SCHEMA_VERSION` は writer から export して正本を 1 箇所にした
+  （重複させると bump 時に fingerprint が永久不一致になり、runtime では検出できない）。
+- **空のときは申告しない:** writer は空の `BasicInfo` を書かないため、device が空なら
+  server にも行が無い。server 0 行は Stage 4 が Source-Sync より手前で `empty` を
+  確定させる（E-S30）ので、空の申告に意味は無い。header から外す。
+- **Alternatives rejected:**
+  - *timestamp を送る* — client 時刻だけで verified を判定する経路になり E-S2 に反する。
+    「往復する revision が無いなら生成しない」が registry の宣言でもある。
+  - *body に claim を入れる* — 全 consumer の body contract を変えることになる。
+    header なら consumer の request shape を 1 つも壊さずに載せられる。
+  - *claim を複数 header に分ける* — kind ごとに header が増え、上限管理と
+    injection 面が広がる。1 header に閉じる。
+- **Rollback implications:** client が header を送らなくなれば全 kind が `unclaimed` に戻る
+  だけで、consumer の出力は変わらない（Stage 5.0 時点で出力に影響しないため）。
+
+## E-S34 — Spine の production 接続は allowlist で管理し、Stage 2 prompt 経路は接続しない
+
+- **Status:** `LOCKED`（Stage 5.0 で実装 + QA 済み）
+- **Decision:** Stage 1〜4 が保っていた「production runtime からの `examSpine` import = 0」を、
+  Stage 5.0 以降は次の 2 本立てに置き換える。
+  ```text
+  1. examSpine を import してよい production file は **allowlist** に列挙されたものだけ
+     現在: app/tutor/page.tsx（claim serializer）/ app/api/tutor/route.ts（parser + gated shadow）
+  2. **どの production file も `examSpine/blocks` `examSpine/orchestrator` を import しない**
+     = Stage 2 の prompt 経路が未接続であること ＝ consumer migration が起きていないこと
+  ```
+  さらに sync core 本体（`revision` / `fingerprint` / `hash` / `verification` / `adapters`）は
+  production から直接 import しない。接続点は `sync/claim` 層だけとする。
+- **Reason:** 「import 0 本」は Stage 4 までは正しい invariant だったが、Stage 5.0 は
+  pilot を意図的に接続するため、そのままでは**正しい変更が QA を落とす**。かといって
+  check を消すと「どこまで接続が広がったか」を機械的に追えなくなる。
+  allowlist にすることで接続の増加が必ず diff に現れ、prompt 経路の禁止を別 check に
+  分けることで **consumer migration の有無を独立に固定**できる。
+  実際この置き換えで各 QA の check 数は減っていない（invariant は 1 本増えている）。
+- **★ 拡張の手続き ★** allowlist に file を足してよいのは、その Stage の Decision で
+  接続対象が明示されている場合だけである。「実装上必要だった」を理由に足さない（E-P9）。
+- **Alternatives rejected:**
+  - *check を削除する* — 接続範囲が追跡不能になる。
+  - *「0 本」を維持して pilot を別扱いの例外にする* — 例外が増えるほど invariant が形骸化する。
+- **Rollback implications:** なし（QA の判定条件のみ）。
+
 ---
 
 # 5. Policy / persistence decisions
