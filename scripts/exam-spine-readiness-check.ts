@@ -255,7 +255,15 @@ function r89Frozen(): void {
       })
       .join('\n');
 
-  const withFrom = spineFiles.filter((f) => /\.from\(/.test(stripComments(readFileSync(join(ROOT, f), 'utf8'))));
+  // ★ `.from(` の素朴な grep は組み込み（Uint8Array.from / Array.from / Object.fromEntries）
+  //   を Supabase の table 参照と誤検出する。sync/hash.ts が実例。
+  //   検出したいのは「Supabase client の .from(table)」だけなので、組み込みを先に除去する。
+  const stripBuiltinFrom = (src: string): string =>
+    src.replace(/\b(?:[A-Za-z0-9_$]*Array|Object|String|Map|Set|Promise)\.from(?:Entries)?\s*\(/g, 'BUILTIN(');
+
+  const withFrom = spineFiles.filter((f) =>
+    /\.from\(/.test(stripBuiltinFrom(stripComments(readFileSync(join(ROOT, f), 'utf8')))),
+  );
   check('R9 PostgREST を叩くのは supabaseExecutor.server.ts のみ',
     withFrom.length === 1 && withFrom[0].endsWith('read/supabaseExecutor.server.ts'),
     withFrom.join(', '));
