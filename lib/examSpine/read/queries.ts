@@ -150,7 +150,20 @@ export function essayQuery(userId: string): ExamReadQuery {
     kind: 'essay',
     role: 'core',
     table: 'essay_workspaces',
-    columns: ['id', 'local_workspace_id', 'workspace', 'created_at', 'updated_at'],
+    // ★ `workspace` を丸ごと SELECT しない（E-S27）★
+    //   EssayWorkspace 全体には body（小論文本文）/ improvementInProgress.rewriteDraft /
+    //   sparring.answers[] が入る。AI context に必要なのは添削結果だけなので、
+    //   PostgREST の JSON 演算子で `reviews` へ絞る。
+    //   ⚠️ reviews[*] には essayBodySnapshot（本文の複製）が残るため、
+    //     **mapper 側（mapEssayRow）が本文を落とす**ところまでで 1 組の対策になる。
+    //     query 側だけでは本文の転送は止まらない。
+    columns: [
+      'id',
+      'local_workspace_id',
+      'reviews:workspace->reviews',
+      'created_at',
+      'updated_at',
+    ],
     filters: [owner(userId)],
     // workspace->>'updatedAt'（jsonb 内の値）は index も型保証も無く NULL 順序も不定。
     // recency は column の updated_at を正本にする。

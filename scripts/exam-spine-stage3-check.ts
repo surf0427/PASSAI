@@ -30,12 +30,21 @@ import { EXAM_SOURCE_KINDS, EXAM_SOURCE_TABLES } from '@/lib/examSpine/sourceDat
 import type { ExamSourceKind } from '@/lib/examSpine/sourceData/types';
 import { EXAM_READ_CAPS, formatSelect } from '@/lib/examSpine/read/types';
 import type { ExamReadExecutor, ExamReadQuery } from '@/lib/examSpine/read/types';
-import { readExamSources } from '@/lib/examSpine/read/readSources';
-import { readExamSourcesForRequest } from '@/lib/examSpine/read/requestSnapshot.server';
+import { readExamSources, EXAM_READ_FIELD_LIMITS } from '@/lib/examSpine/read/readSources';
+import {
+  readExamSourcesForRequest,
+  peekExamSnapshotKinds,
+} from '@/lib/examSpine/read/requestSnapshot.server';
 import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnapshot.server';
 import { mapInterviewAiRow } from '@/lib/examSpine/read/rowMappers';
 import { unwrapEmbedded } from '@/lib/examSpine/read/guards';
 import * as Q from '@/lib/examSpine/read/queries';
+import {
+  EXAM_CONTEXT_REGISTRY,
+  gateExamSourceKinds,
+  sourcesForPurpose,
+} from '@/lib/examSpine/purpose';
+import { EXAM_CONTEXT_PURPOSES } from '@/lib/examSpine/types';
 
 import {
   USER_A,
@@ -431,6 +440,220 @@ async function s15NoName(): Promise<void> {
   // query の列にも name が現れない（payload 丸ごとなので構造で確認）
   const cols = rec.trace[0].columns;
   check('S15 basic_info の SELECT に name 列が無い', !cols.includes('name'), cols.join(', '));
+}
+
+async function s15bEssayNoBody(): Promise<void> {
+  // E-S27 — essay の server projection に本文が入らないこと。
+  const rec = createRecordingExecutor(fullDb());
+  const r = await readExamSources({ userId: USER_A, kinds: ['essay'], executor: rec.executor });
+  const rows = r.bundle.essayWorkspaces as Array<Record<string, unknown>>;
+  const serialized = JSON.stringify(rows);
+
+  check('S15b essay projection に workspace key が無い',
+    rows.every((row) => !Object.prototype.hasOwnProperty.call(row, 'workspace')),
+    Object.keys(rows[0] ?? {}).join(', '));
+  check('S15b bodyOnServer は false リテラル', rows.every((row) => row.bodyOnServer === false));
+  check('S15b essayBodySnapshot が bundle に現れない',
+    !serialized.includes('essayBodySnapshot'));
+  check('S15b 添削時点の本文複製が値としても現れない',
+    !serialized.includes('添削時点の複製') && !serialized.includes('最新添削時点の複製'));
+  check('S15b breakdown（未使用の内訳）を採らない', !serialized.includes('breakdown'));
+
+  // reviews は新しい順（append-only の末尾が最新）。
+  const first = (rows[0].reviews as Array<Record<string, unknown>>)[0];
+  eq('S15b reviews は新しい順（先頭が最新）', first.weakPoints, ['結論が弱い（最新）']);
+  check('S15b review にも bodyOnServer marker がある', first.bodyOnServer === false);
+  eq('S15b reviewCount は cap 前の元件数', rows[0].reviewCount, 2);
+  eq('S15b reviewsTruncated は元件数 <= cap で false', rows[0].reviewsTruncated, false);
+
+  // query 側: `workspace` を丸ごと SELECT していない。
+  const cols = rec.trace[0].columns;
+  check('S15b essay の SELECT に bare workspace 列が無い',
+    !cols.includes('workspace'), cols.join(', '));
+  check('S15b essay は workspace->reviews へ絞っている',
+    cols.some((c) => c === 'reviews:workspace->reviews'), cols.join(', '));
+}
+
+async function s15cEssayReviewCap(): Promise<void> {
+  // reviews が recordItems を超えるとき、cap して truncated を立てる。
+  const db = fullDb();
+  const many = Array.from({ length: 14 }, (_, i) => ({
+    totalScore: i,
+    weakPoints: [`課題 ${i}`],
+    essayBodySnapshot: `本文 ${i}`,
+  }));
+  db.tables.essay_workspaces = [
+    { id: 'ws-cap', user_id: USER_A, local_workspace_id: 'local-cap',
+      reviews: many, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  ];
+  const rec = createRecordingExecutor(db);
+  const r = await readExamSources({ userId: USER_A, kinds: ['essay'], executor: rec.executor });
+  const row = (r.bundle.essayWorkspaces as Array<Record<string, unknown>>)[0];
+
+  eq('S15c reviews は recordItems 件で cap される',
+    (row.reviews as unknown[]).length, EXAM_READ_FIELD_LIMITS.recordItems);
+  eq('S15c reviewCount は cap 前の件数を保持', row.reviewCount, 14);
+  eq('S15c reviewsTruncated が立つ', row.reviewsTruncated, true);
+  check('S15c cap 後も本文複製は 1 件も残らない',
+    !JSON.stringify(row).includes('essayBodySnapshot') && !JSON.stringify(row).includes('本文 '));
+}
+
+async function s15dEssayAdversarial(): Promise<void> {
+  // `->` が text で返るケース / 壊れた JSON / 非配列 でも throw しない。
+  const db = fullDb();
+  db.tables.essay_workspaces = [
+    { id: 'ws-str', user_id: USER_A, local_workspace_id: 'l1',
+      reviews: JSON.stringify([{ weakPoints: ['文字列で返った'] }]),
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-03T00:00:00.000Z' },
+    { id: 'ws-bad', user_id: USER_A, local_workspace_id: 'l2',
+      reviews: '{ not json',
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-02T00:00:00.000Z' },
+    { id: 'ws-null', user_id: USER_A, local_workspace_id: 'l3',
+      reviews: null,
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  ];
+  const rec = createRecordingExecutor(db);
+  const r = await readExamSources({ userId: USER_A, kinds: ['essay'], executor: rec.executor });
+  const rows = r.bundle.essayWorkspaces as Array<Record<string, unknown>>;
+
+  eq('S15d 3 行とも projection される（throw しない）', rows.length, 3);
+  eq('S15d text で返った reviews も parse される',
+    ((rows[0].reviews as Array<Record<string, unknown>>)[0]).weakPoints, ['文字列で返った']);
+  eq('S15d 壊れた JSON は空 reviews に倒れる', (rows[1].reviews as unknown[]).length, 0);
+  eq('S15d null reviews は空 reviews に倒れる', (rows[2].reviews as unknown[]).length, 0);
+  eq('S15d 壊れた行でも kind は ok（fail-open は減らすだけ）', r.statuses.essay, 'ok');
+}
+
+async function s20PurposeGateDefaultDeny(): Promise<void> {
+  // E-S28 — purpose gate。許可外 kind は query を 1 本も発行しない。
+  const rec = createRecordingExecutor(fullDb());
+  // essay_chat は basic_info だけを許可される purpose。
+  const r = await readExamSources({
+    userId: USER_A,
+    kinds: ['basic_info', 'essay', 'presentation', 'interview_ai'],
+    purpose: 'essay_chat',
+    executor: rec.executor,
+  });
+
+  eq('S20 許可された kind だけ ok', r.statuses.basic_info, 'ok');
+  eq('S20 許可外 kind は skipped（error ではない）', r.statuses.essay, 'skipped');
+  eq('S20 許可外 kind は skipped（presentation）', r.statuses.presentation, 'skipped');
+  eq('S20 許可外 kind の slot は null', r.bundle.essayWorkspaces, null);
+  eq('S20 許可外 kind の queryCount は 0', r.outcomes.essay.queryCount, 0);
+  eq('S20 deniedByPurpose に列挙される',
+    [...r.deniedByPurpose].sort(), ['essay', 'interview_ai', 'presentation']);
+
+  const tables = rec.trace.map((t) => t.table);
+  eq('S20 executor へ到達した query は 1 本だけ', tables, ['basic_info_logs']);
+  check('S20 許可外 table への query が 0 本',
+    !tables.includes('essay_workspaces') && !tables.includes('presentation_results'),
+    tables.join(', '));
+}
+
+async function s20bUnknownPurposeDeniesAll(): Promise<void> {
+  // 未知の purpose は「全部許可」でも「基本情報だけ許可」でもなく **全拒否**。
+  const rec = createRecordingExecutor(fullDb());
+  const r = await readExamSources({
+    userId: USER_A,
+    kinds: ['basic_info', 'activity'],
+    // 外部由来の文字列が purpose として紛れ込んだ状況を再現する。
+    purpose: 'not_a_real_purpose' as never,
+    executor: rec.executor,
+  });
+
+  eq('S20b 未知 purpose では query が 0 本', rec.trace.length, 0);
+  eq('S20b 未知 purpose では basic_info も skipped', r.statuses.basic_info, 'skipped');
+  eq('S20b 未知 purpose では全 kind が denied', [...r.deniedByPurpose].sort(), ['activity', 'basic_info']);
+  eq('S20b sourcesForPurpose(未知) は空', sourcesForPurpose('not_a_real_purpose').length, 0);
+  eq('S20b sourcesForPurpose(非文字列) は空', sourcesForPurpose(undefined).length, 0);
+}
+
+async function s20cGateNeverExpands(): Promise<void> {
+  // gate は「減らす」方向にしか働かない。許可されているが要求していない kind を足さない。
+  const rec = createRecordingExecutor(fullDb());
+  const r = await readExamSources({
+    userId: USER_A,
+    kinds: ['basic_info'],
+    purpose: 'tutor', // tutor は 9 kind 許可されている
+    executor: rec.executor,
+  });
+  eq('S20c 要求していない許可 kind を勝手に読まない', rec.trace.length, 1);
+  eq('S20c 要求外 kind は skipped のまま', r.statuses.self_analysis, 'skipped');
+  eq('S20c denied は空（要求が許可の部分集合）', r.deniedByPurpose.length, 0);
+
+  const g = gateExamSourceKinds('tutor', ['basic_info', 'basic_info', 'self_pr']);
+  eq('S20c gate は重複を除く', g.allowed, ['basic_info']);
+  eq('S20c tutor は self_pr を許可しない', g.denied, ['self_pr']);
+}
+
+async function s20dGateBeforeSnapshot(): Promise<void> {
+  // 許可外 kind は snapshot に入らない ＝ 同一 request の別 purpose consumer が拾えない。
+  const request = new Request('https://example.test/api/probe');
+  const rec = createRecordingExecutor(fullDb());
+  const authorize = async (): Promise<ExamRequestAuthorization> => ({ ok: true, userId: USER_A });
+
+  const first = await readExamSourcesForRequest({
+    request, authorize, kinds: ['basic_info', 'presentation'],
+    purpose: 'essay_chat', executor: rec.executor,
+  });
+  check('S20d 1 回目は成功', first.ok);
+  if (!first.ok) return;
+  eq('S20d 許可外 kind は fresh read されない', [...first.freshlyRead], ['basic_info']);
+  eq('S20d denied が snapshot 経路でも返る', [...first.result.deniedByPurpose], ['presentation']);
+
+  const kinds = peekExamSnapshotKinds(request);
+  check('S20d 許可外 kind は snapshot に入らない', !kinds.includes('presentation'), kinds.join(', '));
+
+  // 別 purpose（presentation を許可）が同じ request で読むと、改めて query が出る。
+  const second = await readExamSourcesForRequest({
+    request, authorize, kinds: ['presentation'],
+    purpose: 'presentation_feedback', executor: rec.executor,
+  });
+  check('S20d 2 回目は成功', second.ok);
+  if (!second.ok) return;
+  eq('S20d 別 purpose では改めて読む', [...second.freshlyRead], ['presentation']);
+  eq('S20d presentation は ok になる', second.result.statuses.presentation, 'ok');
+}
+
+function purposeGateRegistry(): void {
+  // registry の内部整合。sources と sourceEvidence が 1:1 であること。
+  const ALL = new Set<string>(EXAM_SOURCE_KINDS);
+  const badKind: string[] = [];
+  const evidenceMismatch: string[] = [];
+  const dupSources: string[] = [];
+  const emptyEvidence: string[] = [];
+
+  for (const purpose of EXAM_CONTEXT_PURPOSES) {
+    const policy = EXAM_CONTEXT_REGISTRY[purpose];
+    for (const k of policy.sources) if (!ALL.has(k)) badKind.push(`${purpose}:${k}`);
+    if (new Set(policy.sources).size !== policy.sources.length) dupSources.push(purpose);
+
+    const evKeys = Object.keys(policy.sourceEvidence).sort();
+    const srcKeys = [...policy.sources].sort();
+    if (JSON.stringify(evKeys) !== JSON.stringify(srcKeys)) {
+      evidenceMismatch.push(`${purpose}(ev=${evKeys.join('|')} src=${srcKeys.join('|')})`);
+    }
+    for (const [k, v] of Object.entries(policy.sourceEvidence)) {
+      if (typeof v !== 'string' || v.trim().length < 10) emptyEvidence.push(`${purpose}:${k}`);
+    }
+  }
+
+  check('S21 sources は 10 kind の語彙だけを使う', badKind.length === 0, badKind.join(', '));
+  check('S21 sources に重複が無い', dupSources.length === 0, dupSources.join(', '));
+  check('S21 sourceEvidence の key が sources と 1:1', evidenceMismatch.length === 0, evidenceMismatch.join(', '));
+  check('S21 全 evidence が実体を持つ（10 文字以上）', emptyEvidence.length === 0, emptyEvidence.join(', '));
+
+  // presentation_practice_records は kind ですらないので registry に現れない（E-S16）。
+  const dormantLeak = EXAM_CONTEXT_PURPOSES.filter((p) =>
+    (EXAM_CONTEXT_REGISTRY[p].sources as readonly string[]).includes('presentation_record'));
+  check('S21 dormant kind が purpose に現れない', dormantLeak.length === 0);
+
+  // 全 purpose が sources を宣言している（宣言漏れ = 暗黙全許可 を防ぐ）。
+  const missing = EXAM_CONTEXT_PURPOSES.filter((p) => !Array.isArray(EXAM_CONTEXT_REGISTRY[p].sources));
+  check('S21 全 purpose が sources を宣言している', missing.length === 0, missing.join(', '));
+
+  console.log(`  info  purpose gate: ${EXAM_CONTEXT_PURPOSES.length} purposes / kind 使用状況 = ` +
+    EXAM_SOURCE_KINDS.map((k) => `${k}:${EXAM_CONTEXT_PURPOSES.filter((p) => EXAM_CONTEXT_REGISTRY[p].sources.includes(k)).length}`).join(' '));
 }
 
 async function s16Subset(): Promise<void> {
@@ -847,6 +1070,14 @@ async function main(): Promise<void> {
   await s13EnrichmentFailure();
   await s14CoreAbsentNoEnrichment();
   await s15NoName();
+  await s15bEssayNoBody();
+  await s15cEssayReviewCap();
+  await s15dEssayAdversarial();
+  await s20PurposeGateDefaultDeny();
+  await s20bUnknownPurposeDeniesAll();
+  await s20cGateNeverExpands();
+  await s20dGateBeforeSnapshot();
+  purposeGateRegistry();
   await s16Subset();
   await s17OverlappingConsumers();
   await s18DifferentRequestNoReuse();

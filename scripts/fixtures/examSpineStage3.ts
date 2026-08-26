@@ -254,14 +254,33 @@ export function essayRows(count: number, userId = USER_A): FakeRow[] {
     id: `ws-${pad(n)}`,
     user_id: userId,
     local_workspace_id: `local-ws-${pad(n)}`,
-    workspace: {
-      theme: `お題 ${n}`,
-      body: `小論文本文 ${n}`,
-      // ★ jsonb 内の updatedAt。ORDER BY に使っていないことを検出するため、
-      //   column の updated_at と **逆順**に置く。
-      updatedAt: isoAt(count - n),
-      reviews: [{ weakPoints: ['論拠が薄い'] }],
-    },
+    // ★ reader は `reviews:workspace->reviews` で SELECT するため、fixture も
+    //   workspace 丸ごとではなく alias された `reviews` を返す（E-S27）。
+    //   本文（body / rewriteDraft / sparring）は fixture にも置かない。
+    //   essayBodySnapshot は「mapper が確実に落とす」ことを検証するため **意図的に置く**。
+    reviews: [
+      {
+        totalScore: 60 + n,
+        verdict: `判定 ${n}`,
+        improvement: `改善 ${n}`,
+        goodPoints: ['構成が明確'],
+        weakPoints: ['論拠が薄い（古い）'],
+        createdAt: isoAt(1),
+        essayBodySnapshot: `小論文本文 ${n}（添削時点の複製）`,
+        breakdown: [{ label: '論理', score: 3 }],
+      },
+      {
+        totalScore: 70 + n,
+        verdict: `判定 ${n} 最新`,
+        improvement: `改善 ${n} 最新`,
+        goodPoints: ['具体例が増えた'],
+        weakPoints: ['結論が弱い（最新）'],
+        createdAt: isoAt(2),
+        essayBodySnapshot: `小論文本文 ${n}（最新添削時点の複製）`,
+        source: 'ai',
+        parseError: false,
+      },
+    ],
     created_at: isoAt(n),
     updated_at: isoAt(n),
   }));
