@@ -145,16 +145,29 @@ COMMENT ON COLUMN mirror_events.client_version IS
   'correlate spikes in failure rate to deploys.';
 
 
--- 6. RLS — INSERT-only for anon. No SELECT / UPDATE / DELETE policy: the
---    application can only append, and reads happen via service-role context
---    in the Supabase SQL editor. This mirrors the no-reads / no-destructive
+-- 6. RLS — INSERT-only. No SELECT / UPDATE / DELETE policy: the application
+--    can only append, and reads happen via service-role context in the
+--    Supabase SQL editor. This mirrors the no-reads / no-destructive
 --    contract of student_profile_mirrors.
+--
+--    Both browser roles need INSERT. `lib/supabase/auth.ts:ensureAnonymousUser()`
+--    calls `signInAnonymously()`, so a visitor who never signed in still holds
+--    a session JWT whose Postgres role is `authenticated` (not `anon`) — the
+--    anon policy alone leaves real traffic failing with 42501. See
+--    supabase/mirror_events_authenticated_insert.sql for the production
+--    migration and the measured root cause.
 ALTER TABLE mirror_events ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "mirror_events anon insert"
   ON mirror_events
   FOR INSERT
   TO anon
+  WITH CHECK (true);
+
+CREATE POLICY "mirror_events authenticated insert"
+  ON mirror_events
+  FOR INSERT
+  TO authenticated
   WITH CHECK (true);
 
 
