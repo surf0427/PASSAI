@@ -16,6 +16,8 @@
 //   他の source は継続する。fail-open は「**context を減らす**」ことであって、
 //   stale cache / 前 request / 古い成功値 / fallback table への置換ではない。
 
+import type { ExamContextPurpose } from '../types';
+import { gateExamSourceKinds } from '../purpose';
 import type { ExamSourceKind, ExamSourceReadStatus } from '../sourceData/types';
 import { EMPTY_EXAM_SOURCE_BUNDLE, EXAM_SOURCE_KINDS } from '../sourceData/types';
 import type { ExamSourceBundle } from '../sourceData/types';
@@ -67,6 +69,17 @@ export type ExamReadRequest = {
   userId: string;
   /** この request で必要な kind。指定されなかった kind は status='skipped'。 */
   kinds: readonly ExamSourceKind[];
+  /**
+   * ★ Purpose gate（E-S28）★
+   *   指定すると `kinds` は `EXAM_CONTEXT_REGISTRY[purpose].sources` との積へ絞られる。
+   *   許可外の kind は **query を 1 本も発行せず** status='skipped' のままになる。
+   *
+   *   未指定のときは gate をかけない。これは「gate が無い」ではなく
+   *   「呼び出し側が既に purpose 単位で kinds を決めている」ことを意味する契約であり、
+   *   production の loader は必ず purpose を渡すこと（Stage 4 の受け入れ条件）。
+   *   未知の purpose 文字列を渡した場合は **全 kind が denied**（default deny）。
+   */
+  purpose?: ExamContextPurpose;
   executor: ExamReadExecutor;
   /**
    * duration 計測用の時計。**注入されたときだけ**計測する。
@@ -77,6 +90,11 @@ export type ExamReadRequest = {
 
 export type ExamReadResult = {
   bundle: ExamSourceBundle;
+  /**
+   * purpose gate によって落とされた kind（要求されたが許可範囲外）。
+   * purpose 未指定なら常に空。enum のみなので観測ログへそのまま出せる（E-S12 / E-S13）。
+   */
+  deniedByPurpose: readonly ExamSourceKind[];
   /** 10 kind すべてを毎回返す。 */
   statuses: Readonly<Record<ExamSourceKind, ExamSourceReadStatus>>;
   outcomes: Readonly<Record<ExamSourceKind, ExamSourceReadOutcome>>;
@@ -131,7 +149,14 @@ export async function readExamSources(request: ExamReadRequest): Promise<ExamRea
     outcomes[kind] = SKIPPED_OUTCOME;
   }
 
-  const targets = EXAM_SOURCE_KINDS.filter((k) => requested.has(k));
+  // ★ purpose gate。許可外の kind はここで落ち、executor まで到達しない。
+  const gate =
+    request.purpose === undefined
+      ? { allowed: [...requested], denied: [] as ExamSourceKind[] }
+      : gateExamSourceKinds(request.purpose, [...requested]);
+  const gated = new Set(gate.allowed);
+
+  const targets = EXAM_SOURCE_KINDS.filter((k) => gated.has(k));
 
   // ★ allSettled による source isolation。1 source の失敗が他を巻き込まない。
   const settled = await Promise.allSettled(
@@ -180,6 +205,7 @@ export async function readExamSources(request: ExamReadRequest): Promise<ExamRea
 
   return {
     bundle: bundle as ExamSourceBundle,
+    deniedByPurpose: gate.denied,
     statuses: statuses as Record<ExamSourceKind, ExamSourceReadStatus>,
     outcomes: outcomes as Record<ExamSourceKind, ExamSourceReadOutcome>,
     log,
@@ -206,7 +232,7 @@ async function readKind(kind: ExamSourceKind, req: ExamReadRequest): Promise<Kin
     case 'self_pr':
       return readList(req, Q.selfPrQuery(req.userId), (row) => mapSelfPrRow(row, L));
     case 'essay':
-      return readList(req, Q.essayQuery(req.userId), (row) => mapEssayRow(row));
+      return readList(req, Q.essayQuery(req.userId), (row) => mapEssayRow(row, L));
     case 'interview_record':
       return readList(req, Q.interviewRecordQuery(req.userId), (row) =>
         mapInterviewRecordRow(row, L),

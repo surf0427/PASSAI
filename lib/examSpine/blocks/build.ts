@@ -38,7 +38,9 @@ import { buildTutorStudentContext } from '@/lib/contextBuilders/tutorStudentCont
 import { buildTutorStudentContextSection } from '@/lib/tutor/tutorPrompt';
 import { toStudentProfile } from '@/lib/studentProfile';
 
-import type { ExamContextInput } from '../orchestrator/input';
+import type { ExamContextInput, ExamNotServerCapableSlot } from '../orchestrator/input';
+import type { ExamContextOrigin } from '../types';
+import type { ExamSourceKind } from '../sourceData/types';
 import { EXAM_CONTEXT_BLOCK_IDS, createExamContextBlock } from './types';
 import type { ExamContextBlock, ExamContextBlockId } from './types';
 import { EXAM_CONTEXT_BLOCK_REGISTRY } from './registry';
@@ -55,12 +57,50 @@ import { EXAM_CONTEXT_BLOCK_REGISTRY } from './registry';
 export function buildExamContextBlocks(
   input: ExamContextInput,
 ): readonly ExamContextBlock[] {
-  const origin = input.origin ?? 'bridge';
   const contents = buildBlockContents(input);
-  return EXAM_CONTEXT_BLOCK_IDS.map((id) =>
-    createExamContextBlock(id, EXAM_CONTEXT_BLOCK_REGISTRY[id], contents[id], origin),
-  );
+  return EXAM_CONTEXT_BLOCK_IDS.map((id) => {
+    const meta = EXAM_CONTEXT_BLOCK_REGISTRY[id];
+    return createExamContextBlock(id, meta, contents[id], resolveBlockOrigin(input, id, meta.sourceKind));
+  });
 }
+
+/**
+ * block 1 個の origin を決める（E-S26 / Canon §17）。
+ *
+ * 優先順位:
+ *   1. その block が `notServerCapableSlots` に挙がった slot 由来 → 'not_server_capable'
+ *   2. block の `sourceKind` について `origins` に申告がある → その値
+ *   3. それ以外 → `input.origin`（既定 'bridge'）
+ *
+ * ★ ここで origin を **推測しない**。申告が無い kind に対して
+ *   「server 経路があるはずだから server」と補完すると、Canon §17 が禁じる
+ *   暗黙的 Mixed-Origin を Spine 自身が作ることになる。
+ */
+function resolveBlockOrigin(
+  input: ExamContextInput,
+  id: ExamContextBlockId,
+  sourceKind: ExamSourceKind | undefined,
+): ExamContextOrigin {
+  const fallback = input.origin ?? 'bridge';
+  const slot = NOT_SERVER_CAPABLE_BLOCKS[id];
+  if (slot && input.notServerCapableSlots?.includes(slot)) return 'not_server_capable';
+  if (!sourceKind) return fallback;
+  return input.origins?.[sourceKind] ?? fallback;
+}
+
+/**
+ * durable source を持たない slot に由来する block の対応表（E-P3）。
+ *
+ * `statement_summary` は buildInterviewQuestionMaterials が `statementDraft`
+ * （localStorage 専用・durable table 無し）から作る section であり、
+ * server 経路が存在しない構造的 bridge である。
+ * ★ 「今 server から取れていない」ではなく「**取れる先が無い**」ものだけを載せる。
+ */
+const NOT_SERVER_CAPABLE_BLOCKS: Partial<
+  Record<ExamContextBlockId, ExamNotServerCapableSlot>
+> = {
+  statement_summary: 'statementDraft',
+};
 
 /** id → content（null = source 未提供）。 */
 function buildBlockContents(

@@ -663,6 +663,61 @@ function aiSdkLoaded(): boolean {
 
 // ── 10. run ───────────────────────────────────────────────────────
 
+
+// ── E-S26: mixed-origin を block 単位で表現できること ─────────────────
+//
+// Canon §17（暗黙的 Mixed-Origin の禁止）/ E-P7（per-field の server↔bridge 共存）を
+// 型で満たしていることの証明。single origin では不可能だったことを示す。
+function checkMixedOrigin(): void {
+  const fixture = EXAM_SPINE_FIXTURES[0];
+  const extras = getStage2Extras(fixture);
+  const base = fullInput(fixture, extras);
+
+  // 1 つの context で 3 origin が同時に成立する現実的な組み合わせ:
+  //   basic_info  … server（tutor は既に server で読んでいる）
+  //   activity    … bridge（server 経路はあるが今回は body 由来）
+  //   statementDraft … not_server_capable（durable table が無い / E-P3）
+  const mixed = buildExamContextBlocks({
+    ...base,
+    origin: 'bridge',
+    origins: { basic_info: 'server', self_analysis: 'server' },
+    notServerCapableSlots: ['statementDraft'],
+  });
+
+  const byId = new Map(mixed.map((b) => [b.id, b]));
+  const originOf = (id: string): string | undefined => byId.get(id as never)?.origin;
+
+  check('E1 basic_info 由来 block は server', originOf('basic_profile') === 'server',
+    String(originOf('basic_profile')));
+  check('E1 self_analysis 由来 block は server',
+    originOf('self_analysis_statement') === 'server', String(originOf('self_analysis_statement')));
+  check('E1 activity 由来 block は bridge（申告が無いので既定へ）',
+    originOf('activity_text') === 'bridge', String(originOf('activity_text')));
+  check('E1 statementDraft 由来 block は not_server_capable',
+    originOf('statement_summary') === 'not_server_capable', String(originOf('statement_summary')));
+
+  const distinct = new Set(mixed.map((b) => b.origin));
+  check('E2 1 つの context に 3 origin が同時に存在できる', distinct.size === 3,
+    [...distinct].join(', '));
+
+  // single origin では表現できなかったことの反証（後方互換の確認も兼ねる）。
+  const single = buildExamContextBlocks({ ...base, origin: 'bridge' });
+  const singleDistinct = new Set(single.map((b) => b.origin));
+  check('E3 origins 未指定なら全 block が同一 origin（従来挙動）', singleDistinct.size === 1,
+    [...singleDistinct].join(', '));
+
+  // origin は render に出ない ＝ byte-equivalence に影響しない。
+  const renderedMixed = JSON.stringify(mixed.map((b) => b.content));
+  const renderedSingle = JSON.stringify(single.map((b) => b.content));
+  check('E4 origin を変えても block content は 1 byte も変わらない',
+    renderedMixed === renderedSingle);
+
+  // 推測しない: 申告が無い kind を勝手に server にしない。
+  const noClaim = buildExamContextBlocks({ ...base, origins: {} });
+  check('E5 申告が無い kind を server に補完しない',
+    noClaim.every((b) => b.origin === 'bridge'));
+}
+
 function main(): void {
   console.log('[exam-spine-stage2] Stage 2 contract + byte-equivalence check');
   console.log(
@@ -678,6 +733,7 @@ function main(): void {
     checkPurity(fixture, extras);
   }
 
+  checkMixedOrigin();
   checkBudgetNotEnforced();
   checkNoRuntimeImport();
   checkNoCareerDependency();

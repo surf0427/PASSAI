@@ -246,28 +246,116 @@ export function mapSelfPrRow(
   };
 }
 
-// ── essay ─────────────────────────────────────────────────────────────
+// ── essay（E-S27）─────────────────────────────────────────────────────
+//
+// ★★ 小論文の本文は server projection に入らない ★★
+//   `essay_workspaces.workspace` は EssayWorkspace 全体の jsonb であり、
+//     workspace.body                      … 小論文本文（正本）
+//     workspace.reviews[*].essayBodySnapshot … 添削時点の本文の複製（最大 20 件）
+//     workspace.improvementInProgress.rewriteDraft … 改善後リライト本文
+//     workspace.sparring.answers[]        … 壁打ちへの本人回答
+//   を含む。これを丸ごと projection へ載せると、AI context に必要のない本文が
+//   1 read あたり最大「本文 × (1 + reviews 件数)」だけ bundle に載る。
+//   Canon §55（Privacy Boundary）/ §56（Token Efficiency）/ E-P5 に反する。
+//
+//   query 側は `workspace->reviews` へ絞り（queries.ts:essayQuery）、
+//   mapper 側は reviews の各 entry から **本文 snapshot を落として**採る。
+//   `bodyOnServer: false` を型で固定してあるので、
+//   「server 由来 essay に本文がある」と書いたコードは型検査で落ちる（E-P8 と同じ手法）。
+//
+// ★ reviews は append-only。**末尾が最新**（types/essay.ts:ReviewEntry / 最大 20 件）。
+//   ここでは新しい順に並べ替えて `limits.recordItems` 件まで採る。
+//   並べ替えは配列反転のみで、時刻の再解釈をしない（mapper は Date を持たない）。
+
+export type ExamEssayReviewServerRow = {
+  /** ★ essayBodySnapshot を持たないことの型レベルの目印。 */
+  readonly bodyOnServer: false;
+  totalScore: number | null;
+  verdict: string | null;
+  improvement: string | null;
+  goodPoints: string[];
+  weakPoints: string[];
+  createdAt: string | null;
+  /** 'ai' | 'partial' | 'fallback'。fallback は AI が正常出力していないことの印。 */
+  source: string | null;
+  parseError: boolean | null;
+};
 
 export type ExamEssayServerRow = {
+  /** ★ workspace 本文（body / rewriteDraft / sparring answers）を持たない。 */
+  readonly bodyOnServer: false;
   id: string | null;
   localWorkspaceId: string | null;
-  /**
-   * EssayWorkspace 全体の jsonb。
-   * ★ 本人の本文と AI レビューが同居するため、ここで 1 つの provenance ラベルを付けない。
-   *   block 単位の provenance 判断は Stage 2 の責務（essay = ai_derived は必ず嘘になる）。
-   */
-  workspace: Record<string, unknown> | null;
+  /** 新しい順。`limits.recordItems` 件まで。 */
+  reviews: ExamEssayReviewServerRow[];
+  /** cap 前の元件数。`reviews.length` との差で truncation を検出できる。 */
+  reviewCount: number;
+  reviewsTruncated: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 };
 
-export function mapEssayRow(row: unknown): ExamEssayServerRow | null {
-  const rec = asRecord(row);
+/**
+ * PostgREST の `->` は json / text のどちらでも返り得るため両方を受ける。
+ * 解釈できなければ空配列（= 「reviews が無い」）に倒し、throw しない。
+ */
+function readReviewsArray(value: unknown): unknown[] {
+  let raw = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(raw) ? raw : [];
+}
+
+function mapEssayReview(
+  value: unknown,
+  limits: ExamReadFieldLimits,
+): ExamEssayReviewServerRow | null {
+  const rec = asRecord(value);
   if (!rec) return null;
   return {
+    bodyOnServer: false,
+    totalScore: asFiniteNumber(rec.totalScore),
+    verdict: truncateString(rec.verdict, limits.shortText),
+    improvement: truncateString(rec.improvement, limits.longText),
+    goodPoints: toStringArray(rec.goodPoints, limits.arrayItems, limits.arrayItemLength),
+    weakPoints: toStringArray(rec.weakPoints, limits.arrayItems, limits.arrayItemLength),
+    createdAt: asString(rec.createdAt),
+    source: truncateString(rec.source, limits.shortText),
+    parseError: typeof rec.parseError === 'boolean' ? rec.parseError : null,
+    // ★ essayBodySnapshot / breakdown / sourceIssueId は意図的に採らない。
+  };
+}
+
+export function mapEssayRow(
+  row: unknown,
+  limits: ExamReadFieldLimits,
+): ExamEssayServerRow | null {
+  const rec = asRecord(row);
+  if (!rec) return null;
+
+  const all = readReviewsArray(rec.reviews);
+  // 新しい順（append-only なので反転）。cap は元件数に対して判定する。
+  const newestFirst = [...all].reverse();
+  const reviews: ExamEssayReviewServerRow[] = [];
+  for (const entry of newestFirst) {
+    const mapped = mapEssayReview(entry, limits);
+    if (!mapped) continue;
+    reviews.push(mapped);
+    if (reviews.length >= limits.recordItems) break;
+  }
+
+  return {
+    bodyOnServer: false,
     id: asString(rec.id),
     localWorkspaceId: asString(rec.local_workspace_id),
-    workspace: asRecord(rec.workspace),
+    reviews,
+    reviewCount: all.length,
+    reviewsTruncated: all.length > limits.recordItems,
     createdAt: asString(rec.created_at),
     updatedAt: asString(rec.updated_at),
   };

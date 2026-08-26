@@ -26,6 +26,13 @@ import type {
 } from '@/types/divergence';
 import type { TutorStudentContextInput } from '@/types/tutorContext';
 import type { ExamContextOrigin } from '../types';
+import type { ExamSourceKind } from '../sourceData/types';
+
+/**
+ * durable table を持たない context slot（Spine の 10 kind に写像できないもの）。
+ * ★ 増やすときは E-P3 / E-S9 と突き合わせること。「まだ実装していない」ものは入れない。
+ */
+export type ExamNotServerCapableSlot = 'statementDraft';
 
 /**
  * Layer 2 の入力。すべて optional で、渡されなかった slot の block は
@@ -36,10 +43,44 @@ import type { ExamContextOrigin } from '../types';
  */
 export type ExamContextInput = {
   /**
-   * §Context Origin。Stage 2 は取得をしないので、caller の申告を block へ透過するだけ。
-   * 既定は 'bridge'（client 由来の値を受けている現状に一致する）。
+   * §Context Origin — **既定値のみ**（E-S26）。
+   *
+   * ★ これ 1 個で context 全体の origin を表現してはいけない ★
+   *   移行期は 1 つの context の中で kind ごとに origin が違うのが常態である。実例:
+   *     basicInfo        server 経路あり（tutor は既に server で読んでいる）
+   *     statementDraft   durable table が存在しない = not_server_capable（E-P3 で恒久）
+   *     activityData     server 経路はあるが canary OFF なら bridge
+   *   単一値ではこの 3 者を同時に表現できず、Canon §17 が禁じる
+   *   「暗黙的 Mixed-Origin」をそのまま作ることになる。
+   *
+   *   したがって本 field は `origins` に該当エントリが無い slot の **fallback** に降格する。
+   *   未指定時の既定は 'bridge'（client 由来の値を受けている現状に一致する）。
    */
   origin?: ExamContextOrigin;
+
+  /**
+   * §Context Origin — **kind 単位の申告**（E-S26 / Canon §17 / E-P7）。
+   *
+   *   key は Layer 1 の `ExamSourceKind`。その kind に由来する block だけがこの値を受け取る。
+   *   kind を持たない block（feature 入力 / 静的 section）は `origin` の既定値を受ける。
+   *
+   *   ★ Stage 2 はこの値で分岐しない。透過して block に載せるだけである。
+   *     veto / verification / 選択の変更は Stage 4 以降の責務であり、ここには入れない。
+   *
+   *   ★ 「server 経路があるか」ではなく「**今回この値をどこから取ったか**」を書く。
+   *     server 経路が存在しても今回 bridge から受けたなら 'bridge' である。
+   */
+  origins?: Readonly<Partial<Record<ExamSourceKind, ExamContextOrigin>>>;
+
+  /**
+   * durable source を持たない slot の origin（E-P3 / E-S9 の structural bridge）。
+   *
+   *   `ExamSourceKind` に対応しないため `origins` では表現できない。
+   *   現状の該当例: `statementDraft`（E-P3 で恒久据え置き）。
+   *   ここに書かれた slot は観測上 `not_server_capable` として数え、
+   *   canary 中の bridge 率に混ぜない（E-S9）。
+   */
+  notServerCapableSlots?: readonly ExamNotServerCapableSlot[];
 
   // ── Layer 1 由来 ────────────────────────────────────────────────
   basicInfo?: BasicInfo | null;

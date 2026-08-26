@@ -30,6 +30,8 @@
 //   （Stage 0〜4 は dependency 追加禁止 / E-S14）を優先し、client bundle への混入は
 //   「production runtime import = 0」を QA で固定することで担保する。
 
+import type { ExamContextPurpose } from '../types';
+import { gateExamSourceKinds } from '../purpose';
 import type { ExamSourceKind, ExamSourceReadStatus } from '../sourceData/types';
 import { EMPTY_EXAM_SOURCE_BUNDLE, EXAM_SOURCE_KINDS } from '../sourceData/types';
 import type { ExamSourceBundle } from '../sourceData/types';
@@ -51,6 +53,11 @@ export type ExamRequestSnapshotInput = {
    */
   authorize: () => Promise<ExamRequestAuthorization>;
   kinds: readonly ExamSourceKind[];
+  /**
+   * ★ Purpose gate（E-S28）★ 指定すると許可外 kind は snapshot にも入らず query も出ない。
+   * 未知の purpose は全 kind denied（default deny）。
+   */
+  purpose?: ExamContextPurpose;
   executor: ExamReadExecutor;
   clock?: () => number;
 };
@@ -106,8 +113,16 @@ export async function readExamSourcesForRequest(
     SNAPSHOTS.set(input.request, entry);
   }
 
-  // ── 3. 未取得の kind だけ読む（per-kind read-once）──────────────────
-  const requested = dedupeKinds(input.kinds);
+  // ── 3. purpose gate → 未取得の kind だけ読む（per-kind read-once）────
+  //
+  // ★ gate は snapshot の **手前**に置く。許可外 kind を snapshot に入れると、
+  //   同一 request 内の別 purpose の consumer がそれを拾えてしまう。
+  const deduped = dedupeKinds(input.kinds);
+  const gate =
+    input.purpose === undefined
+      ? { allowed: deduped, denied: [] as ExamSourceKind[] }
+      : gateExamSourceKinds(input.purpose, deduped);
+  const requested = [...gate.allowed];
   const servedFromSnapshot = requested.filter((k) => entry.kinds.has(k));
   const missing = requested.filter((k) => !entry.kinds.has(k));
 
@@ -115,6 +130,7 @@ export async function readExamSourcesForRequest(
     const fresh = await readExamSources({
       userId: auth.userId,
       kinds: missing,
+      purpose: input.purpose,
       executor: input.executor,
       clock: input.clock,
     });
@@ -143,7 +159,7 @@ export async function readExamSourcesForRequest(
   //   retry で負荷を増やすことでも、古い値へ差し替えることでもない。
   return {
     ok: true,
-    result: composeResult(requested, entry),
+    result: composeResult(requested, entry, gate.denied),
     freshlyRead: missing,
     servedFromSnapshot,
   };
@@ -156,6 +172,7 @@ export async function readExamSourcesForRequest(
 function composeResult(
   requested: readonly ExamSourceKind[],
   entry: SnapshotEntry,
+  deniedByPurpose: readonly ExamSourceKind[],
 ): ExamReadResult {
   const bundle: Record<string, unknown> = { ...EMPTY_EXAM_SOURCE_BUNDLE };
   const statuses: Record<string, ExamSourceReadStatus> = {};
@@ -178,6 +195,7 @@ function composeResult(
 
   return {
     bundle: bundle as ExamSourceBundle,
+    deniedByPurpose,
     statuses: statuses as Record<ExamSourceKind, ExamSourceReadStatus>,
     outcomes: outcomes as Record<ExamSourceKind, ExamSourceReadOutcome>,
     log,
