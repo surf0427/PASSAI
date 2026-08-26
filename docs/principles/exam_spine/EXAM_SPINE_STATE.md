@@ -49,32 +49,48 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `d7b1100` | **NON_CANONICAL_STAGE5_1_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1 / Packet J 相当（shadow comparison）を追加した |
+| `exam-spine-w1-convergence-v2` | `3285d55`（継続前進中） | **NON_CANONICAL_STAGE5_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1（shadow comparison / Packet J 相当）と Stage 5.2（canonical diagnosis block）を追加した |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 
-### Deferred Stage 5.1 candidate（成果は保全する）
+### Deferred Stage 5 candidate（成果は保全する）
 
 ```text
 branch : exam-spine-w1-convergence-v2
-HEAD   : d7b1100a8b491371601dd855b88e1bacc654df91
-unique commits（canonical に含まれないもの）:
-  42cdf18  feat(spine): compare tutor legacy and canonical context in shadow
-  6d5eee5  test(spine): verify tutor shadow migration readiness
-  d7b1100  docs(exam-spine): freeze stage 5.1 comparison contract
+HEAD   : 3285d55（arbitration 時点の観測値。**この branch は前進を続けている**）
+
+⚠️ HEAD を固定値として使わない。昇格を検討する時点で必ず再解決する:
+     git log --oneline exam-spine-stage4-stabilize..exam-spine-w1-convergence-v2
+     git diff --stat exam-spine-stage4-stabilize...exam-spine-w1-convergence-v2
+
+arbitration 時点で観測した unique commits:
+  Stage 5.1（shadow comparison / Packet J 相当）
+    42cdf18  feat(spine): compare tutor legacy and canonical context in shadow
+    6d5eee5  test(spine): verify tutor shadow migration readiness
+    d7b1100  docs(exam-spine): freeze stage 5.1 comparison contract
+  Stage 5.2（canonical diagnosis block / consumer migration 相当）
+    4b30dfd  refactor(spine): make the diagnosis hint table a single authority
+    4ad3bd1  feat(spine): add canonical diagnosis block
+    b151190  feat(spine): claim device diagnosis so the canonical block can be present
+    7a80aaa  test(spine): verify diagnosis block migration semantics
+    3285d55  docs(exam-spine): resolve tutor diagnosis migration gap
 
 内容 : lib/examSpine/context/shadow/**（compareTutor / types）
+        canonical diagnosis block（blocks/registry / orchestrator の拡張）
         app/api/tutor/route.ts の shadow comparison wiring
-        scripts/exam-spine-stage5-1-check.ts
+        scripts/exam-spine-stage5-1-check.ts / exam-spine-stage5-2-check.ts
 
 canonical に入れない理由:
   Stage 4 canonical stabilization の freeze 対象（Packet J / shadow harness /
-  new context behavior）に該当する。Stage 4 は loader / gate / verification までであり、
-  shadow comparison は Packet J の entry gate で扱う。
+  new context behavior / Stage 5 continuation）に該当する。Stage 4 は
+  loader / gate / verification までであり、shadow comparison と block 追加は
+  それぞれ Packet J / Stage 5 の entry gate で扱う。
 
 ⚠️ 「捨てる」ではない。branch も commit も保持する。revert しない。
    再検討時は E-S38-3 の手順（canonical Register HEAD 解決 → 未使用 ID を再採番 →
    branch-local ID は捨てる → 登録してから統合）に従うこと。
-   この branch の E-S35 / E-S36 / E-S37 は **canonical decision ID ではない**。
+   この branch の E-S35 / E-S36 / E-S37 / E-S38 は
+   **canonical decision ID ではない**（衝突は branch の前進のたびに増える）。
+```
 
 ## ancestry rule
 
