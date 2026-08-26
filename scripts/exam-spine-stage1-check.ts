@@ -179,6 +179,24 @@ function main(): void {
   check('全 table 名が supabase/schema.sql に実在する',
     missingTables.length === 0, `missing: ${missingTables.join(', ')}`);
 
+  // 同じ table を 2 kind が主張していないこと（authority の所在が曖昧になるため）。
+  const allTables = EXAM_SOURCE_KINDS.flatMap((k) => [...EXAM_SOURCE_TABLES[k]]);
+  const tableDup = duplicates(allTables);
+  check('同じ table を複数 kind が主張していない', tableDup.length === 0,
+    `duplicated: ${tableDup.join(', ')}`);
+
+  // Human Decision B9: presentation は results / attempts / sessions の 3 table。
+  // enrichment が実際に presentation_sessions を読むため、registry に無い table を
+  // reader から黙って読む状態を作らない。
+  check('presentation の table authority = results / attempts / sessions（B9）',
+    EXAM_SOURCE_TABLES.presentation.join(',') ===
+      'presentation_results,presentation_attempts,presentation_sessions',
+    `actual: ${EXAM_SOURCE_TABLES.presentation.join(', ')}`);
+
+  // presentation_practice_records は dormant_no_author。registry に入れない。
+  check('presentation_practice_records が table registry に入っていない（dormant_no_author）',
+    !allTables.includes('presentation_practice_records'));
+
   // ── 4. Purpose ──────────────────────────────────────────────────
   console.log('\n4. ExamContextPurpose');
   const purposeDup = duplicates(EXAM_CONTEXT_PURPOSES);
@@ -248,12 +266,26 @@ function main(): void {
   check(`CAREER runtime dependency = 0（走査 ${spineFiles.length} file）`,
     boundaryHits.length === 0, boundaryHits.join('\n          '));
 
-  // Stage 1 の宣言層（types / purpose / budget / sourceData）は **完全に自己完結**でなければ
-  // ならない。ここに外部 import が生えると「現行挙動の宣言」がいつの間にか実装依存になる。
-  const declarationFiles = spineFiles.filter((f) => {
-    const rel = relative(REPO_ROOT, f);
-    return !rel.includes(`${sep}blocks${sep}`) && !rel.includes(`${sep}orchestrator${sep}`);
-  });
+  // Stage 1 の宣言層は **完全に自己完結**でなければならない。ここに外部 import が生えると
+  // 「現行挙動の宣言」がいつの間にか実装依存になる。
+  //
+  // ★ この assertion は **Stage 1 canonical files だけ**を対象にする（Stage-scoped）。
+  //   以前は lib/examSpine/** 全体へ適用していたが、それだと Stage 2 の block 層や
+  //   Stage 3 の read 層が持つ **正当な** import まで「Stage 1 architecture violation」として
+  //   落ちてしまう。目的（Stage 1 の宣言が実装に依存しないこと）は変えず、対象だけを絞る。
+  //   allowlist は狭いままにする — 足すときは「本当に Stage 1 canonical か」を先に判断すること。
+  const STAGE1_CANONICAL_FILES: readonly string[] = [
+    join('lib', 'examSpine', 'types.ts'),
+    join('lib', 'examSpine', 'sourceData', 'types.ts'),
+    join('lib', 'examSpine', 'budget.ts'),
+    join('lib', 'examSpine', 'purpose.ts'),
+  ];
+  const declarationFiles = spineFiles.filter((f) =>
+    STAGE1_CANONICAL_FILES.includes(relative(REPO_ROOT, f)),
+  );
+  check('Stage 1 canonical file が 4 本すべて実在する',
+    declarationFiles.length === STAGE1_CANONICAL_FILES.length,
+    `found: ${declarationFiles.map((f) => relative(REPO_ROOT, f)).join(', ')}`);
   const declarationImportHits: string[] = [];
   for (const file of declarationFiles) {
     const text = readFileSync(file, 'utf8');
@@ -282,7 +314,13 @@ function main(): void {
     'Storage',
     'next/',
   ];
-  const stage2Files = spineFiles.filter((f) => !declarationFiles.includes(f));
+  // Stage 3 の read 層（lib/examSpine/read/**）は server / Supabase を **正当に** import する。
+  // その import 境界は Stage 3 の QA（scripts/exam-spine-stage3-check.ts）が
+  // service_role / mutation / mirror table まで含めて厳密に検査するので、ここでは扱わない。
+  const stage2Files = spineFiles.filter((f) => {
+    const rel = relative(REPO_ROOT, f);
+    return rel.includes(`${sep}blocks${sep}`) || rel.includes(`${sep}orchestrator${sep}`);
+  });
   const impureImportHits: string[] = [];
   for (const file of stage2Files) {
     const text = readFileSync(file, 'utf8');
@@ -295,7 +333,7 @@ function main(): void {
       }
     }
   }
-  check('Stage 2 実装層は server / DB / AI / storage を import しない',
+  check('Stage 2 実装層（blocks / orchestrator）は server / DB / AI / storage を import しない',
     impureImportHits.length === 0, impureImportHits.join('\n          '));
 
   // ── 8. Stage 1 は dead module である ────────────────────────────

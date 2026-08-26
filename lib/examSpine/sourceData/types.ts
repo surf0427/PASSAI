@@ -98,6 +98,21 @@ export const EXAM_SOURCE_AUTHORITY: Readonly<
 //
 // 1 kind が複数 table にまたがるものがあるため、CAREER の 1:1 map ではなく配列で持つ。
 // Stage 1 では read しない（table 名の宣言のみ）。
+//
+// ★ registry に無い table を reader から黙って読んではいけない。
+//   この表は「その kind の read path に現れてよい table の全集合」であり、
+//   Stage 3 の QA が SELECT 先をここと突き合わせる。
+//
+// ★ `presentation_practice_records`（schema.sql §66）は **意図的に含めない**。
+//   対人プレゼン記録（友達 / 先生 / 親）の localStorage mirror であり、
+//   AI 不使用・課金なし・録画なしで、現行の受験版 AI route はどこからも読んでいない。
+//   分類は `dormant_no_author`:
+//     - server route が著者ではない（= class 2 ではない）
+//     - Spine の read path に入っていない（= 現時点でどの purpose の context にも寄与しない）
+//   したがって `ExamSourceKind` にも authority binary にも追加せず、Stage 3 reader は
+//   SELECT しない。既存 authority token（`device_canonical_mirrored` /
+//   `server_authoritative`）は rename しない。将来使うことになったら、その時点で
+//   kind 追加として別途 decision を起こす。
 export const EXAM_SOURCE_TABLES: Readonly<
   Record<ExamSourceKind, readonly string[]>
 > = {
@@ -110,7 +125,9 @@ export const EXAM_SOURCE_TABLES: Readonly<
   essay: ['essay_workspaces'],
   interview_record: ['interview_practice_records'],
   interview_ai: ['interview_ai_sessions', 'interview_ai_results'],
-  presentation: ['presentation_results', 'presentation_attempts'],
+  // presentation enrichment が実際に presentation_sessions を読むため 3 table。
+  // 1:N registry の completeness 修正であり、新しい kind の追加ではない（Human Decision B9）。
+  presentation: ['presentation_results', 'presentation_attempts', 'presentation_sessions'],
 };
 
 // ── Read status（E-S1 / E-S8）─────────────────────────────────────────
