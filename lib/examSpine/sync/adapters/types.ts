@@ -175,6 +175,24 @@ function assertOrigin(
  *   truncated : cap まで読めただけで全件ではない → 「読めた」と言ってはいけない
  *   error     : RLS / network / schema
  *   skipped   : その request で読んでいない（読めた証拠が無い）
+ *
+ * ★ Wave 2.5 追記 1 — purpose gate（E-S28）と `skipped` ★
+ *   E-S28 の default deny により、purpose が許可していない kind は query を 1 本も発行せず
+ *   `status='skipped'` のままになる。ここではそれも `unreadable` へ倒す（fail-closed）。
+ *   ただし **denied kind に対して verdict を求めること自体が設計上の誤り**である。
+ *   loader は `gateExamSourceKinds` が通した kind についてだけ verification を組むこと。
+ *   「gate で落ちた kind が veto 理由として観測される」状態を作らない。
+ *
+ * ★ Wave 2.5 追記 2 — `ok` + 0 行の限界（E-H1 / Canon §40）★
+ *   `authenticated` の SELECT policy が本番に無い場合、PostgREST は 403 ではなく
+ *   **200 + 0 行**を返す。Stage 3 reader はこれを `status='ok'` / `rows=[]` として扱うため、
+ *   本 adapter も `EMPTY_CANDIDATE` を作る。つまり **UNREADABLE が EMPTY に見える**経路が
+ *   残っており、これは runtime では検出できない（E-H1 §なぜ runtime で検出できないか）。
+ *   安全側の性質は保たれる:
+ *     device に中身あり × mirror が空 → mismatch（presence）→ veto
+ *     device も空       × mirror も空 → verified / both_empty（内容としては正しい）
+ *   すなわち **verified を誤って出すことは無く**、影響は「その kind が使えないままになる」
+ *   ことに留まる。policy の実在確認は E-H1 / R6（BLOCKED_BY_ENV）が閉じる。
  */
 export function serverMirrorCandidate(input: {
   readonly status: ExamSourceReadStatus;

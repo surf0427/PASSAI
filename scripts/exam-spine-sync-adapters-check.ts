@@ -1,4 +1,4 @@
-// Exam Spine — Stage 4 Wave 2 / sync adapter contract check。
+// Exam Spine — Stage 4 Wave 2 / sync adapter contract check（Wave 2.5 で canonical convergence 反映）。
 //
 // 目的:
 //   lib/examSpine/sync/adapters/** が
@@ -17,6 +17,8 @@
 //   A8  mixed-origin を型と runtime の両方で防ぐ
 //   A9  adapter / export に adoption API（採用側を返すもの）が存在しない
 //   A10 read status → candidate の写像が E-S2 の優先順位（unreadable > unclaimed）に従う
+//   A11 Wave 2.5 convergence pin: essay 分類の根拠（E-S27）が実コードで成立していること、
+//       purpose gate（E-S28）の denied と E-H1 の「200 + 0 行」経路が verified を出さないこと
 //
 // 厳守:
 //   実ネットワーク 0 / 実 DB 0 / AI 呼び出し 0 / clock 0 / random 0 / production 変更 0
@@ -39,6 +41,8 @@ void originalFetch;
 import { EXAM_SOURCE_AUTHORITY, EXAM_SOURCE_KINDS } from '@/lib/examSpine/sourceData/types';
 import type { ExamSourceKind, ExamSourceReadStatus } from '@/lib/examSpine/sourceData/types';
 import { EXAM_READ_FIELD_LIMITS } from '@/lib/examSpine/read/readSources';
+import { essayQuery } from '@/lib/examSpine/read/queries';
+import { mapEssayRow } from '@/lib/examSpine/read/rowMappers';
 import type {
   ExamSelfPrServerRow,
   ExamSelfAnalysisServerRow,
@@ -47,6 +51,7 @@ import type {
   ExamBasicInfoServerRow,
   ExamActivityServerRow,
   ExamDiagnosisServerRow,
+  ExamEssayServerRow,
 } from '@/lib/examSpine/read/rowMappers';
 
 import * as NormalizeMod from '@/lib/examSpine/sync/adapters/normalize';
@@ -74,9 +79,12 @@ import {
 } from '@/lib/examSpine/sync/adapters/types';
 import type { ExamSyncObservation } from '@/lib/examSpine/sync/adapters/types';
 import {
+  ESSAY_REVIEW_CONTENT_FIELDS,
   activitySyncView,
   basicInfoSyncView,
   diagnosisSyncView,
+  essayReviewView,
+  essaySyncView,
   examSyncObservation,
   interviewRecordItemView,
   listSyncView,
@@ -219,10 +227,27 @@ const ALLOWED_IMPORTS: readonly RegExp[] = [
   /^\.\.\/\.\.\/read\/(types|rowMappers|readSources|guards)$/,
 ];
 
+/**
+ * Wave 3: device view が使う domain 型。**type-only import に限って**許可する。
+ * 「device 側の shape を発明しない」ために実 storage の型を使う必要がある一方、
+ * runtime dependency は 1 本も作らない（`import type` は runtime に残らない）。
+ * allowlist は列挙で持つ（`@/lib/**` を丸ごと開けない）。
+ */
+const ALLOWED_TYPE_ONLY_IMPORTS: readonly string[] = [
+  '@/types/basicInfo',
+  '@/types/activity',
+  '@/types/selfAnalysisLog',
+  '@/types/selfPR',
+  '@/types/essay',
+  '@/lib/diagnosisStorage',
+  '@/lib/statement/review/statementStorage',
+  '@/lib/interviewRecordStorage',
+];
+
 function staticBoundaries(): void {
   const files = listFiles(ADAPTERS_DIR);
-  eq('adapters が 4 file 構成である', files.map((f) => relative(ADAPTERS_DIR, f)).sort(),
-    ['normalize.ts', 'registry.ts', 'types.ts', 'views.ts']);
+  eq('adapters が 6 file 構成である', files.map((f) => relative(ADAPTERS_DIR, f)).sort(),
+    ['deviceSources.ts', 'deviceViews.ts', 'normalize.ts', 'registry.ts', 'types.ts', 'views.ts']);
 
   const tokenHits: string[] = [];
   for (const file of files) {
@@ -236,17 +261,25 @@ function staticBoundaries(): void {
     tokenHits.length === 0, tokenHits.join(' | '));
 
   const importHits: string[] = [];
+  const valueImportHits: string[] = [];
   for (const file of files) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/gm)) {
       const spec = m[1];
-      if (!ALLOWED_IMPORTS.some((re) => re.test(spec))) {
-        importHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+      const typeOnly = /^\s*import\s+type\s/.test(m[0]);
+      if (ALLOWED_IMPORTS.some((re) => re.test(spec))) continue;
+      if (ALLOWED_TYPE_ONLY_IMPORTS.includes(spec)) {
+        // domain 型は type-only でしか許さない（値を import したら runtime 依存になる）
+        if (!typeOnly) valueImportHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
+        continue;
       }
+      importHits.push(`${relative(REPO_ROOT, file)}: ${spec}`);
     }
   }
-  check('adapters の import は sync core + Spine 内部の純粋 contract のみ',
+  check('adapters の import は sync core + Spine 内部 contract + 許可 domain 型のみ',
     importHits.length === 0, importHits.join(' | '));
+  check('domain 型は type-only import に限る（runtime 依存 0）',
+    valueImportHits.length === 0, valueImportHits.join(' | '));
 
   const dbVerbs: string[] = [];
   const BUILTIN_FROM = new Set(['Array', 'Uint8Array', 'Uint32Array', 'Object', 'String', 'Set', 'Map']);
@@ -349,13 +382,21 @@ function registryContract(): void {
     check(`A3 ${kind} は supported kind に入らない`, !isExamSyncSupportedKind(kind));
   }
 
-  // essay は contract 未確定
+  // ★ Wave 2.5: essay は E-S27（LOCKED / Wave 2 で実装 + QA 済み）により blocked を解除 ★
   const essay = EXAM_SYNC_ADAPTER_CONTRACTS.essay;
-  check('essay は blocked（B7 / E-S27）', essay.capability === 'blocked');
-  check('essay の blocker が B7 / E-S27 を引用する',
-    (essay.blocker ?? '').includes('B7') && (essay.blocker ?? '').includes('E-S27'));
-  check('essay は content field を宣言しない', essay.contentFields.length === 0);
-  check('essay は supported kind に入らない', !isExamSyncSupportedKind('essay'));
+  check('essay は possible（E-S27 で projection が確定）', essay.capability === 'possible');
+  check('essay は supported kind に入る', isExamSyncSupportedKind('essay'));
+  check('essay の blocker が null', essay.blocker === null);
+  check('essay の evidence が E-S27 を引用する',
+    essay.excludedFields.some((e) => e.evidence.includes('E-S27')));
+
+  // blocked が残っている kind があれば blocker の明示を強制する（宣言の空洞化を防ぐ）
+  const blockedWithoutReason = EXAM_SOURCE_KINDS.filter((k) => {
+    const c = EXAM_SYNC_ADAPTER_CONTRACTS[k];
+    return c.capability === 'blocked' && (c.blocker ?? '').trim().length < 20;
+  });
+  check('blocked kind は必ず blocker を明示する',
+    blockedWithoutReason.length === 0, blockedWithoutReason.join(', '));
 
   // capability === possible ⇔ supported kind
   const possible = EXAM_SOURCE_KINDS.filter(
@@ -493,6 +534,37 @@ function selfPrRow(over: Partial<ExamSelfPrServerRow> = {}): ExamSelfPrServerRow
   };
 }
 
+function essayReviewRow(
+  over: Partial<ExamEssayServerRow['reviews'][number]> = {},
+): ExamEssayServerRow['reviews'][number] {
+  return {
+    bodyOnServer: false,
+    totalScore: 82,
+    verdict: 'B',
+    improvement: '結論を先に書く',
+    goodPoints: ['構成が明確'],
+    weakPoints: ['具体例が薄い'],
+    createdAt: '2026-08-20T10:00:00.000Z',
+    source: 'ai',
+    parseError: false,
+    ...over,
+  };
+}
+
+function essayRow(over: Partial<ExamEssayServerRow> = {}): ExamEssayServerRow {
+  return {
+    bodyOnServer: false,
+    id: 'db-uuid-5',
+    localWorkspaceId: 'ws-1',
+    reviews: [essayReviewRow(), essayReviewRow({ totalScore: 70, verdict: 'C' })],
+    reviewCount: 2,
+    reviewsTruncated: false,
+    createdAt: '2026-08-01T00:00:00+00:00',
+    updatedAt: '2026-08-26T09:12:33+00:00',
+    ...over,
+  };
+}
+
 function interviewRecordRow(
   over: Partial<ExamInterviewRecordServerRow> = {},
 ): ExamInterviewRecordServerRow {
@@ -525,6 +597,7 @@ function contractFreeze(): void {
     ['statement_review', statementReviewItemView(statementReviewRow())],
     ['self_pr', selfPrItemView(selfPrRow())],
     ['interview_record', interviewRecordItemView(interviewRecordRow())],
+    ['essay', essaySyncView(essayRow())],
   ];
   for (const [kind, view] of cases) {
     const declared = [...EXAM_SYNC_ADAPTER_CONTRACTS[kind].contentFields].sort();
@@ -551,6 +624,47 @@ function contractFreeze(): void {
   }
   check('A1 逐語 / 本文 / 氏名 が view に入っていない（E-P5 / E-P8）',
     bad.length === 0, bad.join(', '));
+
+  // essay review item の key 集合も凍結する（宣言 ESSAY_REVIEW_CONTENT_FIELDS と一致）
+  eq('A1 essay review の key 集合が宣言と一致',
+    Object.keys(essayReviewView(essayReviewRow())).sort(),
+    [...ESSAY_REVIEW_CONTENT_FIELDS].sort());
+
+  // ★ Wave 2.5 convergence pin: essay を possible にした根拠（E-S27）を実コードで固定する ★
+  //   E-S27 が revert されたら、この 3 件が落ちて分類の前提崩れを知らせる。
+  const eq2 = essayQuery('00000000-0000-4000-8000-000000000000');
+  check('E-S27 pin: essayQuery が workspace を丸ごと SELECT しない',
+    !eq2.columns.includes('workspace'), eq2.columns.join(', '));
+  check('E-S27 pin: essayQuery が reviews:workspace->reviews へ絞る',
+    eq2.columns.includes('reviews:workspace->reviews'), eq2.columns.join(', '));
+
+  //   mapper が本文 snapshot を落とすことを、実 mapper を通して確認する（grep ではない）
+  const CANARY_BODY = 'CANARY_ESSAY_BODY_7f2a';
+  const mapped = mapEssayRow(
+    {
+      id: 'db-uuid-9',
+      local_workspace_id: 'ws-9',
+      reviews: [
+        {
+          totalScore: 90,
+          verdict: 'A',
+          improvement: 'よい',
+          goodPoints: [],
+          weakPoints: [],
+          createdAt: '2026-08-20T10:00:00.000Z',
+          essayBodySnapshot: CANARY_BODY,
+          breakdown: [{ label: CANARY_BODY }],
+        },
+      ],
+      created_at: '2026-08-01T00:00:00+00:00',
+      updated_at: '2026-08-26T09:12:33+00:00',
+    },
+    EXAM_READ_FIELD_LIMITS,
+  );
+  check('E-S27 pin: mapEssayRow が本文 snapshot を projection に載せない',
+    mapped !== null && !JSON.stringify(mapped).includes(CANARY_BODY));
+  check('E-S27 pin: sync view にも本文 snapshot が現れない',
+    mapped !== null && !JSON.stringify(essaySyncView(mapped)).includes(CANARY_BODY));
 }
 
 // ── A4: semantic equality / difference ────────────────────────────
@@ -602,6 +716,15 @@ function semanticEquality(): void {
       fp('activity', activitySyncView(activityRowWith({ categoryCounts: { bogus: 99 } }))),
     ],
     [
+      'essay: DB uuid / updatedAt / reviewsTruncated',
+      fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({
+        id: 'db-uuid-DIFFERENT',
+        updatedAt: '2030-01-01T00:00:00+00:00',
+        reviewsTruncated: true,
+      }))),
+    ],
+    [
       'basic_info: 余剰 field（氏名など）は view に入らない',
       fp('basic_info', basicInfoSyncView(basicInfoRow())),
       fp('basic_info', basicInfoSyncView(basicInfoRowWithName('山田太郎'))),
@@ -647,6 +770,22 @@ function semanticEquality(): void {
       fp('activity', activitySyncView({ ...activityRow(), payload: { club: [] } }))],
     ['diagnosis.payload', fp('diagnosis', diagnosisSyncView(diagnosisRow())),
       fp('diagnosis', diagnosisSyncView({ ...diagnosisRow(), payload: { typeHint: 'Y' } }))],
+    ['essay.localWorkspaceId', fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({ localWorkspaceId: 'ws-2' })))],
+    ['essay.reviewCount（cap 済みで reviews から復元できない）',
+      fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({ reviewCount: 12 })))],
+    ['essay.review の内容', fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({
+        reviews: [essayReviewRow({ improvement: '別の指摘' }), essayReviewRow({ totalScore: 70, verdict: 'C' })],
+      })))],
+    ['essay.createdAt（別 instant）', fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({ createdAt: '2026-08-02T00:00:00+00:00' })))],
+    ['essay.review.createdAt（jsonb 文字列なので表記差も差分）',
+      fp('essay', essaySyncView(essayRow())),
+      fp('essay', essaySyncView(essayRow({
+        reviews: [essayReviewRow({ createdAt: '2026-08-20T10:00:00+00:00' }), essayReviewRow({ totalScore: 70, verdict: 'C' })],
+      })))],
   ];
   const missed = contentDiff.filter(([, a, b]) => a === b).map(([l]) => l);
   check(`A4 content の差を必ず検出（${contentDiff.length} 件）`, missed.length === 0, missed.join(' | '));
@@ -717,6 +856,18 @@ function orderingSemantics(): void {
   check('A5 sequence: basic_info.preferences も順序変更を検出する',
     syncFingerprint(prefA) !== syncFingerprint(prefB));
 
+  // ★ essay の reviews は sequence（mapEssayRow が位置で反転するだけなので往復する）★
+  const revA = essaySyncView(essayRow());
+  const revB = essaySyncView(essayRow({ reviews: [...essayRow().reviews].reverse() }));
+  check('A5 sequence: essay.reviews の順序変更を検出する',
+    syncFingerprint(revA) !== syncFingerprint(revB));
+
+  // essay の kind 単位 list は他 history kind と同じ multiset
+  const wsA = listSyncView([essayRow({ localWorkspaceId: 'w1' }), essayRow({ localWorkspaceId: 'w2' })], essaySyncView);
+  const wsB = listSyncView([essayRow({ localWorkspaceId: 'w2' }), essayRow({ localWorkspaceId: 'w1' })], essaySyncView);
+  check('A5 multiset: essay の workspace list 順序を吸収する',
+    syncFingerprint(wsA) === syncFingerprint(wsB));
+
   // sortSyncItems 自体の決定性
   const items = [{ b: 2 }, { a: 1 }, { c: 3 }];
   eq('sortSyncItems は決定的', sortSyncItems(items), sortSyncItems([...items].reverse()));
@@ -768,6 +919,11 @@ function normalizationSemantics(): void {
   eq('A6 null は null', normalizeSyncTimestamp(null), null);
   eq('A6 実在しない日付は文字列のまま', normalizeSyncTimestamp('2026-02-30T00:00:00Z'),
     '2026-02-30T00:00:00Z');
+
+  // ★ essay: timestamptz column は正規化し、jsonb 内の createdAt は触らない ★
+  const essayZ = syncFingerprint(essaySyncView(essayRow({ createdAt: '2026-08-01T00:00:00Z' })));
+  const essayOffset = syncFingerprint(essaySyncView(essayRow({ createdAt: '2026-08-01T00:00:00+00:00' })));
+  check('A6 essay.createdAt（timestamptz column）は表記差を吸収する', essayZ === essayOffset);
 
   // jsonb 内の文字列は触らない（deep scan していないことの確認）
   const inside = normalizeSyncJson({ payload: { note: '2026-08-26T09:12:33+00:00' } }) as {
@@ -922,6 +1078,26 @@ function verificationCompatibility(): void {
     [...produced].every((v) => ['verified', 'mismatch', 'unclaimed', 'unreadable'].includes(v)),
     [...produced].join(', '));
 
+  // ★ Wave 2.5: E-H1 の「200 + 0 行」経路が verified を誤って出さないこと ★
+  //   authenticated SELECT policy が無いと mirror は空に見える（Canon §40 の UNREADABLE が
+  //   EMPTY に化ける）。その状態で device に中身があれば mismatch へ倒れることを固定する。
+  const policyMissingLike = verifyExamSourcePair({
+    canonical: deviceCanonicalCandidate({ claimPresented: true, observation: deviceObs }),
+    mirror: serverMirrorCandidate({ status: 'ok', observation: null }),
+  });
+  check('E-H1: mirror が空に見えても device に中身があれば mismatch（verified にしない）',
+    policyMissingLike.status === 'mismatch' && policyMissingLike.evidence === 'presence');
+
+  // ★ Wave 2.5: purpose gate（E-S28）で denied になった kind は unreadable へ倒れる ★
+  //   （そもそも denied kind に verdict を求めないのが正しいが、求めても verified にはならない）
+  eq('E-S28: denied（skipped）は unreadable へ倒れる',
+    serverMirrorCandidate({ status: 'skipped', observation: serverObs }).state, 'unreadable');
+  const denied = verifyExamSourcePair({
+    canonical: deviceCanonicalCandidate({ claimPresented: true, observation: deviceObs }),
+    mirror: serverMirrorCandidate({ status: 'skipped', observation: null }),
+  });
+  check('E-S28: denied kind は verified にならない', denied.status === 'unreadable');
+
   // stale mirror シナリオ（device が更新済み / mirror が古い）
   const stale = verifyExamSourcePair({
     canonical: deviceCanonicalCandidate({
@@ -958,7 +1134,7 @@ function aiSdkLoaded(): boolean {
 }
 
 function main(): void {
-  console.log('[exam-spine-sync-adapters] Stage 4 Wave 2 sync adapter contract check');
+  console.log('[exam-spine-sync-adapters] Stage 4 Wave 2 sync adapter contract check（Wave 2.5 convergence 反映）');
   console.log(
     `[exam-spine-sync-adapters] view=${EXAM_SYNC_VIEW_VERSION} normalize=${EXAM_SYNC_NORMALIZE_VERSION} supported=${EXAM_SYNC_SUPPORTED_KINDS.length}/${EXAM_SOURCE_KINDS.length}`,
   );

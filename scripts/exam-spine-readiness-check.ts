@@ -264,15 +264,29 @@ function r89Frozen(): void {
       })
       .join('\n');
 
-  // ★ `.from(` の素朴な grep は組み込み（Uint8Array.from / Array.from / Object.fromEntries）
-  //   を Supabase の table 参照と誤検出する。sync/hash.ts が実例。
-  //   検出したいのは「Supabase client の .from(table)」だけなので、組み込みを先に除去する。
-  const stripBuiltinFrom = (src: string): string =>
-    src.replace(/\b(?:[A-Za-z0-9_$]*Array|Object|String|Map|Set|Promise)\.from(?:Entries)?\s*\(/g, 'BUILTIN(');
+  // ★ `.from(` も **受け手**で判定する（`.delete(` と同じ理由）★
+  //   `Uint8Array.from()` / `Array.from()` は builtin の静的 factory であって
+  //   PostgREST の table selector ではない。受け手を見ずに grep すると、
+  //   Stage 4 の sync core（`lib/examSpine/sync/hash.ts` の UTF-8 encoder）のような
+  //   純粋 module を「I/O 境界」と誤検出する。検出したいのは
+  //   「**Supabase client に対する** .from(」だけなので、builtin の receiver を除外する。
+  const BUILTIN_FROM_RECEIVERS = new Set([
+    'Array', 'Object', 'String', 'Number', 'BigInt', 'Set', 'Map', 'Promise', 'Buffer',
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array',
+  ]);
+  const hasDbFrom = (code: string): boolean =>
+    [...code.matchAll(/([A-Za-z0-9_$]+)\.from\(/g)].some(
+      (m) => !BUILTIN_FROM_RECEIVERS.has(m[1]),
+    );
+  const withFrom = spineFiles.filter((f) => hasDbFrom(stripComments(readFileSync(join(ROOT, f), 'utf8'))));
 
-  const withFrom = spineFiles.filter((f) =>
-    /\.from\(/.test(stripBuiltinFrom(stripComments(readFileSync(join(ROOT, f), 'utf8')))),
-  );
+  // negative control: builtin だけを除外していて、実際の client.from( は依然として捕まること。
+  check('R9 [negative control] builtin factory は I/O 境界にならない',
+    !hasDbFrom('const b = Uint8Array.from(out);\nconst a = Array.from(x);'));
+  check('R9 [negative control] supabase client の .from( は捕まる',
+    hasDbFrom('const q = client.from("self_prs").select("id");') &&
+      hasDbFrom('await supabase.from(TABLE).upsert(row);'));
   check('R9 PostgREST を叩くのは supabaseExecutor.server.ts のみ',
     withFrom.length === 1 && withFrom[0].endsWith('read/supabaseExecutor.server.ts'),
     withFrom.join(', '));
