@@ -502,20 +502,26 @@ function enableContract(): void {
       d.usability === 'veto' && d.reason === 'kind_not_syncable');
   }
 
+  // ★ R5 closure 後: essay は他 7 kind と同じ扱いになる ★
+  //   （E-H1「Post-Wave 4.5 に本番 SQL Editor で確定した部分」で
+  //     rows_reviews_is_array 10/10 / wrong_type 0 / bogus_path 0 を実測済み）
   const essay = examSyncUsability({ kind: 'essay', verdict: verified, canaryAllowed: true });
-  check('★ essay は verified + canary true でも veto（runtime_blocked / R5）',
-    essay.usability === 'veto' && essay.reason === 'runtime_blocked');
-  check('essay が runtime block 宣言に載っている', isExamSyncRuntimeBlocked('essay'));
-  eq('runtime block は essay のみ',
-    EXAM_SOURCE_KINDS.filter(isExamSyncRuntimeBlocked), ['essay']);
+  check('essay は R5 closure 後 usable（他 7 kind と同じ経路）',
+    essay.usability === 'usable' && essay.reason === null);
+  check('essay は runtime block 宣言に載っていない', !isExamSyncRuntimeBlocked('essay'));
+  eq('runtime block は現在 0 kind（機構は残す）',
+    EXAM_SOURCE_KINDS.filter(isExamSyncRuntimeBlocked), []);
+  // 機構自体は残っていること（今後 evidence 未取得の kind が出たら再び使う）
+  check('runtime block の判定関数が存在し全 kind で false',
+    EXAM_SOURCE_KINDS.every((k) => isExamSyncRuntimeBlocked(k) === false));
 
   const verdicts = {} as Record<ExamSyncSupportedKind, ExamSyncExternalVerdict>;
   for (const k of EXAM_SYNC_SUPPORTED_KINDS) verdicts[k] = 'verified';
   const map = verdicts as ExamSyncVerdictMap;
   const usable = examSyncUsableKinds({ kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: true });
-  check('usable kinds に essay が含まれない', !usable.includes('essay'));
-  eq('usable kinds は essay 以外の 7 kind',
-    [...usable].sort(), EXAM_SYNC_SUPPORTED_KINDS.filter((k) => k !== 'essay').sort());
+  check('usable kinds に essay が含まれる（R5 closure 後）', usable.includes('essay'));
+  eq('usable kinds は 8 kind すべて',
+    [...usable].sort(), [...EXAM_SYNC_SUPPORTED_KINDS].sort());
   eq('canary false なら usable 0',
     examSyncUsableKinds({ kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: false }).length, 0);
   eq('要求していない kind は足されない',
@@ -525,8 +531,8 @@ function enableContract(): void {
     kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: true,
   });
   eq('summary: requested', summary.requested, EXAM_SYNC_SUPPORTED_KINDS.length);
-  eq('summary: usable', summary.usable, EXAM_SYNC_SUPPORTED_KINDS.length - 1);
-  eq('summary: reason は runtime_blocked', summary.reason, 'runtime_blocked');
+  eq('summary: usable', summary.usable, EXAM_SYNC_SUPPORTED_KINDS.length);
+  eq('summary: 全 usable なら reason は null', summary.reason, null);
   eq('summary の field が 3 つだけ', Object.keys(summary).sort(),
     ['reason', 'requested', 'usable']);
   check('summary が number / enum / null のみ',

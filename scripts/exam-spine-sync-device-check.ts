@@ -868,20 +868,44 @@ function devicePiiContainment(): void {
 }
 
 /**
- * essay: 「pure mapper は実装済み / runtime enable は禁止」という 2 軸の状態を固定する。
- * 宣言だけで runtime gate は作らない（Wave 3 の禁止 scope）。
+ * essay: R5 closure 後の状態を固定する。
+ *
+ * ★ evidence と gate の drift を防ぐ（Wave 4.5 §61）★
+ *   「runtime block を外した」ことと「その根拠が Register に残っている」ことは
+ *   **必ず一緒に成立していなければならない**。片方だけが revert されると
+ *   「根拠が消えたのに有効化されたまま」という最悪の状態になり、しかも
+ *   fail-open が吸収するため runtime では気付けない。両方向を検査する。
  */
 function essayEnableInvariant(): void {
   check('essay: capability は possible（contract 確定済み）',
     EXAM_SYNC_ADAPTER_CONTRACTS.essay.capability === 'possible');
   check('essay: device mapper が存在し pure parity が成立する',
     DEVICE_PATH.essay([essayFixture()]) !== null);
-  const blocked = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay;
-  check('essay: runtime enable が禁止として宣言されている', typeof blocked === 'string');
-  check('essay: 禁止理由が R5 / E-S27 を引用する',
-    (blocked ?? '').includes('R5') && (blocked ?? '').includes('E-S27'));
-  eq('runtime enable 禁止は essay のみ',
-    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
+
+  // R5 closure evidence が Register と SQL の両方に実在すること
+  const decisions = readFileSync(
+    join(REPO_ROOT, 'docs', 'principles', 'exam_spine', 'EXAM_SPINE_DECISIONS.md'), 'utf8');
+  const sql = readFileSync(
+    join(REPO_ROOT, 'supabase', 'exam_spine_rls_verification.sql'), 'utf8');
+  const r5Recorded =
+    /rows_reviews_is_array\s*=\s*10/.test(decisions) &&
+    /rows_reviews_wrong_type\s*=\s*\s*0/.test(decisions) &&
+    /rows_bogus_path\s*=\s*\s*0/.test(decisions);
+  const r5Reproducible =
+    sql.includes('jsonb_typeof') && sql.includes("workspace->'reviews'") &&
+    sql.includes('zzz_not_a_field');
+  check('essay: R5 の production evidence が Register に記録されている', r5Recorded);
+  check('essay: R5 を再検証できる read-only SQL が保持されている', r5Reproducible);
+  check('essay: E-H1 が RESOLVED である', /^## E-H1[\s\S]{0,200}RESOLVED/m.test(decisions));
+
+  // ★ drift guard: evidence が揃っている **から** block を外せている
+  const essayBlocked = typeof EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay === 'string';
+  check('★ essay: R5 evidence が揃っているなら runtime block は外れている',
+    !(r5Recorded && r5Reproducible) || !essayBlocked);
+  check('★ essay: R5 evidence が欠けているなら runtime block が必要',
+    (r5Recorded && r5Reproducible) || essayBlocked);
+  eq('runtime block は現在 0 kind（機構は残す）',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), []);
 
   // ★ 宣言を読んでよいのは「宣言元」と「pure な decision layer」だけ ★
   //   Wave 3 時点では consumer 0 本を要求していたが、Wave 4 で pure decision layer

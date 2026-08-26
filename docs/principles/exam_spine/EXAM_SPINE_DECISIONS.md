@@ -885,102 +885,6 @@ Exam-specific differences / Rollback implications
   - *canonical 側を E-S38 以降へずらす* — 既に登録・QA 済みの canonical 側を動かす理由が無い。
 - **Rollback implications:** なし（運用規約）。
 
-## E-S39 — device claim の request transport は 1 本だけとし、`signal.ts` を transport にしない
-
-- **Status:** `LOCKED`（Stage 5 entry gate で制定。E-H7 を解決する）
-- **背景:** `sync/claim/**`（wire `edc1`）と `sync/signal.ts`（wire `esy1`）が
-  「同じ payload（kind → fingerprint）を bounded 文字列へ直列化する」ため、
-  **request transport が 2 本あるように見えていた**（E-H7 / `PENDING_HUMAN`）。
-- **コード実測で確定した事実:**
-  ```text
-  canonical namespace 全体で HTTP header に束縛されている module は 1 つだけ:
-    sync/claim/types.ts:32  EXAM_DEVICE_CLAIM_HEADER = 'x-exam-spine-device-claim'
-    sync/claim/parse.ts:36  parseDeviceClaimHeader(headers: Headers)
-    sync/claim/serialize.ts withDeviceClaimHeader(...)
-
-  sync/signal.ts:
-    header 定数        なし
-    Headers への依存   なし
-    signature          serializeExamSyncSignal(claims) -> string
-                       parseExamSyncSignal(raw: unknown) -> ExamSyncSignal
-    file header 自身が明記: 「★ header にはまだ載せない ★ …
-      Request / Response / headers …」（signal.ts:26-27）
-    production importer 0。唯一の consumer は sync/verdict.ts（Spine 内部）
-  ```
-- **したがって関係は `DIFFERENT_LAYER` であり、`DUPLICATE` ではない:**
-  ```text
-  claim/**    request transport   HTTP header 束縛あり / production 接続あり
-  signal.ts   内部 codec          transport 束縛なし / verdict.ts の入力型
-  ```
-- **Decision:**
-  ```text
-  1. device claim の **request transport は sync/claim/**（edc1）1 本**とする。
-     canonical namespace で HTTP header に束縛してよい device-claim module はこれだけ。
-
-  2. sync/signal.ts は **transport ではない**。内部 codec / verdict 入力として維持する。
-     verdict / enable の semantics は有用なので削除しない。
-
-  3. signal.ts に header 定数・`Headers` 依存・request 束縛を **追加してはならない**。
-     追加が必要になった場合は、それは transport の二重化なので新しい Decision を要する。
-
-  4. 上記 1/3 は QA で機械的に固定する
-     （`scripts/exam-spine-readiness-check.ts`: device-claim header 束縛が 1 module のみ）。
-  ```
-- **Reason:** 「2 実装あるから片方を消す」ではなく、**層が違うことを確定させ、
-  層をまたぐ変更を禁止する**のが正しい解である。signal.ts を消すと `verdict.ts`（E-S35）の
-  入力型と Wave 4 の QA 資産を失う。逆に放置すると、将来 signal.ts に header を足した瞬間に
-  wire format が 2 本になり、旧 client の hex を新 schema として誤解釈する経路
-  （signal.ts が自ら警告している false-positive verified）が開く。
-- **Alternatives rejected:**
-  - *signal.ts を削除する* — verdict / enable の内部 semantics を巻き添えにする。
-  - *両方を transport として残す* — Stage 5 で claim を消費し始めた時点で二重定義に依存する。
-  - *PENDING_HUMAN のまま据え置く* — runtime architecture が既に決定的な答えを持っており、
-    人間が選ぶ余地のある product tradeoff は存在しない。
-- **Rollback implications:** なし（宣言 + QA）。既存 runtime 挙動を変えない。
-
-## E-S40 — Stage 5 の最初の consumer 切替は tutor の `basic_info` slot 単独とする
-
-- **Status:** `LOCKED`（Stage 5 entry gate で制定。実装は本 Decision の範囲外）
-- **Decision:** Stage 5 の **最初の** consumer 切替は
-  **`tutor` purpose の `basic_info` slot だけ**を対象とする。同じ request 内の
-  他 slot（`self_analysis` / `activity` / `diagnosis` / `statement_review` / `essay` /
-  `interview_record` / `interview_ai` / `presentation`）は bridge / legacy のまま据え置く。
-  per-kind origin（E-S26）が per-slot 移行を表現できるため、consumer 単位で一括切替しない。
-- **なぜ tutor か（実測。branch や新しさではなく infra 充足度で選んだ）:**
-  ```text
-  tutor だけが Stage 5 に必要な 4 つを既に持っている:
-    server read 経路   legacy serverRead（production 稼働中）
-    device claim       E-S33（basic_info を申告。production 接続済み）
-    canary gate        E-S34（default deny。shadow で通電実績あり）
-    canonical block    basic_info block が存在する
-
-  他 purpose は上記 4 つを 1 つも持たない。kind 数が少ない purpose
-  （essay 系 / statement_prepare は basic_info 1 kind のみ）は一見安いが、
-  gate / claim / shadow / 比較経路をゼロから作る必要があり総リスクは大きい。
-  ```
-- **なぜ `basic_info` slot 単独か（実測）:**
-  ```text
-  block を持つ kind        basic_info / activity / self_analysis / statement_review（4）
-  tutor が必要とする kind  9
-  → tutor 全体を一度に移すと 5 kind が block 不在で E-P7（context を減らさない）に違反する
-
-  tutor が現在申告している claim は basic_info だけ
-    sync/claim/deviceBasicInfo.ts:65 buildTutorDeviceClaimEntries → [{ kind: 'basic_info' }]
-  → Source-Sync で verified を出せる kind も現状 basic_info だけである
-  ```
-- **氏名の扱い:** server 側 `basic_info` に氏名は存在しない（E-P8）。
-  切替後も氏名が prompt から消えてはならない（E-P7）。
-  `context/project.ts` が bridge の氏名を明示合成し `bridgeFields` として記録する経路を使う。
-  暗黙の Mixed-Origin にしない（Canon §17）。
-- **Alternatives rejected:**
-  - *essay 系 / statement_prepare を先に移す* — kind 数は少ないが Stage 5 infra を
-    ゼロから作ることになる。既存の claim / gate / shadow を活かせない。
-  - *tutor を consumer 単位で一括移行する* — block 不在 5 kind で E-P7 違反。
-  - *block を先に 5 つ足してから tutor 全体を移す* — 最初の切替の blast radius が最大化する。
-    block 追加は per-slot 移行の各回で必要になった分だけ行う。
-- **Rollback implications:** canary env を落とすと bridge へ縮退する（E-S11 / E-S34）。
-  unsafe rollback（検証なしで server 値を使う経路）は実装しない。
-
 ---
 
 # 5. Policy / persistence decisions
@@ -1152,10 +1056,30 @@ Claude Code はこれらを勝手に決めてはならない。
   4 kind すべてを owner scope で読める。**`service_role` は不要**（E-L4 / Canon §20 を維持）。
   「policy 不在なら 200 + 0 行になり runtime では検出できない」という silent failure のリスクは、
   policy 実在が確認されたことで解消した。
+- **★ Post-Wave 4.5 に本番 SQL Editor で確定した部分（R5 のクローズ）:**
+  `supabase/exam_spine_rls_verification.sql` §7 を本番で実行し、E-S27 の
+  `reviews:workspace->reviews` が **jsonb 上で実際に配列として解決する**ことを確認した。
+  ```text
+  total_rows              = 10
+  rows_reviews_is_array   = 10
+  rows_reviews_wrong_type =  0
+  rows_bogus_path         =  0   （存在しない sub-path の negative control）
+  ```
+  → 本番 10 / 10 行で `jsonb_typeof(workspace->'reviews') = 'array'`。
+  加えて Wave 4.5 の read-only PostgREST probe（GET / `select=id&limit=0` /
+  `Prefer: count=exact`。行データ 0 byte）で次を実測済み:
+  ```text
+  workspace->reviews が非 null              = 10 / 10 行
+  workspace->zzz_not_a_field が非 null      =  0 行（negative control）
+  ```
+  → `->` が実データ上で解決し、PostgREST が sub-path を無条件一致させていないことの
+  両方が示された。**これで「object / scalar が混ざって mirror だけ `reviews` が空になり、
+  fail-open に吸収されて runtime では気付けない」という silent failure は解消した。**
+  なお本番検証では INSERT / UPDATE / DELETE / DDL / policy 変更 / migration を 1 件も行っていない。
 - **★ 残る検証の限界（推測で PASS にしない / Canon §80）— Stage をブロックしない:**
-  - PostgREST は **jsonb の sub-path を検証しない**。`workspace->zzz_not_a_field` も 200 を返す。
-    したがって `essay` の `reviews:workspace->reviews`（E-S27）の妥当性は live schema check では
-    証明できず、shipping production で同一 projection が稼働している事実に依存する。
+  - PostgREST は **jsonb の sub-path を検証しない**（`workspace->zzz_not_a_field` も 200）。
+    したがって *live schema check の 200 だけ*では R5 を主張できない。上記のとおり
+    R5 は schema check ではなく **本番の jsonb 型集計 + negative control** で閉じている。
   - UNIQUE constraint / index / trigger は correctness ではなく
     「`maybeSingle()` が 406 に倒れないか」「性能」に効く。破れても fail-open が吸収する
     （その kind だけ `status='error'`）。
@@ -1258,8 +1182,8 @@ policy 削除後、`mirror_events` への browser INSERT が `42501` になっ�
 
 ## E-H7 — device claim transport が 2 実装ある状態の解消
 
-- **Status:** `RESOLVED`（Stage 5 entry gate。**E-S39** が解決した。以下は経緯の記録）
-- **判断（当時）:** 同じ「device revision claim を wire で運ぶ」責務に対して、canonical namespace に実装が 2 本存在する。どちらを恒久 transport とするか。
+- **Status:** `PENDING_HUMAN`
+- **必要な判断:** 同じ「device revision claim を wire で運ぶ」責務に対して、canonical namespace に実装が 2 本存在する。どちらを恒久 transport とするか。
   ```text
   A. lib/examSpine/sync/claim/**   wire version 'edc1'
        E-S33 で LOCKED。header 'x-exam-spine-device-claim'。

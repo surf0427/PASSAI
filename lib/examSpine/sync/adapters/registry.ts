@@ -392,19 +392,23 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
  *   runtime enable        : その kind の claim を実際の request に載せてよいか
  *
  * essay は前者を満たすが後者を満たさない。E-S27 の `reviews:workspace->reviews` は
- * PostgREST が jsonb の sub-path を検証しない（存在しない path も 200）ため
- * live schema check で証明できず（Wave 2.5 の R5 / Canon §80）、万一 path が誤っていれば
- * mirror 側だけ `reviews` が空になり **恒久的な false mismatch** を生む。
+ * PostgREST が jsonb の sub-path を検証しない（存在しない path も 200）ため、
+ * かつては essay がここに載っていた。**本番 SQL Editor での jsonb 型集計により
+ * R5 は CLOSED**（E-H1「Post-Wave 4.5 に本番 SQL Editor で確定した部分」）:
+ *   total_rows 10 / rows_reviews_is_array 10 / wrong_type 0 / bogus_path 0
+ * したがって essay の宣言は撤去した。stale な blocker を残すこと自体が drift になる。
+ *
+ * ★ 機構は残す ★
+ *   「contract は確定しているが production evidence が未取得」という状態は今後も起こり得る。
+ *   その kind をここへ載せれば `enable.ts` が構造的に veto する。空であることは
+ *   「今その状態の kind が無い」という意味であって、機構が不要という意味ではない。
  *
  * ★ これは宣言であって gate ではない ★
- *   feature flag も canary も runtime 判定もここでは作らない（Wave 3 の禁止 scope）。
- *   有効化 gate を実装する Wave 4 が、この宣言を必ず参照すること。
+ *   feature flag も canary も env もここでは持たない。判定は enable.ts が行う。
  */
 export const EXAM_SYNC_RUNTIME_ENABLE_BLOCKED: Readonly<
   Partial<Record<ExamSourceKind, string>>
-> = {
-  essay: 'R5 / E-S27「live 検証の限界」: reviews:workspace->reviews を out-of-band で確認するまで runtime claim / enable / canary を禁止する。pure な device ↔ mirror parity は成立済み（qa:examSpine:syncDevice）',
-};
+> = {};
 
 /**
  * adapter を実装した kind（capability === 'possible'）。

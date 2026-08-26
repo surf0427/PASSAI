@@ -141,3 +141,28 @@ where g.table_schema = 'public'
     'interview_practice_records'
   )
 order by g.table_name, g.grantee;
+
+-- ── §7. R5 — essay の `workspace->reviews` が配列であること（件数のみ）──
+--   E-H1 の「残る検証の限界」のうち、essay projection（E-S27）に関する 1 点を閉じるための query。
+--
+--   ★ なぜ PostgREST の 200 では足りないか ★
+--     PostgREST は jsonb の sub-path を検証しない（存在しない `workspace->zzz` も 200）。
+--     したがって live schema check の 200 は R5 の証拠にならない。必要なのは
+--       (a) `workspace->'reviews'` が実データ上で解決すること
+--       (b) その型が **array** であること（object / scalar だと mapEssayRow が [] に倒れ、
+--           device 側に reviews があると **恒久的な false mismatch** になる。
+--           しかも fail-open が吸収するため runtime では検出できない）
+--       (c) 存在しない path が 1 件も一致しないこと（negative control）
+--
+--   ★ 返すのは count だけ。essay 本文 / レビュー本文 / user_id を 1 つも返さない。★
+--
+--   判定: total_rows > 0 かつ rows_reviews_is_array = total_rows
+--         かつ rows_reviews_wrong_type = 0 かつ rows_bogus_path = 0
+select
+  count(*)                                                             as total_rows,
+  count(*) filter (where jsonb_exists(workspace, 'reviews'))           as rows_having_reviews_key,
+  count(*) filter (where jsonb_typeof(workspace->'reviews') = 'array') as rows_reviews_is_array,
+  count(*) filter (where jsonb_typeof(workspace->'reviews') is not null
+                     and jsonb_typeof(workspace->'reviews') <> 'array') as rows_reviews_wrong_type,
+  count(*) filter (where jsonb_exists(workspace, 'zzz_not_a_field'))   as rows_bogus_path
+from essay_workspaces;
