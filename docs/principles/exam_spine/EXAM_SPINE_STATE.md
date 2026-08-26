@@ -19,6 +19,58 @@
 
 ---
 
+# 1.1 Canonical Implementation Lineage（正本 / E-S37）
+
+**Packet / worker はここを読んで canonical HEAD を解決する。推測しない。**
+
+| 項目 | 値 |
+|---|---|
+| Canonical implementation branch | `exam-spine-stage4-stabilize` |
+| Canonical HEAD at this convergence | `bae1c29659c1c78071b2d415b69ef52e1f444bdb` |
+| Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
+
+## 解決手順（毎回これを実行する）
+
+```bash
+# 1. 上表の branch の現在 HEAD を取る（hash 欄は「この収束時点」の記録であって固定値ではない）
+git rev-parse exam-spine-stage4-stabilize
+
+# 2. 候補 branch が canonical に含まれるか
+git merge-base --is-ancestor <candidate> exam-spine-stage4-stabilize
+
+# 3. 含まれないなら unique commits を必ず列挙してから統合を判断する
+git log --oneline exam-spine-stage4-stabilize..<candidate>
+```
+
+## ancestry rule
+
+```text
+Stage 4 の implementation packet は、この branch から分岐するか、
+この branch へ統合されて初めて canonical と呼べる。
+
+並列 branch の出力は、
+  a. contract が Register へ登録され（E-P9）、かつ
+  b. 本 lineage へ統合される
+まで **non-canonical** である。branch 名・commit 数・commit date は根拠にならない。
+```
+
+## この収束に含まれる lineage（機械検証済み）
+
+```text
+exam-spine-stage3                     a009116   ⊆ canonical
+exam-spine-w1-sync-core-v2            44fc277   ⊆ canonical
+exam-spine-w2-sync-adapters           a934321   ⊆ canonical
+exam-spine-w25-canonical-convergence  bdcb6dd   ⊆ canonical
+exam-spine-w3-device-views            ff5bf38   ⊆ canonical
+exam-spine-w4-sync-signal             f7073a9   ⊆ canonical
+exam-spine-w1-convergence-v2          82fb782   ⊆ canonical
+```
+
+`exam-spine-w1-packet-i` / `exam-spine-w1-packet-e` / `exam-spine-w1-consumer-map-v2` は
+shipping lineage 側の packet であり、本 implementation lineage には含まれない（含む必要も無い）。
+
+---
+
 # 2. Stage
 
 ```text

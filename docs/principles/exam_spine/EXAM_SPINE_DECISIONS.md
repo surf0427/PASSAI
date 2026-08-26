@@ -772,6 +772,71 @@ Exam-specific differences / Rollback implications
   - *「0 本」を維持して pilot を別扱いの例外にする* — 例外が増えるほど invariant が形骸化する。
 - **Rollback implications:** なし（QA の判定条件のみ）。
 
+## E-S35 — 外部へ出す Source-Sync verdict は E-S2 の 4 値に畳み、`incomparable` を昇格させない
+
+- **Status:** `LOCKED`（Stage 4 Wave 4 で実装 + QA 済み）
+- **Decision:** Source-Sync の内部 status は 5 値（`verified` / `mismatch` / `unclaimed` / `unreadable` / `incomparable`）だが、**Spine の外へ出す verdict は E-S2 が列挙する 4 値だけ**とする。畳み込みは `lib/examSpine/sync/verdict.ts` の 1 箇所に閉じ、`incomparable → verified` を構造的に禁止する。畳んだ事実は無言の cast ではなく観測可能な flag として残す。
+- **Reason:** `incomparable` は「判定材料が無い」であって「一致した」ではない。外部 4 値へ写すときに `verified` へ寄せると、未検証を検証済みと呼ぶことになり E-S2 の負の安全ゲートが無効化される。かといって外部に 5 値を出すと E-S2（LOCKED）の語彙と食い違う。畳み先を 1 関数に固定し、そこだけを QA で押さえるのが最小の解である。
+- **優先順位:** E-S2 のとおり `unreadable` > `unclaimed` > `mismatch` > `verified`。
+- **Implementation evidence:** `lib/examSpine/sync/verdict.ts`（`foldExamSyncInternalStatus` / `examSyncVerdict` / `examSyncVerdicts`）。QA は `scripts/exam-spine-sync-signal-check.ts`（外部 verdict union に `incomparable` が現れないことを含む）。
+- **Failure semantics:** 畳めない入力は `verified` へ倒さない。上位は「使わない」方向へ倒れる。
+- **Stage:** Stage 4（判定層。consumer 接続を含まない）。
+- **Alternatives rejected:**
+  - *外部にも 5 値を出す* — E-S2 の語彙と二重定義になる。
+  - *`incomparable` を `mismatch` に潰す* — 不一致の証拠が無いのに不一致を主張することになる。
+- **Rollback implications:** なし（純関数。runtime 接続を持たない）。
+
+## E-S36 — usability 判定は verdict / canary / runtime block の宣言層に閉じ、flag 実装を持たない
+
+- **Status:** `LOCKED`（Stage 4 Wave 4 で実装 + QA 済み）
+- **Decision:** 「その kind を実際に使ってよいか（`usable` / `veto`）」の判定を `lib/examSpine/sync/enable.ts` に置く。ただしこの層は **env も allowlist も canary infrastructure も持たない**。評価済みの値を引数で受け取るだけの純粋な宣言層とし、canary の実評価（E-S11 の「purpose flag AND user allowlist」の連言）は runtime 側が持つ。canary 状態が missing / unknown / false / malformed のいずれでも enable しない（`=== true` の厳密一致のみ）。
+- **Reason:** verdict（照合結果）と usability（使ってよいか）は別の判断である。混ぜると「verified だから使う」という短絡が生まれ、canary や runtime block を迂回できてしまう。一方でこの層に env を持たせると feature flag 実装が二重化する（E-S11 が正本）。判定と評価を分けることで、default deny を型で担保したまま flag 実装を 1 箇所に保てる。
+- **Implementation evidence:** `lib/examSpine/sync/enable.ts`（`examSyncUsability` / `examSyncUsableKinds` / `isExamSyncRuntimeBlocked` / `summarizeExamSyncEnable`）。QA は `scripts/exam-spine-sync-signal-check.ts`。
+- **Failure semantics:** 判定不能はすべて `veto`。理由は enum で返す（E-S12）。
+- **Stage:** Stage 4（宣言層）。
+- **Alternatives rejected:**
+  - *verdict から直接 usable を導く* — canary / runtime block を迂回する。
+  - *この層に env を読ませる* — E-S11 と二重の flag 実装になる。
+- **Rollback implications:** なし（純関数）。
+
+## E-S37 — canonical implementation lineage を 1 本宣言し、並列 branch は登録+統合まで canonical ではない
+
+- **Status:** `LOCKED`（Stage 4 stabilization で制定）
+- **背景（実際に 2 回起きた事故）:**
+  ```text
+  1 回目  558ddca から convergence 系列と device-views 系列が分岐。
+          Register が E-S28 / E-S34 の 2 本になり CANONICAL_HEAD = UNDEFINED になった。
+  2 回目  上を merge した直後、sync-signal 系列が ff5bf38 から再分岐。
+          同じ構造の分岐が再発した。
+  ```
+  どちらも「並列 worker が自分の branch を canonical のつもりで進めた」ことが原因である。
+- **Decision:**
+  ```text
+  1. canonical implementation lineage は **1 本**であり、その所在は
+     EXAM_SPINE_STATE.md §1.1「Canonical Implementation Lineage」が唯一の正本とする。
+  2. 並列 worker の branch は **canonical ではない**。branch 名に canonical / convergence が
+     入っていても、worktree が新しくても、commit が多くても canonical にはならない。
+  3. worker の成果が canonical になるのは、次の 2 つを**両方**満たしたときだけである。
+       a. その contract が Register に登録されている（E-P9）
+       b. canonical lineage へ統合（merge / cherry-pick）されている
+  4. packet / worker は開始時に canonical HEAD を **re-resolve** し、その値を記録する。
+     記録した HEAD から分岐すること。stale branch の上に新しい feature を積まない。
+  5. 統合前に必ず ancestry check を行う。
+       git merge-base --is-ancestor <canonical> <branch>
+       git log --oneline <canonical>..<branch>
+     unique commits を列挙せずに merge しない。
+  6. 「commit date が新しい」「HEAD が進んでいる」「branch 名」を根拠に
+     canonical を選ばない（Canon §31 の latest-wins 禁止と同じ理由）。
+  ```
+- **Reason:** 分岐そのものは並列開発の正常な副産物である。事故になったのは *どれが canonical かを機械的に答えられなかった* からで、Packet E が「どの HEAD を import するのか」を人間の推測に頼る状態になっていた。所在を 1 箇所に固定し、canonical 化の手続きを明文化すれば、分岐しても復帰できる。
+- **Implementation evidence:** `EXAM_SPINE_STATE.md` §1.1。`scripts/exam-spine-readiness-check.ts` が Register の単一性（R1）を機械検証する。
+- **Failure semantics:** canonical HEAD を解決できない場合、後続 packet は推測で進めず停止する（Packet E の BLOCKED 判定が正しい挙動だった）。
+- **Stage:** 運用規約（実装を持たない）。
+- **Alternatives rejected:**
+  - *hash を Register 本文に恒久固定する* — 収束のたびに手更新が要り、必ず陳腐化する。branch + ancestry rule を正本にし、hash は「この収束時点」の記録に留める。
+  - *worker branch を canonical と呼ぶ運用を続ける* — 2 回とも同じ失敗をした。
+- **Rollback implications:** なし（運用規約）。
+
 ---
 
 # 5. Policy / persistence decisions
@@ -1046,6 +1111,31 @@ policy 削除後、`mirror_events` への browser INSERT が `42501` になっ�
 - **必要な判断:** 受験版 Spine が安定した後（Stage 11 完了後）に、architecture-level module を共有 package 化するか。
 - **判断材料:** 両実装が実際に収束したか。各 module の header に記録した upstream reference との差分。
 - **Blocker:** なし。
+
+## E-H7 — device claim transport が 2 実装ある状態の解消
+
+- **Status:** `PENDING_HUMAN`
+- **必要な判断:** 同じ「device revision claim を wire で運ぶ」責務に対して、canonical namespace に実装が 2 本存在する。どちらを恒久 transport とするか。
+  ```text
+  A. lib/examSpine/sync/claim/**   wire version 'edc1'
+       E-S33 で LOCKED。header 'x-exam-spine-device-claim'。
+       Stage 5.0 pilot として production（tutor）へ接続済み。
+       purpose gate filter（toDeviceClaims）を持つ。
+
+  B. lib/examSpine/sync/signal.ts  wire version 'esy1'
+       Register 未登録。production 接続なし。
+       bounded parse / rejection enum を持ち、verdict.ts の claim 入力型として使われる。
+  ```
+- **判断材料:**
+  - E-P9 により、B は Register 未登録のままでは canonical transport へ昇格できない。
+  - 一方 B を単純に削除すると `verdict.ts`（E-S35）の入力型と w4 の QA 資産（`sync-signal-check.ts`）を失う。
+  - 現時点で **実害は無い**: B は production から 1 本も import されておらず（E-S34 の allowlist で機械検証）、2 つの wire format が同時に流れることはない。
+- **想定される解:**
+  1. `verdict.ts` の入力を「claim 参照の最小 interface」へ narrow し、A の `toDeviceClaims` 出力で満たす。B は transport としては廃止し、型のみ残すか削除する。
+  2. B を正式に登録し、A を B へ寄せる（E-S33 の改訂が必要）。
+  3. 両方を維持し、用途境界（production transport = A / 内部判定入力 = B）を Decision として固定する。
+- **Blocker:** Stage 4 stabilization の blocker では**ない**（QA は全 green）。Stage 5 で claim を実際に消費し始める前に決めること。
+- **Claude が勝手に決めてはいけない理由:** E-S33 は LOCKED であり、A を B へ寄せる案は LOCKED decision の改訂にあたる。
 
 ---
 
