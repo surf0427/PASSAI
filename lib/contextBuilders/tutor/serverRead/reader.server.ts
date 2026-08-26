@@ -29,8 +29,8 @@
 //   その kind だけが unavailable になり、他 kind と全体は成功として継続する。
 //
 // 関連:
-//   lib/examSpine/read/rowMappers.ts
-//   lib/examSpine/read/snapshot.server.ts
+//   lib/contextBuilders/tutor/serverRead/rowMappers.ts
+//   lib/contextBuilders/tutor/serverRead/snapshotCache.server.ts
 //   lib/contextBuilders/tutorContext.ts（Phase 2 時点で唯一の consumer）
 
 import 'server-only';
@@ -43,7 +43,7 @@ import {
   SOURCE_UNAVAILABLE,
   sourceReady,
   type SourceState,
-} from '@/lib/examSpine/types';
+} from '@/lib/contextBuilders/tutor/serverRead/sourceState';
 import { asRecord, firstRecord } from './rowMappers';
 
 // ── 0. 観測ラベル ─────────────────────────────────────────────────

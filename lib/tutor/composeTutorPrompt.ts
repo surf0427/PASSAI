@@ -12,7 +12,7 @@
 //
 // 責務でないもの:
 //   - 認証 / quota / rate limit（route の前段）
-//   - Supabase read（Exam Spine: lib/examSpine/read/*）
+//   - Supabase read（Exam Spine: lib/contextBuilders/tutor/serverRead/*）
 //   - Anthropic 呼び出し / latency 計測 / usage 記録（route）
 //
 // 純関数:

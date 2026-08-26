@@ -5,13 +5,13 @@
 //   読み取り、受験相談に使える短いテキスト section へ要約して prompt に差し込む層。
 //
 // ── Exam Spine Phase 2 以降の構成 ───────────────────────────────────
-//   Supabase の **読み取り** は lib/examSpine/read/* へ移設した。本ファイルに残るのは
+//   Supabase の **読み取り** は lib/contextBuilders/tutor/serverRead/* へ移設した。本ファイルに残るのは
 //   「読んだ row を Tutor 用にどう解釈・要約・整形するか」という **Tutor 固有の方針**のみ。
 //
-//     lib/examSpine/read/reader.server.ts   … SELECT / fail-open / 並列実行 / 観測
-//     lib/examSpine/read/rowMappers.ts      … jsonb の shape guard（方針を持たない純関数）
-//     lib/examSpine/read/snapshot.server.ts … per-user TTL cache の器
-//     本ファイル                              … truncate 方針 / 表示ラベル / hint 文言 / section 整形
+//     lib/contextBuilders/tutor/serverRead/reader.server.ts        … SELECT / fail-open / 並列実行 / 観測
+//     lib/contextBuilders/tutor/serverRead/rowMappers.ts           … jsonb の shape guard（方針を持たない純関数）
+//     lib/contextBuilders/tutor/serverRead/snapshotCache.server.ts … per-user TTL cache の器
+//     本ファイル                                                   … truncate 方針 / 表示ラベル / hint 文言 / section 整形
 //
 //   Spine 側へ移してはいけないもの（＝ここに残す理由）:
 //     MAX_* の truncate 件数・文字数     … 「受験相談で何を何件見せるか」は Tutor の判断
@@ -45,7 +45,7 @@
 //   - basic_info の PII（氏名 / 評定 / 欠席等）や activity の narrative 本文は読まない。
 //
 // 関連:
-//   - lib/examSpine/read/*（Supabase 読み取り層）
+//   - lib/contextBuilders/tutor/serverRead/*（Supabase 読み取り層）
 //   - app/api/tutor/route.ts (consumer / 接続位置は維持)
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -64,7 +64,7 @@ import {
   toStringArray,
   truncate,
   unwrapEmbedded,
-} from '@/lib/examSpine/read/rowMappers';
+} from '@/lib/contextBuilders/tutor/serverRead/rowMappers';
 import {
   loadExamSources,
   readActivitySnapshot,
@@ -79,9 +79,9 @@ import {
   readPresentationSessionByAttempt,
   resolveExamSpineClient,
   type ExamSpineReadOptions,
-} from '@/lib/examSpine/read/reader.server';
-import { createExamSpineSnapshotCache } from '@/lib/examSpine/read/snapshot.server';
-import { sourceValueOrNull } from '@/lib/examSpine/types';
+} from '@/lib/contextBuilders/tutor/serverRead/reader.server';
+import { createExamSpineSnapshotCache } from '@/lib/contextBuilders/tutor/serverRead/snapshotCache.server';
+import { sourceValueOrNull } from '@/lib/contextBuilders/tutor/serverRead/sourceState';
 
 // ── 型 ───────────────────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ export type TutorStudentContext = {
 
 // ── truncation 定数（section 全体を最大 1200 字に収めるため）──────────
 //
-// ⚠️ Tutor の方針。Spine（lib/examSpine/read/*）へ移さないこと。
+// ⚠️ Tutor の方針。Spine（lib/contextBuilders/tutor/serverRead/*）へ移さないこと。
 //    「受験相談の system block に何を何件載せるか」という feature の判断であり、
 //    他 feature が同じ切り方を強制される理由は無い。
 const MAX_STRENGTHS = 3;
@@ -904,7 +904,7 @@ export async function loadTutorStudentContext(
 // 目的: 同一会話の連続ターンで Supabase の read を毎ターン繰り返さず、pre-Claude の
 //       レイテンシを削る。取得「内容」は intent / feature に依存しないため userId だけを key にする。
 //
-// 器は Spine（lib/examSpine/read/snapshot.server.ts）。TTL と「保存してよいか」の
+// 器は Spine（lib/contextBuilders/tutor/serverRead/snapshotCache.server.ts）。TTL と「保存してよいか」の
 // 判断だけを Tutor 側で与える。意味論は移設前と同一:
 //   - TTL 60 秒。生徒情報は分単位では変わらないため品質中立（prompt 側も「参考情報・
 //     古い可能性あり・最新発言優先」と明記済み）。

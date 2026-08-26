@@ -17,7 +17,7 @@
 //     そのため max 系はすべて **引数で受け取る**（module 定数として持たない）。
 //
 // 関連:
-//   lib/examSpine/read/reader.server.ts（唯一の想定 consumer）
+//   lib/contextBuilders/tutor/serverRead/reader.server.ts（唯一の想定 consumer）
 //   docs/principles/exam_spine/EXAM_SPINE_ARCHITECTURE.md
 
 /** plain object だけを通す。配列 / null / primitive は null に倒す。 */

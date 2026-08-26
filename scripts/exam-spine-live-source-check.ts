@@ -1,7 +1,7 @@
 // Exam Spine — live source compatibility check（read-only）。
 //
 // 目的:
-//   lib/examSpine/read/reader.server.ts の **実装そのもの**を、実 Supabase /
+//   lib/contextBuilders/tutor/serverRead/reader.server.ts の **実装そのもの**を、実 Supabase /
 //   PostgREST に対して実行し、「reader が発行する SELECT が本番 schema と
 //   合致しているか」を機械的に確かめる。
 //
@@ -29,7 +29,7 @@
 // 使い方:
 //   npm run qa:examSpine:liveSources
 //
-// 関連: lib/examSpine/read/reader.server.ts
+// 関連: lib/contextBuilders/tutor/serverRead/reader.server.ts
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   }
 
   const { createClient } = await import('@supabase/supabase-js');
-  const reader = await import('@/lib/examSpine/read/reader.server');
+  const reader = await import('@/lib/contextBuilders/tutor/serverRead/reader.server');
 
   const client = createClient(env.url, env.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },

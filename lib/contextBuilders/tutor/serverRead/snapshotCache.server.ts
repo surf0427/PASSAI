@@ -26,7 +26,7 @@
 // ⚠️ Redis / Vercel KV / Supabase 等の外部 store へ差し替えないこと。
 //    Phase 2 は純粋な移設であり、store の性質を変えると失敗モードが変わる。
 //
-// 関連: lib/examSpine/read/reader.server.ts
+// 関連: lib/contextBuilders/tutor/serverRead/reader.server.ts
 
 import 'server-only';
 
