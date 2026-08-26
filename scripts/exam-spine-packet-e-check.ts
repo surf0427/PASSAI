@@ -79,9 +79,19 @@ check(
   shadowLeak.join(', '),
 );
 
-// ── 3. production runtime importer = 0（Packet E の核心）──────────
+// ── 3. production runtime importer は E-S34 の allowlist だけ（Packet E の核心）──
 //   scripts/** は QA であり production runtime ではないので対象外。
 //   lib/examSpine/** 内部の相互 import も当然除外する。
+//
+// ★ S5-P2 lineage convergence で retarget ★
+//   本 check は「shipping に canonical namespace を dormant で置く」段階に書かれたため、
+//   production importer を **0** と要求していた。canonical lineage には既に
+//   E-S33 / E-S34（LOCKED）の Stage 5.0 pilot transport が接続済みで、
+//   合流後の base ではその 2 file が正当に import する。
+//   守るべき不変条件は「importer が 0」ではなく **登録済み allowlist 以外が接続しないこと**。
+//   したがって allowlist を E-S34 の pilot 2 file に固定し、それ以外を落とす。
+//   （接続が transport 止まりであることは stage5 / syncSignal QA が behavioral に検査する）
+const E_S34_PILOT_ALLOWLIST = ['app/api/tutor/route.ts', 'app/tutor/page.tsx'];
 const PROD_DIRS = ['app', 'components', 'hooks', 'lib'];
 const prodImporters: string[] = [];
 for (const dir of PROD_DIRS) {
@@ -92,12 +102,12 @@ for (const dir of PROD_DIRS) {
     const text = readFileSync(file, 'utf8');
     // import / dynamic import / re-export のいずれも拾う
     if (/from\s+'@\/lib\/examSpine|import\('@\/lib\/examSpine|require\('@\/lib\/examSpine/.test(text)) {
-      prodImporters.push(rel);
+      if (!E_S34_PILOT_ALLOWLIST.includes(rel)) prodImporters.push(rel);
     }
   }
 }
 check(
-  'production runtime から canonical namespace を import していない',
+  'production runtime の canonical namespace importer は E-S34 の pilot allowlist だけ',
   prodImporters.length === 0,
   prodImporters.join(', '),
 );
