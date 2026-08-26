@@ -32,6 +32,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 import { resolveDiagnosisTypeHint } from '@/lib/examDiagnosis/tutorHints';
+import { summarizeActivityCategories } from '@/lib/activityCategories';
 // AI 面接モードのラベル（純データモジュール。server-only 依存なし）。
 import {
   INTERVIEW_TYPE_LABELS,
@@ -158,18 +159,9 @@ const PRESENTATION_LEVEL_LABELS: Record<string, string> = {
 // （Tutor へ渡してよい傾向 hint のみ。タイプ名 / score / 推薦大学 / NG生文は渡さない）。
 
 // activity カテゴリ key → 表示ラベル（lib/contextBuilders/tutorStudentContext.ts と一致）。
-const ACTIVITY_CATEGORY_LABELS: Record<string, string> = {
-  clubActivities: '部活動',
-  volunteerActivities: 'ボランティア',
-  studyAbroadActivities: '留学',
-  researchActivities: '探究',
-  partTimeJobActivities: 'アルバイト',
-  certificationActivities: '資格',
-  contestActivities: 'コンテスト',
-  readingActivities: '読書',
-  hobbyActivities: '趣味',
-  otherActivities: 'その他',
-};
+// ★ ラベル表と件数集計の正本は lib/activityCategories.ts へ移した（Stage 5.3）★
+//   Canonical Exam Context の activity block が同じ集計を使うため、
+//   2 箇所に置くと同じ活動データから違う prompt が出る。値は変えていない。
 
 // ── 汎用 shape guard（jsonb は DB 側で shape 強制しない契約のため defensive に読む）──
 
@@ -358,18 +350,10 @@ async function loadActivityContext(
   const payload = await readSnapshotPayload(client, 'activity_logs', userId);
   if (!payload) return {};
 
-  const categoryCounts: Record<string, number> = {};
-  let totalCount = 0;
-  for (const key of Object.keys(ACTIVITY_CATEGORY_LABELS)) {
-    const arr = payload[key];
-    if (Array.isArray(arr) && arr.length > 0) {
-      categoryCounts[ACTIVITY_CATEGORY_LABELS[key]] = arr.length;
-      totalCount += arr.length;
-    }
-  }
-  if (totalCount === 0) return {};
+  const summary = summarizeActivityCategories(payload);
+  if (!summary) return {};
 
-  return { activity: { totalCount, categoryCounts } };
+  return { activity: { totalCount: summary.totalCount, categoryCounts: summary.categoryCounts } };
 }
 
 // ── source loader: interview_ai_results（最新の completed AI 面接 1 件）──────

@@ -20,6 +20,7 @@
 //   - app/api/tutor/route.ts (consumer)
 
 import type { TutorStudentContextInput } from '@/types/tutorContext';
+import { ACTIVITY_CATEGORY_LABELS } from '@/lib/activityCategories';
 
 // ── truncation 定数 ──────────────────────────────────────────────
 // 値を変えると出力 string が変わるが、本 context は Anthropic prompt cache の
@@ -65,19 +66,7 @@ const MAX_MYPAGE_GROWTH_LENGTH = 120;
 // recent line に出す「最近よく使っている機能」の最大件数。
 const MAX_MYPAGE_RECENT_FEATURES = 2;
 
-// 活動カテゴリ key → 表示ラベル。ActivityData の field 名と一致させる。
-const ACTIVITY_CATEGORY_LABELS: Record<string, string> = {
-  clubActivities: '部活動',
-  volunteerActivities: 'ボランティア',
-  studyAbroadActivities: '留学',
-  researchActivities: '探究',
-  partTimeJobActivities: 'アルバイト',
-  certificationActivities: '資格',
-  contestActivities: 'コンテスト',
-  readingActivities: '読書',
-  hobbyActivities: '趣味',
-  otherActivities: 'その他',
-};
+// 活動カテゴリ key → 表示ラベルは lib/activityCategories.ts が正本（Stage 5.3 で統合）。
 
 // ── 汎用 shape guard ─────────────────────────────────────────────
 
