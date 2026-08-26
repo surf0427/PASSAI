@@ -29,6 +29,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { tutorLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
 import { loadDiagnosisResult } from '@/lib/diagnosisStorage';
+import { loadSelfAnalysisLogs } from '@/lib/selfAnalysisLogStorage';
 // Exam Spine — device revision claim（Stage 5.0 / E-S2）。純関数のみ。
 import { buildTutorDeviceClaimEntries } from '@/lib/examSpine/sync/claim/deviceBasicInfo';
 import {
@@ -610,7 +611,14 @@ export default function TutorPage() {
     const deviceClaimHeader = serializeDeviceClaim(
       //   Stage 5.3: activity も申告する（G6）。**device canonical の
       //   ActivityData 本体**を渡す（body に載せている counts 射影ではない）。
-      buildTutorDeviceClaimEntries(basicInfo, loadDiagnosisResult(), loadActivityData()),
+      //   Stage 5.4: self_analysis も申告する（G7）。履歴 list なので
+      //   window 選択（server の read cap と同じ上位 N 件）は canonical view が行う。
+      buildTutorDeviceClaimEntries(
+        basicInfo,
+        loadDiagnosisResult(),
+        loadActivityData(),
+        loadSelfAnalysisLogs(),
+      ),
     );
 
     try {

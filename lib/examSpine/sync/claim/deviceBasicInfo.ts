@@ -19,6 +19,7 @@
 import type { BasicInfo } from '@/types/basicInfo';
 import type { DiagnosisResult } from '@/lib/diagnosisStorage';
 import type { ActivityData } from '@/types/activity';
+import type { SelfAnalysisLog } from '@/types/selfAnalysisLog';
 
 import { buildDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaim } from '../adapters/deviceSources';
@@ -106,6 +107,30 @@ export function deviceActivityToken(
 }
 
 /**
+ * device canonical の自己分析ログ → claim token（canonical projection へ委譲）。
+ *
+ * ★ Stage 5.4 で追加（G7）★
+ *   `self_analysis` は class 1 かつ **履歴 list** なので、
+ *   snapshot kind と違って「どの N 件を見るか」が device / server で揃っている必要がある。
+ *   その window 選択も canonical projection（`deviceSelfAnalysisView`）が持つ。
+ *
+ * ⚠️ mirror gap（既知 / 今回は直さない）:
+ *   `dualWriteSelfAnalysisLog` は log 確定時に発火するが、削除は伝播しない
+ *   （`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G9）。
+ *   端末で log を消しても server に残るため、その端末では正当に mismatch になる。
+ *   Source-Sync が stale な server 値を使わせない設計どおりの挙動であり、握り潰さない。
+ */
+export function deviceSelfAnalysisToken(
+  logs: readonly SelfAnalysisLog[] | null | undefined,
+): string | null {
+  const claim = buildDeviceClaim(
+    'self_analysis',
+    logs && logs.length > 0 ? { state: 'present', value: logs } : { state: 'absent' },
+  );
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
+}
+
+/**
  * pilot（tutor）の claim entry を組み立てる。
  *
  * ★ 載せる kind は purpose の移行状況で決める ★
@@ -118,6 +143,7 @@ export function buildTutorDeviceClaimEntries(
   basicInfo: BasicInfo | null | undefined,
   diagnosis?: DiagnosisResult | null,
   activity?: ActivityData | null,
+  selfAnalysisLogs?: readonly SelfAnalysisLog[] | null,
 ): readonly ExamDeviceClaimEntry[] {
   // ★ 宣言順を固定する ★
   //   偶然の object 順序に依存させない。kind ごとに独立した token なので
@@ -129,5 +155,7 @@ export function buildTutorDeviceClaimEntries(
   if (diagnosisToken) entries.push({ kind: 'diagnosis', token: diagnosisToken });
   const activityToken = deviceActivityToken(activity);
   if (activityToken) entries.push({ kind: 'activity', token: activityToken });
+  const selfAnalysisToken = deviceSelfAnalysisToken(selfAnalysisLogs);
+  if (selfAnalysisToken) entries.push({ kind: 'self_analysis', token: selfAnalysisToken });
   return entries;
 }
