@@ -885,6 +885,173 @@ Exam-specific differences / Rollback implications
   - *canonical 側を E-S38 以降へずらす* — 既に登録・QA 済みの canonical 側を動かす理由が無い。
 - **Rollback implications:** なし（運用規約）。
 
+## E-S39 — device claim の request transport は 1 本だけとし、`signal.ts` を transport にしない
+
+- **Status:** `LOCKED`（Stage 5 entry gate で制定。E-H7 を解決する）
+- **背景:** `sync/claim/**`（wire `edc1`）と `sync/signal.ts`（wire `esy1`）が
+  「同じ payload（kind → fingerprint）を bounded 文字列へ直列化する」ため、
+  **request transport が 2 本あるように見えていた**（E-H7 / `PENDING_HUMAN`）。
+- **コード実測で確定した事実:**
+  ```text
+  canonical namespace 全体で HTTP header に束縛されている module は 1 つだけ:
+    sync/claim/types.ts:32  EXAM_DEVICE_CLAIM_HEADER = 'x-exam-spine-device-claim'
+    sync/claim/parse.ts:36  parseDeviceClaimHeader(headers: Headers)
+    sync/claim/serialize.ts withDeviceClaimHeader(...)
+
+  sync/signal.ts:
+    header 定数        なし
+    Headers への依存   なし
+    signature          serializeExamSyncSignal(claims) -> string
+                       parseExamSyncSignal(raw: unknown) -> ExamSyncSignal
+    file header 自身が明記: 「★ header にはまだ載せない ★ …
+      Request / Response / headers …」（signal.ts:26-27）
+    production importer 0。唯一の consumer は sync/verdict.ts（Spine 内部）
+  ```
+- **したがって関係は `DIFFERENT_LAYER` であり、`DUPLICATE` ではない:**
+  ```text
+  claim/**    request transport   HTTP header 束縛あり / production 接続あり
+  signal.ts   内部 codec          transport 束縛なし / verdict.ts の入力型
+  ```
+- **Decision:**
+  ```text
+  1. device claim の **request transport は sync/claim/**（edc1）1 本**とする。
+     canonical namespace で HTTP header に束縛してよい device-claim module はこれだけ。
+
+  2. sync/signal.ts は **transport ではない**。内部 codec / verdict 入力として維持する。
+     verdict / enable の semantics は有用なので削除しない。
+
+  3. signal.ts に header 定数・`Headers` 依存・request 束縛を **追加してはならない**。
+     追加が必要になった場合は、それは transport の二重化なので新しい Decision を要する。
+
+  4. 上記 1/3 は QA で機械的に固定する
+     （`scripts/exam-spine-readiness-check.ts`: device-claim header 束縛が 1 module のみ）。
+  ```
+- **Reason:** 「2 実装あるから片方を消す」ではなく、**層が違うことを確定させ、
+  層をまたぐ変更を禁止する**のが正しい解である。signal.ts を消すと `verdict.ts`（E-S35）の
+  入力型と Wave 4 の QA 資産を失う。逆に放置すると、将来 signal.ts に header を足した瞬間に
+  wire format が 2 本になり、旧 client の hex を新 schema として誤解釈する経路
+  （signal.ts が自ら警告している false-positive verified）が開く。
+- **Alternatives rejected:**
+  - *signal.ts を削除する* — verdict / enable の内部 semantics を巻き添えにする。
+  - *両方を transport として残す* — Stage 5 で claim を消費し始めた時点で二重定義に依存する。
+  - *PENDING_HUMAN のまま据え置く* — runtime architecture が既に決定的な答えを持っており、
+    人間が選ぶ余地のある product tradeoff は存在しない。
+- **Rollback implications:** なし（宣言 + QA）。既存 runtime 挙動を変えない。
+
+## E-S40 — Stage 5 の最初の consumer 切替は tutor の `basic_info` slot 単独とする
+
+- **Status:** `LOCKED`（Stage 5 entry gate で制定。実装は本 Decision の範囲外）
+- **Decision:** Stage 5 の **最初の** consumer 切替は
+  **`tutor` purpose の `basic_info` slot だけ**を対象とする。同じ request 内の
+  他 slot（`self_analysis` / `activity` / `diagnosis` / `statement_review` / `essay` /
+  `interview_record` / `interview_ai` / `presentation`）は bridge / legacy のまま据え置く。
+  per-kind origin（E-S26）が per-slot 移行を表現できるため、consumer 単位で一括切替しない。
+- **なぜ tutor か（実測。branch や新しさではなく infra 充足度で選んだ）:**
+  ```text
+  tutor だけが Stage 5 に必要な 4 つを既に持っている:
+    server read 経路   legacy serverRead（production 稼働中）
+    device claim       E-S33（basic_info を申告。production 接続済み）
+    canary gate        E-S34（default deny。shadow で通電実績あり）
+    canonical block    basic_info block が存在する
+
+  他 purpose は上記 4 つを 1 つも持たない。kind 数が少ない purpose
+  （essay 系 / statement_prepare は basic_info 1 kind のみ）は一見安いが、
+  gate / claim / shadow / 比較経路をゼロから作る必要があり総リスクは大きい。
+  ```
+- **なぜ `basic_info` slot 単独か（実測）:**
+  ```text
+  block を持つ kind        basic_info / activity / self_analysis / statement_review（4）
+  tutor が必要とする kind  9
+  → tutor 全体を一度に移すと 5 kind が block 不在で E-P7（context を減らさない）に違反する
+
+  tutor が現在申告している claim は basic_info だけ
+    sync/claim/deviceBasicInfo.ts:65 buildTutorDeviceClaimEntries → [{ kind: 'basic_info' }]
+  → Source-Sync で verified を出せる kind も現状 basic_info だけである
+  ```
+- **氏名の扱い:** server 側 `basic_info` に氏名は存在しない（E-P8）。
+  切替後も氏名が prompt から消えてはならない（E-P7）。
+  `context/project.ts` が bridge の氏名を明示合成し `bridgeFields` として記録する経路を使う。
+  暗黙の Mixed-Origin にしない（Canon §17）。
+- **Alternatives rejected:**
+  - *essay 系 / statement_prepare を先に移す* — kind 数は少ないが Stage 5 infra を
+    ゼロから作ることになる。既存の claim / gate / shadow を活かせない。
+  - *tutor を consumer 単位で一括移行する* — block 不在 5 kind で E-P7 違反。
+  - *block を先に 5 つ足してから tutor 全体を移す* — 最初の切替の blast radius が最大化する。
+    block 追加は per-slot 移行の各回で必要になった分だけ行う。
+- **Rollback implications:** canary env を落とすと bridge へ縮退する（E-S11 / E-S34）。
+  unsafe rollback（検証なしで server 値を使う経路）は実装しない。
+
+## E-S41 — R5 evidence は `essay` の sync eligibility を開くだけであり、consumer を有効化しない
+
+- **Status:** `LOCKED`（Stage 5 / S5-P2 で昇格）
+- **背景（R5 とは何だったか）:** `essay` の server projection は
+  `reviews:workspace->reviews` という **jsonb sub-path** を使う（E-S27）。
+  PostgREST は sub-path の存在を検証せず、誤った path でも 200 を返すため、
+  live schema check（Wave 2.5 の R5）では「path が実データ上で解決するか」を証明できなかった。
+  path が誤っていれば **mirror 側だけ `reviews` が空**になり、fail-open（E-S1）に
+  吸収されて runtime では気付けない silent failure になる。そのため `essay` を
+  `EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` に載せ、Source-Sync 対象から構造的に外していた。
+- **R5 を閉じた evidence:** 本番 SQL Editor（SELECT のみ）の jsonb 型集計で
+  `reviews` が全行 array であること、および存在しない sub-path が 0 行になる
+  negative control が成立した。read-only PostgREST probe も同じ結論。
+  INSERT / UPDATE / DELETE / DDL / policy 変更 / migration は 1 件も無い（Canon §79 / §80）。
+  ```text
+  ★ 数値の正本は E-H1 本文だけに置く。ここへ複製しない。★
+    drift guard（scripts/exam-spine-sync-device-check.ts）は Register 全体から
+    rows_reviews_is_array 等を grep して evidence の有無を判定する。
+    同じ数値を 2 箇所へ書くと **E-H1 側を壊しても guard が落ちなくなる**
+    （本 Decision の作成中に負例で実際に確認した）。evidence の所在は 1 箇所に保つ。
+  ```
+- **Decision:**
+  ```text
+  1. R5 は CLOSED。`essay` を EXAM_SYNC_RUNTIME_ENABLE_BLOCKED から外す。
+     宣言の理由（out-of-band 確認まで）が消えた以上、残すこと自体が drift になる。
+
+  2. 機構（空の map）は残す。「contract は確定しているが production evidence が
+     未取得」という状態は今後も起こり得るため、宣言 1 行で veto できる口を保つ。
+
+  3. ★ これは eligibility の解放であって consumer の有効化ではない ★
+     essay の consumer / prompt / route を 1 つも変更しない。
+     Stage 5 の最初の切替対象は **E-S40 のまま tutor の basic_info slot** である。
+  ```
+- **★ `EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` の実際の意味（名前が誤解を招くため明記）★**
+  この定数は「runtime で有効化されている」ことを表さない。**宣言**であり、
+  `examSyncUsability`（`sync/enable.ts`）の **4 段 veto のうち 2 段目**にすぎない。
+  ```text
+  1. !isExamSyncSupportedKind(kind)  → VETO 'kind_not_syncable'
+  2. isExamSyncRuntimeBlocked(kind)  → VETO 'runtime_blocked'   ← R5 が外したのはここだけ
+  3. canaryAllowed !== true          → VETO 'canary_denied'     ← E-S11 の連言。既定 deny
+  4. !isExamSyncUsableVerdict(v)     → VETO 'not_verified'      ← E-S2
+  ```
+  さらに `sync/enable.ts` の **consumer は production に 0 本**
+  （`lib/examSpine/**` 内部にも 0 本。参照するのは QA script 2 本のみ）。
+  したがって 2 段目を外しても **runtime 挙動は構造的に変化し得ない**。
+  有効化には 3 と 4 が別途必要で、そのどちらも本 Decision の範囲外である。
+- **Failure semantics:** evidence と gate を双方向で縛る。
+  「block を外した」ことと「その根拠が Register に残っている」ことは常に同時に成立する
+  必要がある。片方だけ revert されると「根拠が消えたのに有効化されたまま」になり、
+  fail-open が吸収するため runtime では気付けない。QA が両方向を検査する:
+  ```text
+  R5 evidence が揃っている → runtime block は外れていること
+  R5 evidence が欠けている → runtime block が必要であること
+  再検証用の read-only SQL（jsonb_typeof / negative control）が保持されていること
+  E-H1 が RESOLVED であること
+  ```
+- **Stage:** Stage 5（eligibility のみ。consumer 切替を含まない）。
+- **Implementation evidence:** `lib/examSpine/sync/adapters/registry.ts`（空 map）／
+  `supabase/exam_spine_rls_verification.sql`（再検証 SQL）／
+  `scripts/exam-spine-sync-device-check.ts`・`exam-spine-sync-signal-check.ts`（双方向 drift guard）／
+  `EXAM_SPINE_DECISIONS.md` `E-H1`（evidence 本体）。
+- **Alternatives rejected:**
+  - *evidence を Register に残したまま block も残す* — stale な blocker は drift になり、
+    「なぜ block されているのか」を次のセッションが再調査することになる。
+  - *block を外すついでに essay consumer を有効化する* — eligibility と activation の混同。
+    E-S40（最初の切替は tutor / basic_info）に反する。
+  - *`EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` を改名する* — 名前は誤解を招くが、改名は本 Decision と
+    無関係な変更であり diff を膨らませる。意味は本項で固定する。
+- **Rollback implications:** `essay` を map へ戻せば 2 段目の veto が復活する。
+  consumer 側の変更が無いため rollback による挙動変化も無い。
+
 ---
 
 # 5. Policy / persistence decisions
@@ -1182,8 +1349,8 @@ policy 削除後、`mirror_events` への browser INSERT が `42501` になっ�
 
 ## E-H7 — device claim transport が 2 実装ある状態の解消
 
-- **Status:** `PENDING_HUMAN`
-- **必要な判断:** 同じ「device revision claim を wire で運ぶ」責務に対して、canonical namespace に実装が 2 本存在する。どちらを恒久 transport とするか。
+- **Status:** `RESOLVED`（Stage 5 entry gate。**E-S39** が解決した。以下は経緯の記録）
+- **判断（当時）:** 同じ「device revision claim を wire で運ぶ」責務に対して、canonical namespace に実装が 2 本存在する。どちらを恒久 transport とするか。
   ```text
   A. lib/examSpine/sync/claim/**   wire version 'edc1'
        E-S33 で LOCKED。header 'x-exam-spine-device-claim'。

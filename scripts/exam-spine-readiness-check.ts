@@ -115,6 +115,23 @@ function r1Register(): void {
     !headerBound.includes('lib/examSpine/sync/signal.ts'),
   );
 
+  // ★ Stage 5 の最初の切替対象が動いていないこと（E-S40）★
+  //   R5（E-S41）は essay の sync eligibility を開くだけで、最初の consumer を
+  //   essay へ移すものではない。eligibility の解放が first-consumer 選定を
+  //   書き換える drift を構造的に止める。
+  const entryPath = join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STAGE5_ENTRY.md');
+  if (existsSync(entryPath)) {
+    const entryText = readFileSync(entryPath, 'utf8');
+    check(
+      'Stage 5 の最初の consumer は tutor のまま',
+      /FIRST_STAGE5_CONSUMER\s*=\s*tutor\b/.test(entryText),
+    );
+    check(
+      'Stage 5 の最初の slot は basic_info のまま',
+      /FIRST_STAGE5_SLOT\s*=\s*basic_info\b/.test(entryText),
+    );
+  }
+
   const stateText = readFileSync(
     join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STATE.md'), 'utf8');
   check(
