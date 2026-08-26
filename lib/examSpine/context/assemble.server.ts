@@ -39,9 +39,11 @@ import { readExamSourcesForRequest } from '../read/requestSnapshot.server';
 import type { ExamRequestAuthorization } from '../read/requestSnapshot.server';
 import { createSupabaseExamReadExecutor } from '../read/supabaseExecutor.server';
 import type { ExamReadExecutor, ExamReadQuery } from '../read/types';
+import { resolveDiagnosisTypeHint } from '@/lib/examDiagnosis/tutorHints';
 import type {
   ExamActivityServerRow,
   ExamBasicInfoServerRow,
+  ExamDiagnosisServerRow,
   ExamSelfAnalysisServerRow,
   ExamStatementReviewServerRow,
 } from '../read/rowMappers';
@@ -341,7 +343,6 @@ function normalizeSourceStates(args: {
 
   return EXAM_SOURCE_KINDS.map((kind): SourceStateEntry => {
     const readStatus = args.result.statuses[kind];
-    const outcome = args.result.outcomes[kind];
     const value = args.result.bundle[EXAM_BUNDLE_SLOT[kind]];
     const rowCount = countRows(value);
 
@@ -521,6 +522,21 @@ function resolveContextInput(args: {
     if (p.value) {
       next.activityData = p.value;
       origins.activity = 'server';
+    }
+  }
+
+  // diagnosis → typeHint（Stage 5.2 / G1）
+  //
+  // ★ payload を block へ流さない ★
+  //   server row から取り出すのは `resultType` の言い換え 1 文だけで、
+  //   resultTitle / resultDescription / answers / createdAt は projection に現れない。
+  //   言い換え表は legacy と共有する（lib/examDiagnosis/tutorHints.ts が正本）。
+  if (usable('diagnosis')) {
+    const row = snapshotRow<ExamDiagnosisServerRow>('diagnosis');
+    const hint = resolveDiagnosisTypeHint(row?.payload?.resultType);
+    if (hint) {
+      next.diagnosisTypeHint = hint;
+      origins.diagnosis = 'server';
     }
   }
 

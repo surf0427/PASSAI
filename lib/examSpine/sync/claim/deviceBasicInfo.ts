@@ -17,6 +17,7 @@
 // 純関数。localStorage / fetch / Supabase / Date / Math.random を持たない（isomorphic）。
 
 import type { BasicInfo } from '@/types/basicInfo';
+import type { DiagnosisResult } from '@/lib/diagnosisStorage';
 
 import { buildDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaim } from '../adapters/deviceSources';
@@ -55,16 +56,47 @@ export function deviceBasicInfoToken(
 }
 
 /**
+ * device canonical の `DiagnosisResult` → claim token（canonical projection へ委譲）。
+ *
+ * ★ Stage 5.2 で追加（G1）★
+ *   `diagnosis` は class 1（device_canonical_mirrored）なので、
+ *   claim が無いと Source-Sync が verified にならず canonical block が生成されない。
+ *   block を作っただけでは migration できないため、transport にも載せる。
+ *
+ * ⚠️ 既知の制約: `diagnosisSyncView` は `schemaVersion` を含む。writer は現在 `"3"` を
+ *   書くが、DDL default は `'1'` であり **bump 前に書かれた行は `'1'` のまま**である
+ *   （`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §6.3）。その行を持つ user は
+ *   device 側 `'3'` と一致せず永久に `mismatch` になる。
+ *   これは transport の問題ではなく mirror の schema_version semantics の問題なので、
+ *   ここでは回避策を入れない（入れると 2 つ目の正規化規則になる）。
+ */
+export function deviceDiagnosisToken(
+  diagnosis: DiagnosisResult | null | undefined,
+): string | null {
+  const claim = buildDeviceClaim(
+    'diagnosis',
+    diagnosis ? { state: 'present', value: diagnosis } : { state: 'absent' },
+  );
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
+}
+
+/**
  * pilot（tutor）の claim entry を組み立てる。
  *
- * ★ pilot は basic_info の 1 kind だけ ★
- *   `deviceViews.ts` は 8 kind ぶんの projection を持つが、
- *   **transport に載せる kind を増やすのは別 Stage の判断**である
- *   （purpose ごとに何を申告させるかは consumer migration の設計に属する）。
+ * ★ 載せる kind は purpose の移行状況で決める ★
+ *   `deviceViews.ts` は 8 kind ぶんの projection を持つが、transport に載せるのは
+ *   「その kind の canonical block が存在し、移行対象になっている」ものだけ。
+ *   現在は basic_info（Stage 5.0）と diagnosis（Stage 5.2 / G1）の 2 kind。
+ *   activity / self_analysis / statement_review は block も claim も未着手（G6-G8）。
  */
 export function buildTutorDeviceClaimEntries(
   basicInfo: BasicInfo | null | undefined,
+  diagnosis?: DiagnosisResult | null,
 ): readonly ExamDeviceClaimEntry[] {
-  const token = deviceBasicInfoToken(basicInfo);
-  return token ? [{ kind: 'basic_info', token }] : [];
+  const entries: ExamDeviceClaimEntry[] = [];
+  const basicToken = deviceBasicInfoToken(basicInfo);
+  if (basicToken) entries.push({ kind: 'basic_info', token: basicToken });
+  const diagnosisToken = deviceDiagnosisToken(diagnosis);
+  if (diagnosisToken) entries.push({ kind: 'diagnosis', token: diagnosisToken });
+  return entries;
 }

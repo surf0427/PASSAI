@@ -28,6 +28,7 @@ import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { tutorLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+import { loadDiagnosisResult } from '@/lib/diagnosisStorage';
 // Exam Spine — device revision claim（Stage 5.0 / E-S2）。純関数のみ。
 import { buildTutorDeviceClaimEntries } from '@/lib/examSpine/sync/claim/deviceBasicInfo';
 import {
@@ -604,7 +605,11 @@ export default function TutorPage() {
     //     serializer が受け取るのは kind と token だけ（型で閉じている）。
     //   ★ 既存 header を壊さない ★
     //     Content-Type は上書きせず、claim が無ければ header 自体を付けない。
-    const deviceClaimHeader = serializeDeviceClaim(buildTutorDeviceClaimEntries(basicInfo));
+    //   Stage 5.2: diagnosis も申告する（class 1 なので claim が無いと
+    //   canonical block が生成されない / G1）。localStorage は読み取りのみ。
+    const deviceClaimHeader = serializeDeviceClaim(
+      buildTutorDeviceClaimEntries(basicInfo, loadDiagnosisResult()),
+    );
 
     try {
       const res = await fetch('/api/tutor', {
