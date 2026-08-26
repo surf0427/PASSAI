@@ -532,6 +532,8 @@ export async function POST(req: Request): Promise<Response> {
             statementDraft: body.statementDraft ?? null,
             // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
             diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
+            // legacy の Supabase 層が prompt に出している自己分析 projection。
+            selfAnalysis: contextResult.context.selfAnalysis ?? null,
             // legacy の Supabase 層が出している件数 1 行表現。canonical block と
             // 同じ formatter を通すことで、表現の差ではなく値の差だけを見る。
             activityCategoryCounts: contextResult.context.activity

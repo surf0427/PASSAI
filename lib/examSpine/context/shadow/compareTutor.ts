@@ -49,6 +49,11 @@ export type TutorLegacyInput = {
    */
   readonly activityCategoryCounts?: unknown;
   readonly studentProfile?: unknown;
+  /**
+   * legacy の Supabase 層が prompt に出している自己分析 projection
+   * （`tutorContext.ts` の `context.selfAnalysis`）。body 由来ではない。
+   */
+  readonly selfAnalysis?: unknown;
   readonly statementReviewLatest?: unknown;
   /** 以下は canonical block coverage 外。存在の記録だけ行う。 */
   readonly essayReviewLatest?: unknown;
@@ -217,7 +222,7 @@ export function compareTutorShadow(input: {
 
   const legacyBasic = record(input.legacy.basicInfo);
   const canonicalBasic = record(input.canonicalInput.basicInfo);
-  const legacyProfile = record(input.legacy.studentProfile);
+  const legacySelfAnalysis = record(input.legacy.selfAnalysis);
   const canonicalProfile =
     record(input.canonicalInput.studentProfile) ?? record(input.canonicalInput.wallHittingResult);
   const legacyStatement = record(input.legacy.statementReviewLatest);
@@ -254,12 +259,22 @@ export function compareTutorShadow(input: {
       provenance: prov('activity') }),
 
     // ── self_analysis ────────────────────────────────────────────
+    //
+    // ★ legacy 側は Supabase 層の projection を使う ★
+    //   Tutor が prompt に出しているのは
+    //   `buildTutorSupabaseContextSection` の 4 行（強み / 課題 / 将来の方向性 / 要約）で、
+    //   その材料は `tutorContext.ts` の `context.selfAnalysis` である。
+    //   body の `studentProfile` は別レイヤー（block2）の材料なので、
+    //   そちらと比べると「どの経路の差か」が混ざる（activity で同じ取り違えがあった）。
     compareField({ field: 'self_analysis.summary', kind: 'self_analysis',
-      legacy: text(legacyProfile?.summary), canonical: text(canonicalProfile?.summary), provenance: prov('self_analysis') }),
+      legacy: text(legacySelfAnalysis?.summary), canonical: text(canonicalProfile?.summary), provenance: prov('self_analysis') }),
     compareField({ field: 'self_analysis.strengths', kind: 'self_analysis',
-      legacy: stringList(legacyProfile?.strengths), canonical: stringList(canonicalProfile?.strengths), provenance: prov('self_analysis') }),
+      legacy: stringList(legacySelfAnalysis?.strengths), canonical: stringList(canonicalProfile?.strengths), provenance: prov('self_analysis') }),
     compareField({ field: 'self_analysis.weaknesses', kind: 'self_analysis',
-      legacy: stringList(legacyProfile?.weaknesses), canonical: stringList(canonicalProfile?.weaknesses), provenance: prov('self_analysis') }),
+      legacy: stringList(legacySelfAnalysis?.weaknesses), canonical: stringList(canonicalProfile?.weaknesses), provenance: prov('self_analysis') }),
+    compareField({ field: 'self_analysis.futureConnections', kind: 'self_analysis',
+      legacy: stringList(legacySelfAnalysis?.futureConnections),
+      canonical: stringList(canonicalProfile?.futureConnections), provenance: prov('self_analysis') }),
 
     // ── statement_review ─────────────────────────────────────────
     //   legacy は「直近 1 件の weaknesses」、canonical は履歴からの反復論点要約。
@@ -353,9 +368,18 @@ function summarize(
     const p = bySource.get(kind);
     const kindEntries = comparable.filter((e) => e.kind === kind);
     const blocking = [...new Set(kindEntries.filter((e) => e.diff !== 'MATCH').map((e) => e.diff))];
+    // ★ false-empty MATCH を READY にしない ★
+    //   双方に値が無い比較は `MATCH` として数えるが、それだけで「移行して大丈夫」とは
+    //   言えない。fixture や shape 違いで両側が空になっているだけの可能性があるためで、
+    //   実際 activity と self_analysis で「shape 違いにより常に空同士」という
+    //   latent bug が起きていた。少なくとも 1 つは **実データのある比較**が
+    //   MATCH していることを要求する。
+    const meaningful = kindEntries.filter(
+      (e) => e.legacyFingerprint !== null || e.canonicalFingerprint !== null,
+    );
     return {
       kind,
-      readiness: readinessOf(blocking),
+      readiness: readinessOf(blocking, meaningful.length),
       blockingDiffs: blocking,
       canonicalState: p?.state ?? 'unsupported',
       canonicalOrigin: (p?.origin ?? 'bridge') as ExamContextOrigin,
@@ -376,7 +400,12 @@ function summarize(
   };
 }
 
-function readinessOf(blocking: readonly ExamShadowDiffKind[]): ExamMigrationReadiness {
+function readinessOf(
+  blocking: readonly ExamShadowDiffKind[],
+  meaningfulComparisons: number,
+): ExamMigrationReadiness {
+  // 実データのある比較が 1 つも無いなら「一致した」とは言えない（§false-empty guard）。
+  if (meaningfulComparisons === 0) return 'DEFERRED';
   if (blocking.length === 0) return 'READY';
   // Source-Sync がまだ通電していない / block 未実装は「作業待ち」であって不可ではない。
   if (blocking.every((d) => d === 'STATUS_MISMATCH' || d === 'ORIGIN_MISMATCH')) return 'DEFERRED';
