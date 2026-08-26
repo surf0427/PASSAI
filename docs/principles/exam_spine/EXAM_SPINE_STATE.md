@@ -22,9 +22,39 @@
 # 2. Stage
 
 ```text
-現在地: Wave 2（Canonical Convergence）完了
-        Stage 0 完了 / Stage 1 完了 / Stage 2 完了 / Stage 3 完了
-次:     Stage 4（Source-Sync + canary gate + loader）— 着手条件は §14 の readiness matrix
+現在地: Stage 4（Canonical Context Assembly）完了
+        Stage 0-3 完了 / Wave 1-2 convergence 完了 / Stage 4 完了
+次:     Stage 5（consumer migration の前段）
+```
+
+## Stage 4 で成立したもの
+
+```text
+lib/examSpine/sync/**      revision / fingerprint / verification / adapters
+                           （canonical lineage へ収束済み。E-P9 の単一 authority を維持）
+lib/examSpine/context/**   Canonical Exam Context の contract と assembler
+                           types / project / identity / veto / assemble.server
+```
+
+pipeline:
+
+```text
+purpose 検証 → 許可 source 解決 → request-scoped snapshot → 許可 source のみ read
+→ source state 正規化 + Source-Sync → Stage 2 で block 組み立て
+→ provenance / origin → status → revision → fingerprint → veto → frozen context
+```
+
+## Stage 4 時点の保証
+
+```text
+production consumer wiring : 変更なし（context layer の import 元は QA だけ）
+production behavior change : NONE
+AI prompt change           : NONE（Stage 2 の 888 checks が byte-equivalence を維持）
+DB schema change           : NONE
+env / dependency change    : NONE
+DB mutation path           : なし（context 層に insert/upsert/rpc/.from( が 0）
+service_role dependency    : なし
+global mutable cache       : なし（WeakMap<Request> のみ）
 ```
 
 ## Wave 2 時点の保証

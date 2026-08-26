@@ -557,6 +557,138 @@ Exam-specific differences / Rollback implications
 - **QA:** `scripts/exam-spine-stage3-check.ts` S20/S20b/S20c/S20d/S21（許可外は query 0 本 / 未知 purpose は全拒否 / gate は拡張しない / gate は snapshot の手前 / registry の内部整合）。
 - **Rollback implications:** `purpose` を渡さなければ従来どおり `kinds` がそのまま使われる。runtime 未接続のため production 影響ゼロ。
 
+## E-S29 — Canonical Exam Context は blocks だけが本文を持ち、sources は metadata に限る
+
+- **Status:** `LOCKED`（Stage 4 で実装 + QA 済み）
+- **Decision:** `CanonicalExamContext`（`lib/examSpine/context/types.ts`）は次の構造を持つ。
+  ```text
+  version / purpose / status / subject / blocks / sources / allowedSources /
+  deniedSources / revision / fingerprint / veto / omissions / diagnostics
+  ```
+  **prompt へ載る文字列は `blocks` にしか存在しない。** `sources` は 10 kind すべてについて
+  必ず 1 件返るが、保持するのは metadata（state / readStatus / syncStatus / origin /
+  bridgeFields / rowCount / truncated / fingerprint / revision / authority / tables /
+  contribution / blocks）だけで、**生の値を 1 つも持たない**。
+- **Reason:** Stage 2 の block は現時点で 10 kind 中 4 kind しか覆っていない（E-S25）。
+  block を持たない 6 kind の値を context に載せる場所を作ると、**block 化されていない
+  kind の本文が prompt 経路へ紛れ込む口**ができる。実例として `essay` は
+  `workspace->reviews` 経由で `essayBodySnapshot` を含み得る（E-S27 の残余）。
+  sources を metadata に限ることで、この経路が**構造的に存在しなくなる**
+  （Canon §55 / E-P5）。block coverage が広がるまで Stage 4 が止まる必要も無くなる。
+- **subject（識別子境界）:** context は `userId` を持たない。認可済みであることと
+  `subjectFingerprint`（userId の domain-separated hash）だけを持つ（E-S13）。
+- **bridgeFields（明示的 Mixed-Origin）:** origin が `server` の kind でも、
+  一部 field が bridge 由来なら `bridgeFields` に列挙する。現状の実例は
+  `basic_info` の `name`（server の payload に存在しない / E-P8）。
+  Canon §17 が禁じるのは **暗黙の** Mixed-Origin であり、列挙すれば許容される。
+- **immutability:** context / sources / blocks / diagnostics / 各 provenance を
+  `Object.freeze` する。downstream が破壊的変更で provenance を書き換えられないようにする。
+- **Alternatives rejected:**
+  - *sources に値を持たせ、block が無い kind も context へ載せる* — 本文混入経路を作る。
+  - *block を持たない kind を context から消す* — 「読んだが使わなかった」ことが
+    説明できなくなり、Canon §39（provenance）を満たせない。
+- **Rollback implications:** runtime 未接続（import 元は QA のみ）のため production 影響ゼロ。
+
+## E-S30 — read status / sync verdict / context state を 1 つの enum に混ぜない
+
+- **Status:** `LOCKED`（Stage 4 で実装 + QA 済み）
+- **Decision:** source の状態を **3 軸**で保持する。
+  ```text
+  readStatus  : ok | truncated | error | skipped        … Stage 3。取得できたか
+  syncStatus  : verified | mismatch | unclaimed | unreadable | incomparable | null
+                                                        … Stage 4 sync。信用してよいか
+  state       : available | empty | denied_by_purpose |
+                unreadable | unverified | unsupported   … context にとって何であったか
+  ```
+  `state` は Canon §40 が要求する区別を潰さない。特に次の 4 つは**すべて別状態**である。
+  ```text
+  DB が 0 行             → empty
+  purpose が許可しない   → denied_by_purpose（query を 1 本も発行していない）
+  query が失敗した       → unreadable
+  Spine が対応していない → unsupported
+  ```
+- **★ 「読めて 0 件」は Source-Sync より手前で確定させる:** class 1 の kind でも
+  `readStatus === 'ok'` かつ 0 行なら、verify に回さず `empty` にする。
+  verify に回すと device 申告が無い間ずっと `unclaimed` → `unverified` になり、
+  **「データが無い新規ユーザー」と「検証できない」が区別できなくなる**（Canon §40 違反）。
+  0 件なら注入され得る内容が存在しないので、verified を待つ意味も無い。
+- **context status:** `ok`（要求 source がすべて available / empty）/ `partial`（一部が
+  unreadable・unverified・unsupported だが使えるものがある）/ `degraded`（available が
+  1 つも無い。**それでも AI は続行する** = fail-open）/ `vetoed`。
+- **Reason:** 1 enum に畳むと必ずどれかが失われる。`truncated` を `ok` に寄せれば
+  E-S8 に反し、`unclaimed` を `mismatch` に寄せれば「一致しない証拠」が無いのに
+  不一致を主張することになり、`empty` を `unreadable` に寄せれば Canon §15 に反する。
+- **Alternatives rejected:**
+  - *単一の status enum に統合する* — 上記のいずれかが必ず潰れる。
+  - *state を bool（usable / not usable）にする* — omission の理由が説明できなくなる。
+- **Rollback implications:** なし（型と分類のみ）。
+
+## E-S31 — revision は入力状態、fingerprint は出力 context の識別子
+
+- **Status:** `LOCKED`（Stage 4 で実装 + QA 済み）
+- **Decision:** Canon §16 の 2 概念を役割で固定し、混同しない。
+  ```text
+  revision     入力状態の識別子。どの source の、どの論理状態から作ったか。
+               材料 = kind / state / source fingerprint / revision form / rowCount / truncated
+               purpose・block 選択・render・時刻・userId に依存しない。
+               → 同じユーザーデータなら tutor 用でも matching 用でも同じ revision。
+
+  fingerprint  出力 context の識別子。consumer が受け取るものが同一かを比較する。
+               材料 = version / purpose / revision / allowedSources /
+                      block(id・presence・origin・provenance・derivation・content の hash・長さ) /
+                      source(kind・state・origin・contribution・bridgeFields)
+               → 同じ revision でも purpose が違えば別 fingerprint。
+  ```
+- **決定性の要件（すべて QA 済み）:** 同一入力 → 同一値 / sources・allowedSources の
+  順序に依存しない / Request identity と実行時刻に依存しない / canonical data が変われば変わる。
+  block の順序には**意図的に依存する**（順序が変われば prompt が変わるため）。
+- **★ hash 材料に prompt 本文を置かない:** block の `content` は氏名・志望理由書・
+  小論文の断片を含む。材料 object に生で入れると、その object を誤って log や
+  diagnostics へ出した瞬間に PII 露出になる（E-S13）。したがって **content は先に
+  1 段 hash してから**材料へ載せる。1 文字変われば block hash が変わるので情報は落ちない。
+- **hash 実装:** sync core の `examFingerprint`（安定 serialization ＋ 自作 SHA-256）を使う。
+  **context 層で別の hash 実装を作らない**（E-P9 / 単一 authority）。dependency も追加しない（E-S14）。
+- **Alternatives rejected:**
+  - *revision と fingerprint を 1 つにする* — 「内容が同じでも purpose が違えば別物」か
+    「purpose が同じなら入力が変わっても同じ」のどちらかの誤りが必ず起きる。
+  - *時刻や request id を材料に入れる* — 毎回変わり、比較の意味が消える。
+- **Rollback implications:** なし（純関数）。
+
+## E-S32 — veto は contract 違反のみを対象とし、データ不足は fail-open で通す
+
+- **Status:** `LOCKED`（Stage 4 で実装 + QA 済み）
+- **Decision:** veto する理由を次に限定する。
+  ```text
+  unknown_purpose               registry に無い purpose（E-S28 default deny）
+  unauthenticated / unauthorized server auth が解決できない / 認可されない（E-L3 / E-S7）
+  forbidden_source_contribution purpose が許可していない kind に read の痕跡がある
+  unregistered_table            registry 外の table を読んだ（E-S15 / Canon §22）
+  provenance_incomplete         寄与している source の provenance が欠けている（Canon §39）
+  fingerprint_unavailable       identity を主張できない
+  ```
+  **次は veto しない**（fail-open で context を返す）。
+  ```text
+  source が空 / 一部の source が読めない / Source-Sync が verified にならない /
+  その kind の block が定義されていない
+  ```
+- **★ 判定材料は block の有無ではなく read の痕跡:** purpose gate は
+  「Spine が server から読んでよい kind」を決めるものであり、bridge 由来の値
+  （legacy body 経路）を禁じるものではない。許可外 kind は reader が query を
+  1 本も出さないので state は必ず `denied_by_purpose` になる。それ以外の state が
+  付いていたら gate が漏れたということである。
+  この取り違えは実害として観測された: `essay_review` の plan には
+  `previous_output_summary`（`sourceKind: 'statement_review'`）が宣言されているが、
+  essay 側の client は値を送っていないため block は空になる。block の有無で
+  判定すると、この**空 block を「禁止 source の寄与」と誤判定して veto**していた。
+- **Reason:** Canon §18 は「読めたっぽいからとりあえず LLM へ渡す」を禁じるが、
+  Canon §5 / §41 / E-S1 の fail-open は「context を減らして続行する」ことを要求する。
+  境界を曖昧にすると 2 方向に壊れる。veto を緩めれば検証できていないものを prompt に
+  載せることになり、veto を強めれば**新規ユーザーには AI が一切使えなくなる**。
+- **Alternatives rejected:**
+  - *source が空なら veto する* — 新規ユーザーの可用性を破壊する（E-S1 違反）。
+  - *veto を例外（throw）で表現する* — 呼び出し側が握り潰せる。contract として返す。
+- **Rollback implications:** なし（純関数の判定）。
+
 ---
 
 # 5. Policy / persistence decisions
