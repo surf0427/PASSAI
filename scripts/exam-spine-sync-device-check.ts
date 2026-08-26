@@ -645,8 +645,20 @@ function fieldSetFreeze(): void {
 
 function schemaVersionPin(): void {
   // writer の module private 定数と device 側の宣言が一致すること（ずれると全ユーザー永久 mismatch）
+  // ★ basic_info は regex pin から外す（Stage 5.1 収束）★
+  //   writer が `BASIC_INFO_SCHEMA_VERSION` を export し、deviceViews がそれを
+  //   import するようになったため、値のずれは **構造的に起こり得ない**。
+  //   regex で writer の書き方に依存する検査より強い保証なので、
+  //   ここでは「import して使っていること」を検査する。
+  const deviceViewsSrc = readFileSync(
+    join(REPO_ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  check('schema_version pin basic_info: writer の export を import している',
+    deviceViewsSrc.includes('BASIC_INFO_SCHEMA_VERSION') &&
+      /basic_info:\s*BASIC_INFO_SCHEMA_VERSION/.test(deviceViewsSrc));
+  check('schema_version pin basic_info: 値を再宣言していない',
+    !/basic_info:\s*'[0-9]+'/.test(deviceViewsSrc));
+
   const pins: Array<[keyof typeof EXAM_DEVICE_SCHEMA_VERSIONS, string]> = [
-    ['basic_info', 'lib/supabase/basicInfoLogs.ts'],
     ['activity', 'lib/supabase/activityLogs.ts'],
     ['diagnosis', 'lib/supabase/diagnosisLogs.ts'],
   ];
@@ -1047,8 +1059,13 @@ function staticBoundaries(): void {
       if (/examSpine\/sync/.test(readFileSync(file, 'utf8'))) importers.push(rel);
     }
   }
-  check('Runtime wiring = NONE（sync を import する production file が 0）',
-    importers.length === 0, importers.join(', '));
+  // ★ Stage 5.0（E-S33 / E-S34）で pilot 1 purpose が接続済み。
+  //   allowlist で管理し、device view 本体が production から直接
+  //   import されていないことを別途固定する。
+  const pilotImporters = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpected = importers.filter((f) => !pilotImporters.includes(f));
+  check('sync を import する production file は Stage 5.0 pilot だけ',
+    unexpected.length === 0, unexpected.join(', '));
 }
 
 // ── run ───────────────────────────────────────────────────────────

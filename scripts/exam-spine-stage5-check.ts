@@ -136,8 +136,19 @@ function t1DeviceToken(): void {
 
   // 空 device は申告しない
   eq('T1 null device は token 無し', deviceBasicInfoToken(null), null);
-  eq('T1 実質空の device は申告しない',
-    deviceBasicInfoToken({ name: 'x', grade: '', track: '', examTypes: [], preferences: [] } as BasicInfo), null);
+  // ★ 「実質空」の device は canonical projection では claimed になる（Stage 5.1 収束後）★
+  //   writer（basicInfoRepository.ts:isEmptyBasicInfo）は grade / track / 志望校が
+  //   すべて空なら mirror を書かないため、server 側は 0 行になる。
+  //   このとき Stage 4 は Source-Sync より手前で `empty` を確定させる（E-S30）ので、
+  //   token を送っても送らなくても **最終結果は同じ**（server 値は採用されない）。
+  //   projection の正本は deviceViews.ts に一本化したため、ここで独自の
+  //   emptiness 規則を再実装しない（それが dual authority を生んだ元の原因）。
+  //   精度の改善（device 側 empty を `empty` claim にする）は Stage 5.2 の backlog。
+  const emptyDeviceToken = deviceBasicInfoToken(
+    { name: 'x', grade: '', track: '', examTypes: [], preferences: [] } as BasicInfo);
+  check('T1 実質空でも canonical projection は token を返す（E-S30 が結果を吸収）',
+    typeof emptyDeviceToken === 'string');
+  check('T1 実質空の token は氏名を含まない', !String(emptyDeviceToken).includes('x'));
 
   // token に生データが現れない
   const serialized = String(token);

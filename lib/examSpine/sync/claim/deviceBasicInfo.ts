@@ -1,79 +1,66 @@
-// PASSAI 受験版 Exam Spine — Stage 5.0 pilot の device view（kind: basic_info / 純関数）。
+// PASSAI 受験版 Exam Spine — Stage 5.0 pilot の claim transport adapter（純関数）。
 //
-// ★ 新しい正規化を作らない ★
-//   device 側の token は「server が同じ行から算出する値」と **完全に一致**しなければ
-//   意味が無い。したがってここでは device 用の view を書き起こさず、
-//   **server が使うのと同じ mapper / view / fingerprint をそのまま通す**:
+// ★ 責務は transport だけ ★
+//   device canonical → 正規化 view → fingerprint の **projection は本 file が持たない**。
+//   それは canonical device projection authority である
+//   `lib/examSpine/sync/adapters/deviceViews.ts` / `deviceSources.ts` の責務である。
+//   ここがやるのは「その結果を claim entry（kind + token）へ載せ替える」ことだけ。
 //
-//     device BasicInfo
-//       → stripName（writer と同じ PII 契約）
-//       → mapBasicInfoRow      … server と同一の row mapper（truncate / null 正規化）
-//       → basicInfoSyncView    … server と同一の sync view（name を含まない）
-//       → examSyncObservation  … server と同一の envelope + SHA-256
-//
-//   この構成なら「device 側だけ正規化がずれて永久に mismatch」という
-//   silent failure が構造的に起きない。ずれ得るのは入力（payload / schema_version）だけで、
-//   そのどちらも writer 契約から決まる。
-//
-// ★ 空のときは申告しない ★
-//   `dualWriteBasicInfoLog` は `isEmptyBasicInfo` の行を書かないため、device が空なら
-//   server にも行が無い。server 側が 0 行のときは Stage 4 が Source-Sync より手前で
-//   `empty` を確定させる（E-S30）ので、空の申告に意味は無い。null を返して header から外す。
+// ★ なぜ分けるか（Stage 5.1 の収束）★
+//   Stage 5.0 時点では本 file が stripName → mapBasicInfoRow → basicInfoSyncView →
+//   examSyncObservation という pipeline を自前で持っていた。その後 B 側の
+//   `deviceViews.ts` が同じ pipeline を 8 kind ぶん実装したため、basic_info について
+//   **同一変換が 2 箇所に存在する dual authority** になっていた。
+//   projection の正本を deviceViews.ts に一本化し、本 file は delegate に縮退させた。
+//   これにより「片方だけ直して fingerprint が永久不一致になる」経路が消える。
 //
 // 純関数。localStorage / fetch / Supabase / Date / Math.random を持たない（isomorphic）。
-// 呼び出し側（client）が device canonical を読んで渡す。
 
 import type { BasicInfo } from '@/types/basicInfo';
-import { BASIC_INFO_SCHEMA_VERSION } from '@/lib/supabase/basicInfoLogs';
 
-import { mapBasicInfoRow } from '../../read/rowMappers';
-import { EXAM_READ_FIELD_LIMITS } from '../../read/readSources';
-import { basicInfoSyncView } from '../adapters/views';
-import { examSyncObservation } from '../adapters/views';
+import { buildDeviceClaim } from '../adapters/deviceSources';
+import type { ExamDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaimEntry } from './types';
 
 /**
- * device canonical の `BasicInfo` → claim token。
- * 申告するものが無ければ `null`。
+ * device canonical の `BasicInfo` → claim（canonical projection へ委譲）。
+ *
+ * `null` / `undefined` は「device に無い」として `absent` を渡す。
+ * 判定（claimed / empty / unclaimed）は `buildDeviceClaim` が行う。
  */
-export function deviceBasicInfoToken(basicInfo: BasicInfo | null | undefined): string | null {
-  if (!basicInfo) return null;
-
-  // ★ 氏名は claim の材料にしない ★
-  //   writer（lib/supabase/basicInfoLogs.ts:stripName）が書き込み前に落とすため
-  //   server payload に存在しない。device 側も同じく落とす（入れると永久不一致 / E-P8）。
-  const payload: Record<string, unknown> = { ...(basicInfo as unknown as Record<string, unknown>) };
-  delete payload.name;
-
-  const row = mapBasicInfoRow(
-    { payload, schema_version: BASIC_INFO_SCHEMA_VERSION },
-    EXAM_READ_FIELD_LIMITS,
+export function deviceBasicInfoClaim(
+  basicInfo: BasicInfo | null | undefined,
+): ExamDeviceClaim {
+  return buildDeviceClaim(
+    'basic_info',
+    basicInfo ? { state: 'present', value: basicInfo } : { state: 'absent' },
   );
-  if (!row) return null;
+}
 
-  // 実質空（grade / track / 志望校 / 受験方式がすべて空）なら申告しない。
-  // writer が書かない状態と揃える。
-  const empty =
-    !row.grade &&
-    !row.track &&
-    row.preferences.length === 0 &&
-    row.examTypes.length === 0;
-  if (empty) return null;
-
-  const observation = examSyncObservation({
-    kind: 'basic_info',
-    source: 'device_canonical',
-    view: basicInfoSyncView(row),
-  });
-  return observation.fingerprint;
+/**
+ * claim token（`efp1:<hex64>`）。申告できないときは `null`。
+ *
+ * ★ `empty` と `unclaimed` の両方が null になる ★
+ *   transport 上はどちらも「header に載せない」であり、区別は不要である。
+ *   意味の区別は server 側で付く:
+ *     device が空  → server も 0 行 → Stage 4 が Source-Sync の手前で `empty` を確定（E-S30）
+ *     申告できない → server 側は `unclaimed` → `unverified`（E-S2）
+ *   したがってここで無理に別扱いにすると、かえって二重管理になる。
+ */
+export function deviceBasicInfoToken(
+  basicInfo: BasicInfo | null | undefined,
+): string | null {
+  const claim = deviceBasicInfoClaim(basicInfo);
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
 }
 
 /**
  * pilot（tutor）の claim entry を組み立てる。
  *
  * ★ pilot は basic_info の 1 kind だけ ★
- *   他 kind の device view は本 Stage の scope 外（Stage 5.1 以降）。
- *   ここに kind を足すのは、その kind の device view が canonical に存在してからにする。
+ *   `deviceViews.ts` は 8 kind ぶんの projection を持つが、
+ *   **transport に載せる kind を増やすのは別 Stage の判断**である
+ *   （purpose ごとに何を申告させるかは consumer migration の設計に属する）。
  */
 export function buildTutorDeviceClaimEntries(
   basicInfo: BasicInfo | null | undefined,
