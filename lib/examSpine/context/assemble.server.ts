@@ -276,7 +276,8 @@ export async function buildCanonicalExamContext(
     }),
   });
 
-  return { ok: true, context };
+  // ★ shadow 用に解決済み入力を返す（context には入れない / E-S29）★
+  return { ok: true, context, shadowResolvedInput: resolved.input };
 }
 
 // ── executor ──────────────────────────────────────────────────────────

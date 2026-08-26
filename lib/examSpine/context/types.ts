@@ -15,6 +15,7 @@
 import type { ExamContextPurpose, ExamContextOrigin } from '../types';
 import type { ExamSourceKind, ExamSourceReadStatus } from '../sourceData/types';
 import type { ExamContextBlock, ExamContextBlockId } from '../blocks/types';
+import type { ExamContextInput } from '../orchestrator/input';
 import type { ExamFingerprint } from '../sync/fingerprint';
 import type { ExamRevisionValue } from '../sync/revision';
 import type { ExamSyncStatus } from '../sync/verification';
@@ -196,9 +197,28 @@ export type CanonicalExamContext = {
 
 /** veto されたときに consumer が受け取る形。blocks は空で返す（渡さない）。 */
 export type CanonicalExamContextResult =
-  | { readonly ok: true; readonly context: CanonicalExamContext }
+  | {
+      readonly ok: true;
+      readonly context: CanonicalExamContext;
+      /**
+       * ★ shadow / migration 専用の副産物（Stage 5.1）★
+       *   assembler が bridge と server projection を解決した結果そのもの。
+       *   **`CanonicalExamContext` の一部ではない**（context は生値を持たない / E-S29）。
+       *
+       *   用途は「legacy と canonical を比較する」ことだけで、prompt へ渡さない。
+       *   比較器は値を hash 化してから entry に載せるため、raw 値はここから先へ出ない。
+       *   consumer が prompt に使ってよいのは `context.blocks` のみである。
+       */
+      readonly shadowResolvedInput: ExamContextInputSnapshot;
+    }
   | {
       readonly ok: false;
       readonly veto: Extract<ExamContextVeto, { vetoed: true }>;
       readonly purpose: ExamContextPurpose | null;
     };
+
+/**
+ * shadow 比較のために公開する解決済み入力。
+ * `ExamContextInput` そのものだが、**context ではない**ことを型名で示す。
+ */
+export type ExamContextInputSnapshot = Readonly<ExamContextInput>;
