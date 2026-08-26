@@ -1116,6 +1116,65 @@ Exam-specific differences / Rollback implications
 - **Stage:** Stage 5（observability）。
 - **Rollback implications:** gate env を落とせば shadow ごと止まる。consumer 挙動は不変。
 
+## E-S44 — diagnosis の canonical 表現は hint 1 文であり、言い換え表は 1 箇所に置く
+
+- **Status:** `LOCKED`（Stage 5 / S5-P4 で Stage 5.2 とともに昇格）
+- **由来:** `exam-spine-w1-convergence-v2` が branch-local に `E-S38` として持っていた内容を、
+  E-S38（canonical）の手続きに従い canonical の未使用 ID へ**再採番**して登録する。
+  branch-local ID は持ち込んでいない（canonical の `E-S38` は別 authority である）。
+- **Decision:** `diagnosis` kind の canonical 表現は
+  **`resultType` を言い換えた会話補助 hint 1 文**（block id `diagnosis_type_hint`）とする。
+  `diagnosis_logs.payload` の `resultTitle` / `resultDescription` / `answers` /
+  `createdAt` は canonical block にも `ExamContextInput` にも載せない。
+  言い換え表と判別ロジックの正本は `lib/examDiagnosis/tutorHints.ts` の
+  `resolveDiagnosisTypeHint()` **1 箇所**とし、legacy（`tutorContext.ts`）も
+  canonical（assembler）も device view も**同じ関数**を通す。
+- **Reason:** legacy Tutor が prompt に出しているのは hint 1 文だけである
+  （`tutorContext.ts:loadDiagnosisContext` → `・保存情報からは、{hint}。`）。
+  payload 全体を Layer 2 へ持ち込むと診断タイプ名・説明文・回答が block へ流れる
+  （Canon §55 / E-P5）。また言い換え表を 2 箇所に置くと、同じ診断結果から
+  **legacy と canonical で違う prompt が出る**。表は Stage 5.2 時点で server-only file の
+  module private だったため、pure module へ移して共有した。
+  ```text
+  ★ これは DRY のための refactor ではない ★
+    2 箇所に置くこと自体が migration の正しさを壊すため、単一化が要件である。
+    移動時に値は 1 文字も変えていない（byte 一致は characterization QA が担保）。
+  ```
+- **★ block 追加は E-S25 の範囲内 ★** E-S25 は「凍結対象は今ある block の contract で
+  あって block 集合の完全性ではない」「consumer 移行の前に対象 purpose が使う kind の
+  block を足す必要がある」と定めている。本 block の追加に新しい許可 Decision は要らない。
+- **presence:** Stage 4 の source state に従う。Source-Sync が `verified` のときだけ `present`。
+  `unverified` / `empty` / `unreadable` / `denied_by_purpose`、および `resultType` を
+  解決できない場合は block を出さない。
+  **legacy に無い「診断データはありません」等の代替文言を作らない**（E-P7）。
+- **★ 既知の制約（migration blocker として記録。本 Stage では直さない）★**
+  `diagnosisSyncView` は `schemaVersion` を content field に含む。writer
+  （`lib/supabase/diagnosisLogs.ts`）は現在 `"3"` を書くが DDL default は `'1'` であり、
+  **bump 前に書かれた行は `'1'` のまま残る**（`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §6.3）。
+  ```text
+  影響    : 旧行を持つ既存 user では diagnosis の canonical 移行が成立しない（永久 mismatch）
+  検出性  : runtime では mismatch としか見えず原因が表面化しない
+  対処    : mirror の schema_version semantics 側で解く。
+            **transport 側に回避策を入れない**（2 つ目の正規化規則を作ることになる）
+  影響範囲: consumer は未切替のため user 影響は無い。切替時の受け入れ条件に含めること
+  ```
+- **★ これは consumer switch ではない ★** canonical context に diagnosis block が
+  存在することと、AI consumer がそれを使うことは別工程である。
+  Stage 5 の最初の切替対象は **E-S40 のまま tutor の `basic_info` slot**であり、
+  production tutor prompt は本 Decision 後も legacy 経路のままである（E-S43）。
+- **Implementation evidence:** `lib/examDiagnosis/tutorHints.ts`（`resolveDiagnosisTypeHint`）／
+  `lib/examSpine/blocks/{types,registry,build}.ts`（`diagnosis_type_hint`）／
+  `lib/examSpine/context/assemble.server.ts` / `orchestrator/{input,plan}.ts` ／
+  `lib/examSpine/sync/claim/deviceBasicInfo.ts`（`deviceDiagnosisToken`）。
+  QA は `scripts/exam-spine-stage5-2-check.ts`。
+- **Alternatives rejected:**
+  - *payload をそのまま block に載せる* — タイプ名・説明文・回答が prompt 経路へ入る。
+  - *canonical 側で言い換えを書き直す* — 表が 2 つになり legacy と乖離する。
+  - *`schemaVersion` を sync view から外して回避する* — 本 Stage の scope 外であり、
+    transport 側に 2 つ目の正規化規則を作ることになる。
+- **Rollback implications:** block を出さなくしても legacy 経路は不変。
+  `resolveDiagnosisTypeHint` は legacy が既に使っているため戻さない。
+
 ---
 
 # 5. Policy / persistence decisions

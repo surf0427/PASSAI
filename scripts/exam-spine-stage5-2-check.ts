@@ -23,7 +23,7 @@ import {
   LEGACY_DIAGNOSIS_TYPE_HINTS,
   resolveDiagnosisTypeHint,
 } from '@/lib/examDiagnosis/tutorHints';
-import { deviceDiagnosisToken } from '@/lib/examSpine/sync/claim/deviceBasicInfo';
+import { deviceDiagnosisToken, buildTutorDeviceClaimEntries } from '@/lib/examSpine/sync/claim/deviceBasicInfo';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import { EXAM_CONTEXT_BLOCK_REGISTRY } from '@/lib/examSpine/blocks/registry';
@@ -266,6 +266,30 @@ function t7Static(): void {
   const legacy = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
   check('T7 legacy が canonical block を import しない', !legacy.includes('examSpine/blocks'));
   check('T7 legacy が canonical context を import しない', !legacy.includes('examSpine/context'));
+
+  // ── T8: Stage 5.2 の境界（5.3 以降を巻き込んでいないこと）────────────
+  //
+  //   Stage 5.2 は diagnosis block だけを昇格する packet である。
+  //   source lineage には 5.3（activity category counts）/ 5.4（self_analysis claim）/
+  //   5.6（statement_review）が続いており、cherry-pick 時に混入しやすい。
+  //   block 集合と tutor の claim kind 集合を pin して accidental promotion を落とす。
+  console.log('\n8. Stage 5.2 boundary');
+  const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
+  check('T8 diagnosis_type_hint が登録されている', blockIds.includes('diagnosis_type_hint'));
+  for (const later of ['activity_category_counts']) {
+    check(`T8 Stage 5.3 の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  }
+  //   tutor が申告する device claim kind は Stage 5.2 時点で basic_info + diagnosis の 2 つ。
+  //   5.3 / 5.4 / 5.6 はここへ kind を足すので、集合を固定すれば混入が落ちる。
+  const claimKinds = buildTutorDeviceClaimEntries(
+    { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
+      typeof buildTutorDeviceClaimEntries
+    >[0],
+    { resultType: 2, answers: [1], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Parameters<
+      typeof buildTutorDeviceClaimEntries
+    >[1],
+  ).map((e) => e.kind).sort();
+  eq('T8 tutor の claim kind は basic_info + diagnosis のみ', claimKinds, ['basic_info', 'diagnosis']);
 }
 
 async function main(): Promise<void> {
