@@ -4,10 +4,27 @@
 //   /api/tutor の Claude 呼び出し前に、Supabase 側に保存済みの生徒情報を server-side で
 //   読み取り、受験相談に使える短いテキスト section へ要約して prompt に差し込む層。
 //
+// ── Exam Spine Phase 2 以降の構成 ───────────────────────────────────
+//   Supabase の **読み取り** は lib/examSpine/read/* へ移設した。本ファイルに残るのは
+//   「読んだ row を Tutor 用にどう解釈・要約・整形するか」という **Tutor 固有の方針**のみ。
+//
+//     lib/examSpine/read/reader.server.ts   … SELECT / fail-open / 並列実行 / 観測
+//     lib/examSpine/read/rowMappers.ts      … jsonb の shape guard（方針を持たない純関数）
+//     lib/examSpine/read/snapshot.server.ts … per-user TTL cache の器
+//     本ファイル                              … truncate 方針 / 表示ラベル / hint 文言 / section 整形
+//
+//   Spine 側へ移してはいけないもの（＝ここに残す理由）:
+//     MAX_* の truncate 件数・文字数     … 「受験相談で何を何件見せるか」は Tutor の判断
+//     DIAGNOSIS_TYPE_HINTS 等の日本語文言 … prompt へ出る Tutor の言い回しそのもの
+//     ACTIVITY / PRESENTATION の表示ラベル … 表示都合
+//     buildTutorSupabaseContextSection    … section header と利用ルールを含む prompt 整形
+//
 // 既存の body 由来 context（lib/contextBuilders/tutorStudentContext.ts +
 // lib/tutor/tutorPrompt.ts:buildTutorStudentContextSection）とは別レイヤー:
 //   - 既存: client が localStorage から読んで body で送るデータを要約（canonical 経路）。
 //   - 本層: server が Supabase の auth-scoped 永続層から読む（端末跨ぎ / body 欠落時の補完）。
+//   ⚠️ 両者は現状 /api/tutor の system block 2 / block 3 として **併存**している。
+//      一本化は Phase 3 の課題であり、Phase 2 では意図的に手を付けていない。
 //
 // 【データソース】
 //   いずれも auth-scoped durable table（owner SELECT RLS / user_id scope）。
@@ -15,10 +32,12 @@
 //     - basic_info_logs   （§41-§43, snapshot 型）… 学年 / 受験方式 / 志望校・志望分野
 //     - diagnosis_logs    （§44-§46, snapshot 型）… 受験タイプ → 会話補助 hint へ言い換え
 //     - activity_logs     （§47-§49, snapshot 型）… カテゴリ別件数のみ（narrative は読まない）
+//     - interview_ai_sessions / interview_ai_results … 最新の completed AI 面接 1 件
+//     - presentation_results / attempts / sessions   … 最新の evaluated プレゼン 1 件
 //   anonymous mirror（*_mirrors）は user_id も SELECT policy も無く read 不可のため使わない。
 //
 // 設計要件:
-//   - server-only（getServerSupabaseClient は next/headers を import するため client 不可）。
+//   - server-only（Spine reader が 'server-only' を持つため client からは import 不可）。
 //   - userId scope で取得する（RLS は auth.uid()=user_id で閉じるが、明示 .eq も付ける）。
 //   - 取得失敗・未ログイン・データ不足・**SQL 未 apply で table 不存在**でも throw しない。
 //     console.warn のみ。Promise.allSettled で部分成功を許容（一部 source 失敗でも他は使う）。
@@ -26,11 +45,10 @@
 //   - basic_info の PII（氏名 / 評定 / 欠席等）や activity の narrative 本文は読まない。
 //
 // 関連:
-//   - lib/supabase/serverClient.ts (getServerSupabaseClient)
+//   - lib/examSpine/read/*（Supabase 読み取り層）
 //   - app/api/tutor/route.ts (consumer / 接続位置は維持)
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 import { isExamType } from '@/types/examDiagnosis';
 import { EXAM_DIAGNOSIS_TYPE_HINTS } from '@/lib/examDiagnosis/tutorHints';
 // AI 面接モードのラベル（純データモジュール。server-only 依存なし）。
@@ -38,6 +56,29 @@ import {
   INTERVIEW_TYPE_LABELS,
   isInterviewType,
 } from '@/lib/interviewAi/interviewTypes';
+
+// Exam Spine — read 層。
+import {
+  asRecord,
+  toTrimmedString,
+  toStringArray,
+  truncate,
+  unwrapEmbedded,
+} from '@/lib/examSpine/read/rowMappers';
+import {
+  loadExamSources,
+  readActivitySnapshot,
+  readBasicInfoSnapshot,
+  readDiagnosisSnapshot,
+  readLatestInterviewAiRow,
+  readLatestPresentationResultRow,
+  readLatestSelfAnalysisRow,
+  readPresentationSessionByAttempt,
+  resolveExamSpineClient,
+  type ExamSpineReadOptions,
+} from '@/lib/examSpine/read/reader.server';
+import { createExamSpineSnapshotCache } from '@/lib/examSpine/read/snapshot.server';
+import { sourceValueOrNull } from '@/lib/examSpine/types';
 
 // ── 型 ───────────────────────────────────────────────────────────
 
@@ -69,7 +110,7 @@ export type TutorStudentContext = {
   };
   // interview_ai_results 由来（最新の completed AI 面接 1 件）。結果画面と同じ保存済み feedback を読む。
   //   - turn 履歴 / 音声 / STT 全文は含めない（結果サマリのみ）。
-  //   - 直近 3 件へ拡張する場合は loadInterviewAiContext の limit を上げて配列化すればよい
+  //   - 直近 3 件へ拡張する場合は reader の limit を上げて配列化すればよい
   //     （type を配列にし、section builder で複数 block を出す）。MVP は最新 1 件のみ。
   interviewAi?: {
     modeLabel: string; // 面接モード（INTERVIEW_TYPE_LABELS）
@@ -81,7 +122,7 @@ export type TutorStudentContext = {
   };
   // presentation_results 由来（最新の evaluated プレゼン 1 件）。結果画面と同じ保存済み feedback を読む。
   //   - 録画動画 / Storage URL / STT 全文 / 発表後 Q&A 履歴は含めない（結果サマリのみ）。
-  //   - 直近 3 件へ拡張する場合は loadPresentationContext の limit を上げて配列化すればよい。MVP は最新 1 件のみ。
+  //   - 直近 3 件へ拡張する場合は reader の limit を上げて配列化すればよい。MVP は最新 1 件のみ。
   presentation?: {
     date?: string; // 実施日時（JST の年月日）
     university?: string; // 大学名
@@ -106,6 +147,10 @@ export type TutorStudentContext = {
 };
 
 // ── truncation 定数（section 全体を最大 1200 字に収めるため）──────────
+//
+// ⚠️ Tutor の方針。Spine（lib/examSpine/read/*）へ移さないこと。
+//    「受験相談の system block に何を何件載せるか」という feature の判断であり、
+//    他 feature が同じ切り方を強制される理由は無い。
 const MAX_STRENGTHS = 3;
 const MAX_WEAKNESSES = 2;
 const MAX_FUTURE = 2;
@@ -175,86 +220,19 @@ const ACTIVITY_CATEGORY_LABELS: Record<string, string> = {
   otherActivities: 'その他',
 };
 
-// ── 汎用 shape guard（jsonb は DB 側で shape 強制しない契約のため defensive に読む）──
+// Spine reader へ渡す観測ラベル。既存の運用ログ文言を 1 文字も変えないために明示する。
+const TUTOR_READ_OPTIONS: ExamSpineReadOptions = {
+  logLabel: 'tutor supabase context',
+};
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
+// ── projection: row → TutorStudentContext の部分（すべて純関数）──────
+//
+// 「読む」は Spine、「Tutor 向けにどう解釈するか」はここ。
+// 各関数は該当 source が使えないとき {} を返す（= sourceSummary が false のまま）。
 
-function toTrimmedString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function toStringArray(value: unknown, max: number): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((x): x is string => typeof x === 'string')
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .slice(0, max)
-    .map((s) => (s.length > MAX_ITEM_LENGTH ? s.slice(0, MAX_ITEM_LENGTH) : s));
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-// snapshot 型 table（basic_info_logs / diagnosis_logs / activity_logs）の payload を
-// userId scope で 1 件読む共通ヘルパ。table 不存在 / RLS 失敗 / 例外でも throw せず null。
-async function readSnapshotPayload(
-  client: SupabaseClient,
-  table: string,
-  userId: string,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const { data, error } = await client
-      .from(table)
-      .select('payload')
-      .eq('user_id', userId)
-      .maybeSingle<{ payload: unknown }>();
-    if (error) {
-      // SQL 未 apply（relation 不存在）/ RLS 失敗 等。静かに no-op。
-      console.warn('tutor supabase context: snapshot read error', {
-        table,
-        code: error.code,
-      });
-      return null;
-    }
-    return asRecord(data?.payload);
-  } catch {
-    console.warn('tutor supabase context: snapshot read threw', { table });
-    return null;
-  }
-}
-
-// ── source loader: self_analysis_logs（最新 1 件）─────────────────
-async function loadSelfAnalysis(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  let data: unknown;
-  try {
-    const res = await client
-      .from('self_analysis_logs')
-      .select('analysis, summary, created_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (res.error) {
-      console.warn('tutor supabase context: self_analysis_logs read error', {
-        code: res.error.code,
-      });
-      return {};
-    }
-    data = res.data;
-  } catch {
-    console.warn('tutor supabase context: self_analysis_logs read threw');
-    return {};
-  }
-
-  const row = Array.isArray(data) ? data[0] : null;
-  const rec = asRecord(row);
+function projectSelfAnalysis(
+  rec: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
   if (!rec) return {};
 
   const analysis = asRecord(rec.analysis);
@@ -265,9 +243,13 @@ async function loadSelfAnalysis(
       toTrimmedString(summary?.activitySummary),
     MAX_SUMMARY_LENGTH,
   );
-  const strengths = toStringArray(analysis?.strengths, MAX_STRENGTHS);
-  const weaknesses = toStringArray(analysis?.weaknesses, MAX_WEAKNESSES);
-  const futureConnections = toStringArray(analysis?.futureConnections, MAX_FUTURE);
+  const strengths = toStringArray(analysis?.strengths, MAX_STRENGTHS, MAX_ITEM_LENGTH);
+  const weaknesses = toStringArray(analysis?.weaknesses, MAX_WEAKNESSES, MAX_ITEM_LENGTH);
+  const futureConnections = toStringArray(
+    analysis?.futureConnections,
+    MAX_FUTURE,
+    MAX_ITEM_LENGTH,
+  );
   const appealPoints = truncate(
     toTrimmedString(summary?.appealPoints),
     MAX_SUMMARY_LENGTH,
@@ -292,19 +274,16 @@ async function loadSelfAnalysis(
   };
 }
 
-// ── source loader: basic_info_logs（snapshot）───────────────────────
 // 含める: 学年 / 受験方式 / 志望校 / 志望分野（各最大 3）。
 // 含めない: 氏名・高校名・メール・電話・住所・評定平均・欠席日数（= name/subjectGrades/
-//           overallGpa は read しない。氏名は書込時に strip 済だが念のため参照しない）。
-async function loadBasicInfoContext(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  const payload = await readSnapshotPayload(client, 'basic_info_logs', userId);
+//           overallGpa は参照しない。氏名は書込時に strip 済だが念のため参照しない）。
+function projectBasicInfo(
+  payload: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
   if (!payload) return {};
 
   const grade = truncate(toTrimmedString(payload.grade), MAX_ITEM_LENGTH);
-  const examType = toStringArray(payload.examTypes, MAX_TARGETS).join('・');
+  const examType = toStringArray(payload.examTypes, MAX_TARGETS, MAX_ITEM_LENGTH).join('・');
 
   const prefs = Array.isArray(payload.preferences) ? payload.preferences : [];
   const targetSchools: string[] = [];
@@ -335,16 +314,13 @@ async function loadBasicInfoContext(
   };
 }
 
-// ── source loader: diagnosis_logs（snapshot）────────────────────────
 // resultType を会話補助 hint へ言い換える。2 系統を typeof で判別:
 //   - number（legacy 1-4）→ DIAGNOSIS_TYPE_HINTS。
 //   - string（ExamType 9種）→ EXAM_DIAGNOSIS_TYPE_HINTS（isExamType でガード）。
-// どちらの系統でも、固定タイプ名 / catchphrase / score / answers / 推薦大学 / NG生文は読まない・渡さない。
-async function loadDiagnosisContext(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  const payload = await readSnapshotPayload(client, 'diagnosis_logs', userId);
+// どちらの系統でも、固定タイプ名 / catchphrase / score / answers / 推薦大学 / NG生文は渡さない。
+function projectDiagnosis(
+  payload: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
   if (!payload) return {};
 
   const resultType = payload.resultType;
@@ -359,13 +335,10 @@ async function loadDiagnosisContext(
   return { diagnosis: { typeHint: truncate(hint, MAX_SUMMARY_LENGTH) } };
 }
 
-// ── source loader: activity_logs（snapshot）─────────────────────────
-// 件数集計のみ。narrative 本文 / 固有名詞 / raw payload は一切読まない・含めない。
-async function loadActivityContext(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  const payload = await readSnapshotPayload(client, 'activity_logs', userId);
+// 件数集計のみ。narrative 本文 / 固有名詞 / raw payload は一切含めない。
+function projectActivity(
+  payload: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
   if (!payload) return {};
 
   const categoryCounts: Record<string, number> = {};
@@ -382,47 +355,13 @@ async function loadActivityContext(
   return { activity: { totalCount, categoryCounts } };
 }
 
-// ── source loader: interview_ai_results（最新の completed AI 面接 1 件）──────
-//
-// 結果画面（lib/supabase/interviewAiResults.ts:listCompletedAiInterviews）と同じ保存済み
-// データを server-side で読む。新しい面接結果は生成しない。turn 履歴 / 音声 / STT 全文は
-// 一切読まず、結果サマリ（総合評価 / 良かった点 / 改善点 / 次の練習 / モード / 日時）だけを抽出する。
-// interview_ai_results の SELECT は session 経由 EXISTS RLS で owner に閉じる（schema §60）。
-// table 不存在 / RLS 失敗 / 例外でも throw せず {}。
-async function loadInterviewAiContext(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  let data: unknown;
-  try {
-    const res = await client
-      .from('interview_ai_sessions')
-      .select('created_at, interview_type, interview_ai_results(feedback)')
-      .eq('user_id', userId)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1); // 最新 1 件。3 件対応時はここを上げて配列化する。
-    if (res.error) {
-      console.warn('tutor supabase context: interview_ai read error', {
-        code: res.error.code,
-      });
-      return {};
-    }
-    data = res.data;
-  } catch {
-    console.warn('tutor supabase context: interview_ai read threw');
-    return {};
-  }
-
-  const row = Array.isArray(data) ? data[0] : null;
-  const rec = asRecord(row);
+function projectInterviewAi(
+  rec: Record<string, unknown> | null,
+): Partial<TutorStudentContext> {
   if (!rec) return {};
 
   // embed（PostgREST）は配列 or 単体で返りうる（UNIQUE(session_id) なので実質 0/1 件）。
-  const resultsRaw = rec.interview_ai_results;
-  const resultRec = Array.isArray(resultsRaw)
-    ? asRecord(resultsRaw[0])
-    : asRecord(resultsRaw);
+  const resultRec = unwrapEmbedded(rec.interview_ai_results);
   const feedback = asRecord(resultRec?.feedback);
   if (!feedback) return {};
 
@@ -430,9 +369,21 @@ async function loadInterviewAiContext(
     toTrimmedString(feedback.overallEvaluation),
     MAX_SUMMARY_LENGTH,
   );
-  const goodPoints = toStringArray(feedback.goodPoints, MAX_INTERVIEW_AI_GOOD);
-  const improvements = toStringArray(feedback.improvements, MAX_INTERVIEW_AI_IMPROVE);
-  const nextPractice = toStringArray(feedback.nextPractice, MAX_INTERVIEW_AI_NEXT);
+  const goodPoints = toStringArray(
+    feedback.goodPoints,
+    MAX_INTERVIEW_AI_GOOD,
+    MAX_ITEM_LENGTH,
+  );
+  const improvements = toStringArray(
+    feedback.improvements,
+    MAX_INTERVIEW_AI_IMPROVE,
+    MAX_ITEM_LENGTH,
+  );
+  const nextPractice = toStringArray(
+    feedback.nextPractice,
+    MAX_INTERVIEW_AI_NEXT,
+    MAX_ITEM_LENGTH,
+  );
 
   const hasAny =
     overall !== '' ||
@@ -459,54 +410,37 @@ async function loadInterviewAiContext(
   };
 }
 
-// ── source loader: presentation_results（最新の evaluated プレゼン 1 件）────
-//
-// 結果画面（app/presentation/result/PresentationResultClient.tsx）と同じ保存済みデータを
-// server-side で読む。新しい評価は生成しない。録画動画 / Storage URL / STT 全文(transcript) /
-// 発表後 Q&A 履歴は一切読まず、結果サマリ（総合評価 / 良かった点 / 改善点 / 次の練習 / カテゴリ /
-// 大学・学部・テーマ・日時）だけを抽出する。
-//   - core: presentation_results を user_id scope で最新 1 件（feedback / created_at）。これが取れねば {}。
-//   - enrichment: attempt 経由で session の大学名 / 学部名 / テーマを best-effort で補う（失敗しても core は返す）。
-// presentation_results / attempts / sessions はいずれも owner SELECT RLS。table 不存在 / 例外でも throw せず {}。
-async function loadPresentationContext(
-  client: SupabaseClient,
-  userId: string,
-): Promise<Partial<TutorStudentContext>> {
-  // core: 最新の評価結果（feedback 本体）。
-  let resultRow: Record<string, unknown> | null = null;
-  let attemptId = '';
-  try {
-    const res = await client
-      .from('presentation_results')
-      .select('created_at, feedback, attempt_id')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1); // 最新 1 件。3 件対応時はここを上げて配列化する。
-    if (res.error) {
-      console.warn('tutor supabase context: presentation read error', {
-        code: res.error.code,
-      });
-      return {};
-    }
-    const row = Array.isArray(res.data) ? res.data[0] : null;
-    resultRow = asRecord(row);
-    attemptId = toTrimmedString(resultRow?.attempt_id);
-  } catch {
-    console.warn('tutor supabase context: presentation read threw');
-    return {};
-  }
-  if (!resultRow) return {};
+/** プレゼン core feedback の projection。enrichment 前に「使えるか」を判定する。 */
+function projectPresentationCore(rec: Record<string, unknown> | null): {
+  usable: boolean;
+  attemptId: string;
+  built?: NonNullable<TutorStudentContext['presentation']>;
+} {
+  if (!rec) return { usable: false, attemptId: '' };
+  const attemptId = toTrimmedString(rec.attempt_id);
 
-  const feedback = asRecord(resultRow.feedback);
-  if (!feedback) return {};
+  const feedback = asRecord(rec.feedback);
+  if (!feedback) return { usable: false, attemptId };
 
   const overall = truncate(
     toTrimmedString(feedback.overallComment),
     MAX_SUMMARY_LENGTH,
   );
-  const goodPoints = toStringArray(feedback.goodPoints, MAX_PRESENTATION_GOOD);
-  const improvements = toStringArray(feedback.improvements, MAX_PRESENTATION_IMPROVE);
-  const nextPractice = toStringArray(feedback.nextPractice, MAX_PRESENTATION_NEXT);
+  const goodPoints = toStringArray(
+    feedback.goodPoints,
+    MAX_PRESENTATION_GOOD,
+    MAX_ITEM_LENGTH,
+  );
+  const improvements = toStringArray(
+    feedback.improvements,
+    MAX_PRESENTATION_IMPROVE,
+    MAX_ITEM_LENGTH,
+  );
+  const nextPractice = toStringArray(
+    feedback.nextPractice,
+    MAX_PRESENTATION_NEXT,
+    MAX_ITEM_LENGTH,
+  );
 
   // カテゴリ評価（存在時のみ）。weak/normal/strong を日本語ラベルへ。資料整合性は付いていれば末尾に。
   const cats = asRecord(feedback.categories);
@@ -526,46 +460,34 @@ async function loadPresentationContext(
     improvements.length > 0 ||
     nextPractice.length > 0 ||
     categories.length > 0;
-  if (!hasAny) return {};
+  if (!hasAny) return { usable: false, attemptId };
 
-  const date = formatDateJst(toTrimmedString(resultRow.created_at));
-
-  // enrichment（best-effort）: attempt → session の大学名 / 学部名 / テーマ。失敗しても core は返す。
-  let university = '';
-  let faculty = '';
-  let theme = '';
-  if (attemptId) {
-    try {
-      const res = await client
-        .from('presentation_attempts')
-        .select('presentation_sessions(university_name, faculty_name, theme)')
-        .eq('id', attemptId)
-        .maybeSingle();
-      const attemptRec = asRecord(res.data);
-      const sessRaw = attemptRec?.presentation_sessions;
-      const sess = Array.isArray(sessRaw) ? asRecord(sessRaw[0]) : asRecord(sessRaw);
-      if (sess) {
-        university = truncate(toTrimmedString(sess.university_name), MAX_ITEM_LENGTH);
-        faculty = truncate(toTrimmedString(sess.faculty_name), MAX_ITEM_LENGTH);
-        theme = truncate(toTrimmedString(sess.theme), MAX_SUMMARY_LENGTH);
-      }
-    } catch {
-      // enrichment 失敗は無視（core feedback のみで section を出す）。
-    }
-  }
+  const date = formatDateJst(toTrimmedString(rec.created_at));
 
   return {
-    presentation: {
+    usable: true,
+    attemptId,
+    built: {
       ...(date !== '' ? { date } : {}),
-      ...(university !== '' ? { university } : {}),
-      ...(faculty !== '' ? { faculty } : {}),
-      ...(theme !== '' ? { theme } : {}),
       ...(overall !== '' ? { overall } : {}),
       ...(goodPoints.length > 0 ? { goodPoints } : {}),
       ...(improvements.length > 0 ? { improvements } : {}),
       ...(nextPractice.length > 0 ? { nextPractice } : {}),
       ...(categories.length > 0 ? { categories } : {}),
     },
+  };
+}
+
+/** attempt → session の付随情報（大学名 / 学部名 / テーマ）の projection。 */
+function projectPresentationSession(
+  attemptRec: Record<string, unknown> | null,
+): { university: string; faculty: string; theme: string } {
+  const sess = unwrapEmbedded(attemptRec?.presentation_sessions);
+  if (!sess) return { university: '', faculty: '', theme: '' };
+  return {
+    university: truncate(toTrimmedString(sess.university_name), MAX_ITEM_LENGTH),
+    faculty: truncate(toTrimmedString(sess.faculty_name), MAX_ITEM_LENGTH),
+    theme: truncate(toTrimmedString(sess.theme), MAX_SUMMARY_LENGTH),
   };
 }
 
@@ -586,19 +508,106 @@ function formatDateJst(iso: string): string {
   }
 }
 
+// ── source unit: read（Spine）+ project（Tutor）────────────────────
+//
+// 1 unit = 1 kind の「読んで Tutor 向けに解釈する」まで。
+// enrichment を伴う presentation も 1 unit に閉じるため、並列性と query 本数は移設前と同じ。
+
+async function runSelfAnalysisUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readLatestSelfAnalysisRow(client, userId, TUTOR_READ_OPTIONS);
+  return projectSelfAnalysis(sourceValueOrNull(state));
+}
+
+async function runBasicInfoUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readBasicInfoSnapshot(client, userId, TUTOR_READ_OPTIONS);
+  return projectBasicInfo(sourceValueOrNull(state));
+}
+
+async function runDiagnosisUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readDiagnosisSnapshot(client, userId, TUTOR_READ_OPTIONS);
+  return projectDiagnosis(sourceValueOrNull(state));
+}
+
+async function runActivityUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readActivitySnapshot(client, userId, TUTOR_READ_OPTIONS);
+  return projectActivity(sourceValueOrNull(state));
+}
+
+async function runInterviewAiUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const state = await readLatestInterviewAiRow(client, userId, TUTOR_READ_OPTIONS);
+  return projectInterviewAi(sourceValueOrNull(state));
+}
+
+// core → （使えるときだけ）enrichment の 2 段。
+//   - core が空 / feedback が使えない場合は enrichment の query を発行しない。
+//   - enrichment 失敗は無視（core feedback のみで section を出す）。
+async function runPresentationUnit(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Partial<TutorStudentContext>> {
+  const coreState = await readLatestPresentationResultRow(
+    client,
+    userId,
+    TUTOR_READ_OPTIONS,
+  );
+  const core = projectPresentationCore(sourceValueOrNull(coreState));
+  if (!core.usable || !core.built) return {};
+
+  let university = '';
+  let faculty = '';
+  let theme = '';
+  if (core.attemptId) {
+    const sessionState = await readPresentationSessionByAttempt(
+      client,
+      core.attemptId,
+    );
+    const projected = projectPresentationSession(sourceValueOrNull(sessionState));
+    university = projected.university;
+    faculty = projected.faculty;
+    theme = projected.theme;
+  }
+
+  const { date, overall, goodPoints, improvements, nextPractice, categories } =
+    core.built;
+
+  return {
+    presentation: {
+      ...(date !== undefined ? { date } : {}),
+      ...(university !== '' ? { university } : {}),
+      ...(faculty !== '' ? { faculty } : {}),
+      ...(theme !== '' ? { theme } : {}),
+      ...(overall !== undefined ? { overall } : {}),
+      ...(goodPoints !== undefined ? { goodPoints } : {}),
+      ...(improvements !== undefined ? { improvements } : {}),
+      ...(nextPractice !== undefined ? { nextPractice } : {}),
+      ...(categories !== undefined ? { categories } : {}),
+    },
+  };
+}
+
 // ── 主 entry: loadTutorStudentContext ────────────────────────────
 //
 // userId scope で Supabase の各 auth-scoped durable から保存済み生徒情報を取得し、
 // TutorStudentContext を返す。throw しない。各 source は allSettled で部分成功を許容し、
-// 失敗は console.warn のみ。client は 1 回だけ生成して全 loader で共有する。
-export async function loadTutorStudentContext(
-  userId: string,
-  // STEP-TUTOR-ROUTING-AUDIT-01 (P0): user-scoped supabase client を外から注入できる。
-  //   route 側で auth 済の client を渡すと、本関数内での getServerSupabaseClient 再生成
-  //   （= cookie 再パース）を避けられる。未指定なら従来どおり自前で生成する（後方互換）。
-  injectedClient?: SupabaseClient | null,
-): Promise<TutorStudentContext> {
-  const empty: TutorStudentContext = {
+// 失敗は console.warn のみ。client は 1 回だけ生成して全 unit で共有する。
+
+function emptyTutorStudentContext(): TutorStudentContext {
+  return {
     sourceSummary: {
       hasSelfAnalysis: false,
       hasBasicInfo: false,
@@ -608,64 +617,43 @@ export async function loadTutorStudentContext(
       hasPresentation: false,
     },
   };
+}
+
+export async function loadTutorStudentContext(
+  userId: string,
+  // STEP-TUTOR-ROUTING-AUDIT-01 (P0): user-scoped supabase client を外から注入できる。
+  //   route 側で auth 済の client を渡すと、本関数内での client 再生成
+  //   （= cookie 再パース）を避けられる。未指定なら従来どおり自前で生成する（後方互換）。
+  //   ⚠️ 注入してよいのは anon key + RLS の user-scoped client のみ（service_role 禁止）。
+  injectedClient?: SupabaseClient | null,
+): Promise<TutorStudentContext> {
+  const empty = emptyTutorStudentContext();
 
   if (!userId) return empty;
 
-  const client = injectedClient ?? (await getServerSupabaseClient());
+  const client = await resolveExamSpineClient(injectedClient);
   if (!client) {
     // env 未設定 / cookie 無し（未ログイン相当）。静かに空を返す。
     return empty;
   }
 
-  // STEP-TUTOR-LATENCY-ROOTCAUSE-01: 各 source の実測時間を計測する instrumentation。
-  // ⚠️ 計測のみ。query 内容・順序・並列性・戻り値は一切変更していない（behavioral change なし）。
-  // 目的: context_load_ms の ~40s が
-  //   (a) どの source か（1 つだけ遅い = その query / 全部遅い = 接続・コールド要因）、
-  //   (b) 並列が効いているか（allSettled_ms ≈ max なら並列 / ≈ 合算なら直列化）、
-  //   を切り分ける。durations と真偽のみ出力（PII・本文・生徒情報は出さない）。
-  const sourceTimings: Record<string, number> = {};
-  const timed = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
-    const s = Date.now();
-    try {
-      return await fn();
-    } finally {
-      sourceTimings[name] = Date.now() - s;
-    }
-  };
-
-  let settled: Array<PromiseSettledResult<Partial<TutorStudentContext>>>;
-  const allSettledStart = Date.now();
-  try {
-    settled = await Promise.allSettled([
-      timed('selfAnalysis_ms', () => loadSelfAnalysis(client, userId)),
-      timed('basicInfo_ms', () => loadBasicInfoContext(client, userId)),
-      timed('diagnosis_ms', () => loadDiagnosisContext(client, userId)),
-      timed('activity_ms', () => loadActivityContext(client, userId)),
-      timed('interviewAi_ms', () => loadInterviewAiContext(client, userId)),
-      timed('presentation_ms', () => loadPresentationContext(client, userId)),
-    ]);
-  } catch {
-    // allSettled は本来 reject しないが、念のため。
-    console.info(
-      '[TutorContextSources]',
-      JSON.stringify({
-        ...sourceTimings,
-        allSettled_ms: Date.now() - allSettledStart,
-        clientInjected: injectedClient != null,
-        error: 'allSettled_threw',
-      }),
-    );
-    return empty;
-  }
-  // 並列性の確認: allSettled_ms が max(各 source) に近ければ並列、合算に近ければ直列。
-  console.info(
-    '[TutorContextSources]',
-    JSON.stringify({
-      ...sourceTimings,
-      allSettled_ms: Date.now() - allSettledStart,
-      clientInjected: injectedClient != null,
-    }),
+  // 並列実行 + 所要時間の観測は Spine 側（loadExamSources）。
+  // unit の並び・timingKey・ログ label は移設前と同一に保つ。
+  const settled = await loadExamSources<Partial<TutorStudentContext>>(
+    [
+      { timingKey: 'selfAnalysis_ms', run: () => runSelfAnalysisUnit(client, userId) },
+      { timingKey: 'basicInfo_ms', run: () => runBasicInfoUnit(client, userId) },
+      { timingKey: 'diagnosis_ms', run: () => runDiagnosisUnit(client, userId) },
+      { timingKey: 'activity_ms', run: () => runActivityUnit(client, userId) },
+      { timingKey: 'interviewAi_ms', run: () => runInterviewAiUnit(client, userId) },
+      { timingKey: 'presentation_ms', run: () => runPresentationUnit(client, userId) },
+    ],
+    {
+      timingLabel: '[TutorContextSources]',
+      logMeta: { clientInjected: injectedClient != null },
+    },
   );
+  if (!settled) return empty;
 
   const merged: TutorStudentContext = {
     sourceSummary: { ...empty.sourceSummary },
@@ -708,27 +696,18 @@ export async function loadTutorStudentContext(
 // ── per-user context cache（STEP-TUTOR-ROUTING-AUDIT-01 P0）──────────
 //
 // loadTutorStudentContext の結果を userId 単位で短期キャッシュする。
-// 目的: 同一会話の連続ターンで Supabase の 4 read を毎ターン繰り返さず、pre-Claude の
+// 目的: 同一会話の連続ターンで Supabase の read を毎ターン繰り返さず、pre-Claude の
 //       レイテンシを削る。取得「内容」は intent / feature に依存しないため userId だけを key にする。
 //
-// 方針:
-//   - key  : userId のみ。
-//   - TTL  : 60 秒。生徒情報は分単位では変わらないため品質中立（prompt 側も「参考情報・
-//            古い可能性あり・最新発言優先」と明記済み）。
-//   - store: プロセス内 Map。**dev / serverless では永続・インスタンス間共有を保証しない**
-//            （複数インスタンス・cold start で空から始まる）。同一インスタンス・短時間の
-//            ベストエフォート最適化であり、正しさは cache 無しでも成立する設計。
-//   - 非キャッシュ条件: 取得結果が「全 source 空」のときはキャッシュしない。
-//            理由: loadTutorStudentContext は never-throw で一時的失敗も空に倒れるため、空を
-//            60 秒 hit として固定すると生徒情報を隠してしまう。品質優先で空はキャッシュしない
-//            （= データのあるユーザーだけが cache の恩恵を受ける）。
-//   - invalidation: TTL のみ（明示 invalidation なし）。保存情報の更新は最大 60 秒で反映される。
-//   - quality: truncation / 要約 / tiering は一切しない。loadTutorStudentContext の結果を
-//            そのまま保持・返す（品質は cache 有無で不変）。
+// 器は Spine（lib/examSpine/read/snapshot.server.ts）。TTL と「保存してよいか」の
+// 判断だけを Tutor 側で与える。意味論は移設前と同一:
+//   - TTL 60 秒。生徒情報は分単位では変わらないため品質中立（prompt 側も「参考情報・
+//     古い可能性あり・最新発言優先」と明記済み）。
+//   - 全 source 空はキャッシュしない。loadTutorStudentContext は never-throw で一時的失敗も
+//     空に倒れるため、空を 60 秒 hit として固定すると生徒情報を隠してしまう。
+//   - invalidation は TTL のみ。保存情報の更新は最大 60 秒で反映される。
+//   - truncation / 要約 / tiering はしない（品質は cache 有無で不変）。
 const CONTEXT_CACHE_TTL_MS = 60_000;
-
-type ContextCacheEntry = { value: TutorStudentContext; expiresAt: number };
-const contextCache = new Map<string, ContextCacheEntry>();
 
 function hasAnySource(ctx: TutorStudentContext): boolean {
   const s = ctx.sourceSummary;
@@ -742,41 +721,32 @@ function hasAnySource(ctx: TutorStudentContext): boolean {
   );
 }
 
+const contextCache = createExamSpineSnapshotCache<TutorStudentContext>({
+  ttlMs: CONTEXT_CACHE_TTL_MS,
+  shouldCache: hasAnySource,
+});
+
 /**
  * loadTutorStudentContext の 60 秒 per-user キャッシュ付きラッパ。
  * 戻り値に cacheHit を含め、呼び出し側でレイテンシログに使えるようにする。
  * throw しない（内部の loadTutorStudentContext が never-throw）。
+ *
+ * ⚠️ cache hit は認可の代替ではない。呼び出し側（route）は毎 request 認証・quota を
+ *    評価したうえで本関数を呼ぶこと。
  */
 export async function loadTutorStudentContextCached(
   userId: string,
   injectedClient?: SupabaseClient | null,
 ): Promise<{ context: TutorStudentContext; cacheHit: boolean }> {
-  const empty: TutorStudentContext = {
-    sourceSummary: {
-      hasSelfAnalysis: false,
-      hasBasicInfo: false,
-      hasDiagnosis: false,
-      hasActivity: false,
-      hasInterviewAi: false,
-      hasPresentation: false,
-    },
-  };
-  if (!userId) return { context: empty, cacheHit: false };
+  if (!userId) return { context: emptyTutorStudentContext(), cacheHit: false };
 
+  // now は load の前後で共有する（load 後に取り直すと実効 TTL が伸びる）。
   const now = Date.now();
-  const cached = contextCache.get(userId);
-  if (cached && cached.expiresAt > now) {
-    return { context: cached.value, cacheHit: true };
-  }
-  if (cached) contextCache.delete(userId); // 期限切れの掃除
+  const cached = contextCache.get(userId, now);
+  if (cached) return { context: cached, cacheHit: true };
 
   const context = await loadTutorStudentContext(userId, injectedClient);
-  if (hasAnySource(context)) {
-    contextCache.set(userId, {
-      value: context,
-      expiresAt: now + CONTEXT_CACHE_TTL_MS,
-    });
-  }
+  contextCache.set(userId, context, now);
   return { context, cacheHit: false };
 }
 

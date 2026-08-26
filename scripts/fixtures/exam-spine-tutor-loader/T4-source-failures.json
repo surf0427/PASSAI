@@ -1,0 +1,89 @@
+{
+  "context": {
+    "activity": {
+      "categoryCounts": {
+        "部活動": 1
+      },
+      "totalCount": 1
+    },
+    "basicInfo": {
+      "examType": "総合型選抜",
+      "grade": "高校3年"
+    },
+    "sourceSummary": {
+      "hasActivity": true,
+      "hasBasicInfo": true,
+      "hasDiagnosis": false,
+      "hasInterviewAi": false,
+      "hasPresentation": false,
+      "hasSelfAnalysis": false
+    }
+  },
+  "description": "一部 source が error / throw（fail-open: 他 source は通常どおり返ること）",
+  "fixtureId": "T4-source-failures",
+  "queries": [
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "activity_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "basic_info_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": null,
+      "order": "",
+      "select": "payload",
+      "table": "diagnosis_logs",
+      "terminal": "maybeSingle"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000",
+        "status=completed"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, interview_type, interview_ai_results(feedback)",
+      "table": "interview_ai_sessions",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "created_at, feedback, attempt_id",
+      "table": "presentation_results",
+      "terminal": "await"
+    },
+    {
+      "filters": [
+        "user_id=fixture-user-0000"
+      ],
+      "limit": 1,
+      "order": "created_at:desc",
+      "select": "analysis, summary, created_at",
+      "table": "self_analysis_logs",
+      "terminal": "await"
+    }
+  ],
+  "section": "【保存済みの生徒情報】\n以下は過去の入力に基づく参考情報です。最新のユーザー発言を常に最優先してください。\n保存情報と最新の発言が食い違う場合は、断定せず確認質問をしてください。\n\n・保存情報では、高校3年・受験方式は総合型選抜 のようです。\n・活動整理には、部活動1件 が保存されています（計1件）。\n・注意: 志望校・進路・学力は変わる可能性があるため、断定せず必要に応じて確認してください。\n\nこの生徒情報の扱い方:\n・参考情報です。古い可能性があるため断定せず、必要なときだけ自然に参照してください。\n・ここに無い個人情報を推測・補完したり、「未入力」を責めたりしないでください。",
+  "sectionLength": 294
+}
