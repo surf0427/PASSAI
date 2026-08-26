@@ -40,6 +40,10 @@ import type { ExamRequestAuthorization } from '../read/requestSnapshot.server';
 import { createSupabaseExamReadExecutor } from '../read/supabaseExecutor.server';
 import type { ExamReadExecutor, ExamReadQuery } from '../read/types';
 import { resolveDiagnosisTypeHint } from '@/lib/examDiagnosis/tutorHints';
+import {
+  formatActivityCategoryCounts,
+  summarizeActivityCategories,
+} from '@/lib/activityCategories';
 import type {
   ExamActivityServerRow,
   ExamBasicInfoServerRow,
@@ -517,10 +521,21 @@ function resolveContextInput(args: {
   }
 
   // activity
+  //
+  // ★ 2 つの表現を渡す ★
+  //   activityData        … 既存 block（activity_text 等）が使う ActivityData 本体
+  //   activityCategoryCounts … Tutor が prompt に出している件数 1 行表現
+  //   件数集計は legacy と同じ `summarizeActivityCategories` を通す（正本 1 箇所）。
   if (usable('activity')) {
-    const p = projectActivity(snapshotRow<ExamActivityServerRow>('activity'));
+    const row = snapshotRow<ExamActivityServerRow>('activity');
+    const p = projectActivity(row);
     if (p.value) {
       next.activityData = p.value;
+      origins.activity = 'server';
+    }
+    const summary = summarizeActivityCategories(row?.payload ?? null);
+    if (summary) {
+      next.activityCategoryCounts = formatActivityCategoryCounts(summary);
       origins.activity = 'server';
     }
   }

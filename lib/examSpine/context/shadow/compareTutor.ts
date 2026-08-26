@@ -43,6 +43,11 @@ import {
 export type TutorLegacyInput = {
   readonly basicInfo?: unknown;
   readonly activityData?: unknown;
+  /**
+   * legacy の Supabase 層が prompt に出しているカテゴリ別件数の 1 行表現。
+   * body 由来ではないので、route が `contextResult.context.activity` から整形して渡す。
+   */
+  readonly activityCategoryCounts?: unknown;
   readonly studentProfile?: unknown;
   readonly statementReviewLatest?: unknown;
   /** 以下は canonical block coverage 外。存在の記録だけ行う。 */
@@ -103,16 +108,6 @@ function preferences(value: unknown): Array<{ u: string; f: string; d: string }>
   return out;
 }
 
-/** 活動データ → カテゴリ別件数。カテゴリ名を固定しない（10 カテゴリ問題）。 */
-function activityCounts(value: unknown): Record<string, number> {
-  const rec = record(value);
-  if (!rec) return {};
-  const out: Record<string, number> = {};
-  for (const [key, v] of Object.entries(rec)) {
-    if (Array.isArray(v) && v.length > 0) out[key] = v.length;
-  }
-  return out;
-}
 
 /**
  * canonical 側の値は **block content** から取る。
@@ -244,8 +239,19 @@ export function compareTutorShadow(input: {
       omitted: 'pii_excluded' }),
 
     // ── activity ─────────────────────────────────────────────────
+    //
+    // ★ 比較対象は「Tutor が prompt に出している表現」＝カテゴリ別件数 ★
+    //   `body.activityData` は client が送る counts 射影であって ActivityData 本体ではない
+    //   （app/tutor/page.tsx:392）。一方 legacy の Supabase 層は
+    //   `{ totalCount, categoryCounts }` を持ち、そこから 1 行を作っている。
+    //   したがって legacy 側は Supabase 層の整形済み件数、canonical 側は
+    //   activity_category_counts block の content を突き合わせる。
+    //   （Stage 5.1 では body の counts 射影と ActivityData を比べており、
+    //     shape が違うため常に空同士になっていた。ここで訂正する。）
     compareField({ field: 'activity.categoryCounts', kind: 'activity',
-      legacy: activityCounts(input.legacy.activityData), canonical: activityCounts(input.canonicalInput.activityData), provenance: prov('activity') }),
+      legacy: text(input.legacy.activityCategoryCounts),
+      canonical: blockContent(input.context, 'activity_category_counts'),
+      provenance: prov('activity') }),
 
     // ── self_analysis ────────────────────────────────────────────
     compareField({ field: 'self_analysis.summary', kind: 'self_analysis',

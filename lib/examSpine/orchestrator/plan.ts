@@ -393,7 +393,14 @@ export const EXAM_PURPOSE_PLANS: Readonly<
     //   diagnosis.typeHint に対応する canonical block（G1）。
     //   ★ consumer は切り替えない ★ 本 plan は shadow comparison から使われるだけで、
     //     production の tutor prompt は従来どおり legacy 3 層から組み立てる。
-    blocks: [{ id: 'tutor_student_context' }, { id: 'diagnosis_type_hint' }],
+    //   ★ Stage 5.3: activity_category_counts を追加（G6）★
+    //     legacy の buildTutorSupabaseContextSection が出している
+    //     「・活動整理には、… が保存されています（計N件）。」に対応する block。
+    blocks: [
+      { id: 'tutor_student_context' },
+      { id: 'diagnosis_type_hint' },
+      { id: 'activity_category_counts' },
+    ],
     render: null,
     legacyBuilder: null,
     notYetModeled: [

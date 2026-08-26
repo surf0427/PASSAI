@@ -108,6 +108,7 @@ export type ExamContextBlockId =
   | 'activity_context'
   | 'activity_context_matching'
   | 'activity_summary'
+  | 'activity_category_counts'
   // 診断
   | 'diagnosis_type_hint'
   // 自己理解
@@ -152,6 +153,7 @@ export const EXAM_CONTEXT_BLOCK_IDS = [
   'activity_context',
   'activity_context_matching',
   'activity_summary',
+  'activity_category_counts',
   'diagnosis_type_hint',
   'self_analysis_statement',
   'self_analysis_interview',

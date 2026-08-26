@@ -203,6 +203,19 @@ export const EXAM_CONTEXT_BLOCK_REGISTRY: Readonly<
     legacySource: 'lib/interview/buildInterviewQuestionPrompt.ts:buildSelfAnalysisSection（module-private）',
   },
 
+  activity_category_counts: {
+    sourceKind: 'activity',
+    // 件数だけを数えた決定論集計。活動名 / テーマ / 説明といった narrative は含まない。
+    provenance: 'user_authored',
+    derivation: 'deterministic',
+    headingOwner: 'none',
+    meaning:
+      '活動整理のカテゴリ別件数（部活動2件・ボランティア1件 …）。本文は含まない',
+    legacySource:
+      'lib/contextBuilders/tutorContext.ts:loadActivityContext（activity.categoryCounts / totalCount）＋ ' +
+      'buildTutorSupabaseContextSection の「・活動整理には、… が保存されています（計N件）。」1 行',
+  },
+
   // ── 診断 ──────────────────────────────────────────────────────────
   diagnosis_type_hint: {
     sourceKind: 'diagnosis',

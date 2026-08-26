@@ -101,6 +101,16 @@ export type ExamContextInput = {
    */
   diagnosisTypeHint?: string | null;
 
+  /**
+   * 活動整理のカテゴリ別件数（`formatActivityCategoryCounts` の出力）。
+   *
+   * ★ payload そのものを渡さない ★
+   *   `activity_logs.payload` は各カテゴリの活動オブジェクト配列（活動名 / テーマ /
+   *   説明などの narrative を含む）である。Tutor が prompt に出しているのは
+   *   件数だけなので、件数表現に落としてから Layer 2 へ渡す（Canon §55 / E-P5）。
+   */
+  activityCategoryCounts?: string | null;
+
   activityText?: string | null;
   activityData?: ActivityData | null;
   activitySummary?: string | null;
