@@ -261,6 +261,11 @@ async function buildSnapshot(
     // 3. prompt へ入る文字列そのもの。**ここが変わったら prompt が変わっている。**
     section,
     sectionLength: section.length,
+    // 既知の負債（Phase 3.5 で修正せず固定）:
+    //   buildTutorSupabaseContextSection は section 全体を hard truncate するため、
+    //   context が上限に達すると末尾の「この生徒情報の扱い方」（AI への指示）が
+    //   切り落とされる。false になっている fixture がその再現ケース。
+    trailingInstructionsPresent: section === '' || section.includes('この生徒情報の扱い方:'),
   };
 }
 

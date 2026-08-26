@@ -374,4 +374,135 @@ export const TUTOR_LOADER_FIXTURES: readonly TutorLoaderFixture[] = [
       },
     },
   },
+
+  {
+    id: 'T9-max-context-truncation',
+    description:
+      '既知の負債の characterization: 全 source が上限まで埋まると section が hard truncate され、'
+      + ' 末尾の「この生徒情報の扱い方」（AI への指示）が丸ごと切り落とされる。'
+      + ' Phase 3.5 では **修正しない**。現状を固定して、修正時に diff が出るようにする。',
+    parity: true,
+    tables: {
+      self_analysis_logs: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            analysis: {
+              summary: '要'.repeat(200),
+              strengths: ['強'.repeat(60), 'み'.repeat(60), '三'.repeat(60)],
+              weaknesses: ['弱'.repeat(60), 'み'.repeat(60)],
+              futureConnections: ['将'.repeat(60), '来'.repeat(60)],
+            },
+            summary: { appealPoints: 'ア'.repeat(200) },
+          },
+        ],
+      },
+      basic_info_logs: {
+        kind: 'ok',
+        data: {
+          payload: {
+            grade: '学'.repeat(60),
+            track: '理'.repeat(60),
+            examTypes: ['方'.repeat(60), '式'.repeat(60), '選'.repeat(60)],
+            preferences: [
+              { university: '大'.repeat(60), faculty: '学'.repeat(60) },
+              { university: '校'.repeat(60), faculty: '部'.repeat(60) },
+              { university: '名'.repeat(60), faculty: '科'.repeat(60) },
+            ],
+          },
+        },
+      },
+      diagnosis_logs: { kind: 'ok', data: { payload: { resultType: 2 } } },
+      activity_logs: {
+        kind: 'ok',
+        data: {
+          payload: {
+            clubActivities: [1, 2, 3],
+            volunteerActivities: [1, 2, 3],
+            studyAbroadActivities: [1, 2, 3],
+            researchActivities: [1, 2, 3],
+            partTimeJobActivities: [1, 2, 3],
+            certificationActivities: [1, 2, 3],
+            contestActivities: [1, 2, 3],
+            readingActivities: [1, 2, 3],
+            hobbyActivities: [1, 2, 3],
+            otherActivities: [1, 2, 3],
+          },
+        },
+      },
+      interview_ai_sessions: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            interview_type: 'self_analysis',
+            interview_ai_results: [
+              {
+                feedback: {
+                  overallEvaluation: '総'.repeat(200),
+                  goodPoints: ['良'.repeat(60), '点'.repeat(60), '三'.repeat(60)],
+                  improvements: ['改'.repeat(60), '善'.repeat(60), '三'.repeat(60)],
+                  nextPractice: ['次'.repeat(60), '練'.repeat(60)],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      presentation_results: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T2,
+            attempt_id: 'attempt-fixture-max',
+            feedback: {
+              overallComment: '評'.repeat(200),
+              goodPoints: ['良'.repeat(60), '点'.repeat(60), '三'.repeat(60)],
+              improvements: ['改'.repeat(60), '善'.repeat(60), '三'.repeat(60)],
+              nextPractice: ['次'.repeat(60), '練'.repeat(60)],
+              categories: {
+                composition: 'strong',
+                persuasion: 'normal',
+                concreteness: 'weak',
+                clarity: 'strong',
+                timeManagement: 'normal',
+                completeness: 'strong',
+                materialConsistency: 'normal',
+              },
+            },
+          },
+        ],
+      },
+      presentation_attempts: {
+        kind: 'ok',
+        data: {
+          presentation_sessions: {
+            university_name: '大'.repeat(60),
+            faculty_name: '学'.repeat(60),
+            theme: 'テ'.repeat(200),
+          },
+        },
+      },
+      statement_review_history: {
+        kind: 'ok',
+        data: [{ created_at: T1, result: { weaknesses: ['志'.repeat(80), '望'.repeat(80)] } }],
+      },
+      essay_workspaces: {
+        kind: 'ok',
+        data: [{ updated_at: T2, reviews: [{ weakPoints: ['小'.repeat(80)] }] }],
+      },
+      interview_practice_records: {
+        kind: 'ok',
+        data: [
+          {
+            created_at: T1,
+            feedback_json: {
+              improvements: ['面'.repeat(100), '接'.repeat(100), '練'.repeat(100)],
+            },
+          },
+        ],
+      },
+    },
+  },
 ];
