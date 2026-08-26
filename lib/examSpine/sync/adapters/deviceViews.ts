@@ -384,7 +384,13 @@ export function deviceSelfAnalysisView(logs: readonly SelfAnalysisLog[]): ExamDe
 export function deviceStatementReviewView(
   items: readonly ReviewHistoryItem[],
 ): ExamDeviceViewResult {
-  return deviceListView(items, deviceStatementReviewItemView);
+  // server が読むのと同じ上位 N 件だけを見る（cap parity / E-S40）。
+  const windowed = selectDeviceSyncWindow(
+    items,
+    EXAM_READ_CAPS.statement_review,
+    (item) => item.createdAt,
+  );
+  return deviceListView(windowed, deviceStatementReviewItemView);
 }
 
 export function deviceSelfPrView(prs: readonly SelfPR[]): ExamDeviceViewResult {

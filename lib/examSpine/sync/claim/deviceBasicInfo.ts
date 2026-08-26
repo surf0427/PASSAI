@@ -20,6 +20,7 @@ import type { BasicInfo } from '@/types/basicInfo';
 import type { DiagnosisResult } from '@/lib/diagnosisStorage';
 import type { ActivityData } from '@/types/activity';
 import type { SelfAnalysisLog } from '@/types/selfAnalysisLog';
+import type { ReviewHistoryItem } from '@/lib/statement/review/statementStorage';
 
 import { buildDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaim } from '../adapters/deviceSources';
@@ -131,6 +132,28 @@ export function deviceSelfAnalysisToken(
 }
 
 /**
+ * device canonical の志望理由書レビュー履歴 → claim token（canonical projection へ委譲）。
+ *
+ * ★ Stage 5.6 で追加（G8）★
+ *   history kind なので window 選択（server の read cap と同じ上位 N 件）も
+ *   canonical view（`deviceStatementReviewView`）が持つ。
+ *
+ * ⚠️ mirror gap（既知 / 今回は直さない）:
+ *   削除と 10 件 cap の eviction が server へ伝播しない
+ *   （`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G3 / G4）。
+ *   device が消した添削も server に残るため、その端末では正当に mismatch になる。
+ */
+export function deviceStatementReviewToken(
+  items: readonly ReviewHistoryItem[] | null | undefined,
+): string | null {
+  const claim = buildDeviceClaim(
+    'statement_review',
+    items && items.length > 0 ? { state: 'present', value: items } : { state: 'absent' },
+  );
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
+}
+
+/**
  * pilot（tutor）の claim entry を組み立てる。
  *
  * ★ 載せる kind は purpose の移行状況で決める ★
@@ -144,6 +167,7 @@ export function buildTutorDeviceClaimEntries(
   diagnosis?: DiagnosisResult | null,
   activity?: ActivityData | null,
   selfAnalysisLogs?: readonly SelfAnalysisLog[] | null,
+  statementReviews?: readonly ReviewHistoryItem[] | null,
 ): readonly ExamDeviceClaimEntry[] {
   // ★ 宣言順を固定する ★
   //   偶然の object 順序に依存させない。kind ごとに独立した token なので
@@ -157,5 +181,7 @@ export function buildTutorDeviceClaimEntries(
   if (activityToken) entries.push({ kind: 'activity', token: activityToken });
   const selfAnalysisToken = deviceSelfAnalysisToken(selfAnalysisLogs);
   if (selfAnalysisToken) entries.push({ kind: 'self_analysis', token: selfAnalysisToken });
+  const statementReviewToken = deviceStatementReviewToken(statementReviews);
+  if (statementReviewToken) entries.push({ kind: 'statement_review', token: statementReviewToken });
   return entries;
 }
