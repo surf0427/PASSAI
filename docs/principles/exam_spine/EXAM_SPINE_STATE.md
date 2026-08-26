@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `S5-P2 lineage convergence 時点の tip`（記録: `exam-spine-s5p2-lineage-convergence`。前回記録は `90fff84`） |
+| Canonical HEAD at this arbitration | `6b1a755b2675dea8c1b42614ce5f509810bb40f1`（S5-P2 の lineage convergence は `exam-spine-s5p2-lineage-convergence` でこの HEAD を取り込み済み） |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,7 +49,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `3285d55`（継続前進中） | **NON_CANONICAL_STAGE5_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1（shadow comparison / Packet J 相当）と Stage 5.2（canonical diagnosis block）を追加した |
+| `exam-spine-w1-convergence-v2` | `bc8b6c2`（継続前進中） | **PARTIAL（Packet J のみ昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で canonical へ targeted cherry-pick 済み（`1f05b74`／decision は **E-S42 / E-S43** へ再採番）。残る Stage 5.2〜5.5（diagnosis block / activity block / self-analysis claim / history window。計 19 commit）は **未昇格**で、consumer migration の前提作業として後続 packet で判断する |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `fb32d50` | **PROMOTED（S5-P2 で昇格済み）** | code commit `ac1ef85` を cherry-pick で canonical へ取り込み、**E-S42**（人間裁定 / E-H7 = OPTION C）として登録した。`E-S39` Decision 2 を supersede する |

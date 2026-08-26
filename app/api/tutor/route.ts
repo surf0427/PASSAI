@@ -59,6 +59,8 @@ import {
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.server';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
+import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
+import type { BasicInfo } from '@/types/basicInfo';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import { captureRouteException } from '@/lib/sentry/capture';
@@ -338,23 +340,13 @@ export async function POST(req: Request): Promise<Response> {
   //   env で明示的に許可された purpose × userId のときだけ canonical context を
   //   組み立てる。OFF（既定）では **1 query も増えない**。
   //   read + assemble のみで、AI 呼び出し / DB 書き込み / response 変更はしない。
-  const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
-  if (shadowEnabled) {
-    const tShadow = lat.now();
-    try {
-      await buildCanonicalExamContext({
-        request: req,
-        purpose: 'tutor',
-        authorize: async () => ({ ok: true, userId }),
-        bridge: {},
-        deviceClaims,
-        client: auth.supabase,
-      });
-    } catch {
-      // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
-    }
-    lat.record('spineShadow_ms', tShadow);
-  }
+  //
+  // ★ Stage 5.1: bridge は実値を渡す ★
+  //   Stage 5.0 では `{}` を渡していたため canonical 側が常に空だった。
+  //   canonical contract 上 bridge fallback が認められている値だけを渡す:
+  //     basicInfo    … server payload に氏名が無いため bridge が保持する（E-P8）
+  //     tutorSources … Stage 2 の tutor_student_context block の入力（body 由来）
+  //   legacy context 全体を bridge 化しない（intent 別の作業材料は渡さない）。
 
   // ── intent / preferredProfileField 正規化 ──
   // 純粋・DB 不要なので並列ブロックの前に確定させる（context builder が intent を使うため）。
@@ -432,6 +424,70 @@ export async function POST(req: Request): Promise<Response> {
     },
   });
   const systemBlocks = composed.systemBlocks;
+
+  let shadowOverall: string | undefined;
+  let shadowMismatchCount: number | undefined;
+  const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
+  if (shadowEnabled) {
+    const tShadow = lat.now();
+    try {
+      const shadowBridge = {
+        // body は unknown 由来。canonical 側の shape guard に委ねるため型を明示する
+        // （assembler は BasicInfo を要求し、値の妥当性は projection 側で検査される）。
+        basicInfo: (body.basicInfo ?? null) as BasicInfo | null,
+        tutorSources: {
+          basicInfo: body.basicInfo ?? null,
+          studentProfile: body.studentProfile ?? null,
+          statementReviewLatest: body.statementReviewLatest ?? null,
+          activityData: body.activityData ?? null,
+          essayReviewLatest: body.essayReviewLatest ?? null,
+          interviewRecordLatest: body.interviewRecordLatest ?? null,
+          interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+          mypageSummary: body.mypageSummary ?? null,
+        },
+      };
+
+      const shadow = await buildCanonicalExamContext({
+        request: req,
+        purpose: 'tutor',
+        authorize: async () => ({ ok: true, userId }),
+        bridge: shadowBridge,
+        deviceClaims,
+        client: auth.supabase,
+      });
+
+      if (shadow.ok) {
+        // ★ 比較は純関数。追加 query を 1 本も出さない ★
+        //   結果は enum と hash だけで、raw 値も userId も含まない。
+        //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
+        const comparison = compareTutorShadow({
+          legacy: {
+            basicInfo: body.basicInfo ?? null,
+            activityData: body.activityData ?? null,
+            studentProfile: body.studentProfile ?? null,
+            statementReviewLatest: body.statementReviewLatest ?? null,
+            essayReviewLatest: body.essayReviewLatest ?? null,
+            interviewRecordLatest: body.interviewRecordLatest ?? null,
+            interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+            mypageSummary: body.mypageSummary ?? null,
+            statementDraft: body.statementDraft ?? null,
+            // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
+            diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
+            presentationLatest: contextResult.context.presentation ?? null,
+          },
+          canonicalInput: shadow.shadowResolvedInput,
+          context: shadow.context,
+        });
+        // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
+        lat.record('spineShadowCompare_ms', tShadow);
+        shadowOverall = comparison.overall;
+        shadowMismatchCount = comparison.mismatchCount;
+      }
+    } catch {
+      // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
+    }
+    lat.record('spineShadow_ms', tShadow);
+  }
 
   // ── user prompt 合成 ──
   // なぜ userPrompt 末尾に intent=advice を載せるのか:
@@ -602,6 +658,10 @@ export async function POST(req: Request): Promise<Response> {
   lat.flush({
     phase: 'success',
     intent,
+    // ★ Stage 5.1 shadow の観測（enum と件数のみ / E-S12・E-S13）★
+    //   shadow OFF のときは undefined になり、既存 log の形は変わらない。
+    ...(shadowOverall === undefined ? {} : { spineShadowOverall: shadowOverall }),
+    ...(shadowMismatchCount === undefined ? {} : { spineShadowMismatches: shadowMismatchCount }),
     contextCache: contextResult.cacheHit ? 'hit' : 'miss',
     systemBlocks: systemBlocks.length,
     replyChars: reply.length,

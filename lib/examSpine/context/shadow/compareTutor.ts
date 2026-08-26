@@ -1,0 +1,356 @@
+// PASSAI 受験版 Exam Spine — Stage 5.1 tutor shadow comparison（純関数）。
+//
+// legacy tutor context（body 由来）と Canonical Exam Context を **意味単位**で比較する。
+//
+// ★ prompt 文字列を丸ごと比較しない ★
+//   legacy の 1 本の string と canonical の block を string 比較すると、
+//   「どの source が原因で違うのか」が復元できず migration の判断に使えない。
+//   したがって covered 4 kind について field 単位で比較する。
+//
+// ★ compare engine は observer であって authority ではない ★
+//   ここは read も write もしない。渡された 2 つの出力を比較するだけの純関数で、
+//   purpose を広げることも source を verified にすることもできない（§34）。
+//   **追加 DB query を 1 本も発行しない。**
+//
+// ★ raw user content を持ち出さない ★
+//   比較は「正規化 → fingerprint → 突き合わせ」で行い、entry には hash と長さしか残さない。
+//   hash は sync core の `examFingerprint` を再利用する（並行 hash utility を作らない / §14）。
+
+import { examFingerprint } from '../../sync/fingerprint';
+import type { ExamFingerprint } from '../../sync/fingerprint';
+import type { ExamSourceKind } from '../../sourceData/types';
+import type { ExamContextOrigin } from '../../types';
+import type { CanonicalExamContext, ExamSourceProvenance } from '../types';
+import {
+  EXAM_SHADOW_COMPARISON_VERSION,
+  type ExamMigrationReadiness,
+  type ExamShadowComparison,
+  type ExamShadowDiffEntry,
+  type ExamShadowDiffKind,
+  type ExamShadowOmissionReason,
+  type ExamShadowOverall,
+  type ExamSourceReadinessEntry,
+} from './types';
+
+/**
+ * legacy 側から比較のために取り出した値。
+ *
+ * ★ route が持っている bridge 値そのものを渡す ★
+ *   legacy formatter の出力文字列ではなく、**formatter に入る前の値**を比較する。
+ *   文字列を比較すると legacy の見出し・区切りといった表現の差が
+ *   意味の差に化けてしまう（§12 の normalization 方針）。
+ */
+export type TutorLegacyInput = {
+  readonly basicInfo?: unknown;
+  readonly activityData?: unknown;
+  readonly studentProfile?: unknown;
+  readonly statementReviewLatest?: unknown;
+  /** 以下は canonical block coverage 外。存在の記録だけ行う。 */
+  readonly essayReviewLatest?: unknown;
+  /**
+   * legacy の Supabase 層（tutorContext.ts）が prompt へ出している値。
+   * body 由来ではないので、route が `contextResult.context` から渡す。
+   */
+  readonly diagnosisTypeHint?: unknown;
+  readonly presentationLatest?: unknown;
+  readonly interviewRecordLatest?: unknown;
+  readonly interviewFeedbackLatest?: unknown;
+  readonly mypageSummary?: unknown;
+  readonly statementDraft?: unknown;
+};
+
+// ── 正規化（semantic normalization / §12）────────────────────────────
+//
+// ★ 差分を隠しすぎない ★
+//   全 whitespace 削除・全文 lowercase・雑な JSON.stringify 比較はしない。
+//   null と '' の同一視、配列順の扱いなど **field ごとに意味で決める**。
+
+/** null / undefined / '' を「値なし」に揃える。0 や false は値として残す。 */
+function present(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as object).length > 0;
+  return true;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+/** string[] を正規化（trim / 空除去）。**順序は保つ**（順序が意味を持つ場合があるため）。 */
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => (typeof v === 'string' ? v.trim() : '')).filter((v) => v !== '');
+}
+
+/** 志望校の正規化。faculty/department の null と '' を同一視する。 */
+function preferences(value: unknown): Array<{ u: string; f: string; d: string }> {
+  if (!Array.isArray(value)) return [];
+  const out: Array<{ u: string; f: string; d: string }> = [];
+  for (const item of value) {
+    const rec = record(item);
+    if (!rec) continue;
+    const u = text(rec.university);
+    if (u === '') continue;
+    out.push({ u, f: text(rec.faculty), d: text(rec.department) });
+  }
+  return out;
+}
+
+/** 活動データ → カテゴリ別件数。カテゴリ名を固定しない（10 カテゴリ問題）。 */
+function activityCounts(value: unknown): Record<string, number> {
+  const rec = record(value);
+  if (!rec) return {};
+  const out: Record<string, number> = {};
+  for (const [key, v] of Object.entries(rec)) {
+    if (Array.isArray(v) && v.length > 0) out[key] = v.length;
+  }
+  return out;
+}
+
+function fingerprintOf(value: unknown): ExamFingerprint | null {
+  return present(value) ? examFingerprint(value) : null;
+}
+
+function charsOf(value: unknown): number {
+  if (!present(value)) return 0;
+  return JSON.stringify(value)?.length ?? 0;
+}
+
+// ── entry 構築 ────────────────────────────────────────────────────────
+
+type CompareArgs = {
+  readonly field: string;
+  readonly kind: ExamSourceKind | null;
+  readonly legacy: unknown;
+  readonly canonical: unknown;
+  readonly provenance: ExamSourceProvenance | null;
+  /** 意図的除外なら理由を渡す。渡すとその時点で INTENTIONALLY_OMITTED になる。 */
+  readonly omitted?: ExamShadowOmissionReason;
+};
+
+function compareField(args: CompareArgs): ExamShadowDiffEntry {
+  const base = {
+    field: args.field,
+    kind: args.kind,
+    legacyFingerprint: fingerprintOf(args.legacy),
+    canonicalFingerprint: fingerprintOf(args.canonical),
+    legacyChars: charsOf(args.legacy),
+    canonicalChars: charsOf(args.canonical),
+    canonicalState: args.provenance?.state ?? null,
+    canonicalOrigin: args.provenance?.origin ?? null,
+    syncStatus: args.provenance?.syncStatus ?? null,
+  };
+
+  if (args.omitted) {
+    return { ...base, diff: 'INTENTIONALLY_OMITTED', reason: args.omitted };
+  }
+
+  const hasLegacy = present(args.legacy);
+  const hasCanonical = present(args.canonical);
+
+  // canonical source が使える状態でないなら、値の比較は成立しない。
+  // 「legacy に値があるのに canonical が unverified」を VALUE_MISMATCH と呼ばない。
+  const state = args.provenance?.state ?? null;
+  if (state !== null && state !== 'available' && state !== 'empty') {
+    return { ...base, diff: 'STATUS_MISMATCH', reason: null };
+  }
+
+  if (!hasLegacy && !hasCanonical) {
+    // 双方に値が無い。差分ではないので MATCH として数える（空同士の一致）。
+    return { ...base, diff: 'MATCH', reason: null };
+  }
+  if (hasLegacy && !hasCanonical) {
+    return { ...base, diff: 'MISSING_CANONICAL', reason: null };
+  }
+  if (!hasLegacy && hasCanonical) {
+    return { ...base, diff: 'EXTRA_CANONICAL', reason: null };
+  }
+
+  if (base.legacyFingerprint !== base.canonicalFingerprint) {
+    return { ...base, diff: 'VALUE_MISMATCH', reason: null };
+  }
+
+  // 値は一致。origin が server でなければ「canonical が bridge を使っただけ」。
+  if (args.provenance && args.provenance.origin !== 'server') {
+    return { ...base, diff: 'ORIGIN_MISMATCH', reason: null };
+  }
+  return { ...base, diff: 'MATCH', reason: null };
+}
+
+// ── canonical 側の値の取り出し ────────────────────────────────────────
+//
+// ★ canonical context は sources に生値を持たない（E-S29）★
+//   したがって比較用の canonical 値は **assembler へ渡した解決済み入力**から取る。
+//   ここでは呼び出し側が渡す `resolvedInput` を使う（route が assembler に渡したものと同一）。
+
+export type TutorCanonicalInput = {
+  readonly basicInfo?: unknown;
+  readonly activityData?: unknown;
+  readonly wallHittingResult?: unknown;
+  readonly studentProfile?: unknown;
+  readonly previousOutputSummary?: unknown;
+};
+
+// ── entry point ───────────────────────────────────────────────────────
+
+export function compareTutorShadow(input: {
+  readonly legacy: TutorLegacyInput;
+  readonly canonicalInput: TutorCanonicalInput;
+  readonly context: CanonicalExamContext;
+}): ExamShadowComparison {
+  const bySource = new Map<ExamSourceKind, ExamSourceProvenance>();
+  for (const s of input.context.sources) bySource.set(s.kind, s);
+  const prov = (k: ExamSourceKind): ExamSourceProvenance | null => bySource.get(k) ?? null;
+
+  const legacyBasic = record(input.legacy.basicInfo);
+  const canonicalBasic = record(input.canonicalInput.basicInfo);
+  const legacyProfile = record(input.legacy.studentProfile);
+  const canonicalProfile =
+    record(input.canonicalInput.studentProfile) ?? record(input.canonicalInput.wallHittingResult);
+  const legacyStatement = record(input.legacy.statementReviewLatest);
+  const canonicalStatement = record(input.canonicalInput.previousOutputSummary);
+
+  const entries: ExamShadowDiffEntry[] = [
+    // ── basic_info ───────────────────────────────────────────────
+    compareField({ field: 'basic_info.grade', kind: 'basic_info',
+      legacy: text(legacyBasic?.grade), canonical: text(canonicalBasic?.grade), provenance: prov('basic_info') }),
+    compareField({ field: 'basic_info.track', kind: 'basic_info',
+      legacy: text(legacyBasic?.track), canonical: text(canonicalBasic?.track), provenance: prov('basic_info') }),
+    compareField({ field: 'basic_info.examTypes', kind: 'basic_info',
+      legacy: stringList(legacyBasic?.examTypes), canonical: stringList(canonicalBasic?.examTypes), provenance: prov('basic_info') }),
+    compareField({ field: 'basic_info.preferences', kind: 'basic_info',
+      legacy: preferences(legacyBasic?.preferences), canonical: preferences(canonicalBasic?.preferences), provenance: prov('basic_info') }),
+    // 氏名は server payload に存在しない。bridge が保持する契約（E-P8）。
+    compareField({ field: 'basic_info.name', kind: 'basic_info',
+      legacy: text(legacyBasic?.name), canonical: null, provenance: prov('basic_info'),
+      omitted: 'pii_excluded' }),
+
+    // ── activity ─────────────────────────────────────────────────
+    compareField({ field: 'activity.categoryCounts', kind: 'activity',
+      legacy: activityCounts(input.legacy.activityData), canonical: activityCounts(input.canonicalInput.activityData), provenance: prov('activity') }),
+
+    // ── self_analysis ────────────────────────────────────────────
+    compareField({ field: 'self_analysis.summary', kind: 'self_analysis',
+      legacy: text(legacyProfile?.summary), canonical: text(canonicalProfile?.summary), provenance: prov('self_analysis') }),
+    compareField({ field: 'self_analysis.strengths', kind: 'self_analysis',
+      legacy: stringList(legacyProfile?.strengths), canonical: stringList(canonicalProfile?.strengths), provenance: prov('self_analysis') }),
+    compareField({ field: 'self_analysis.weaknesses', kind: 'self_analysis',
+      legacy: stringList(legacyProfile?.weaknesses), canonical: stringList(canonicalProfile?.weaknesses), provenance: prov('self_analysis') }),
+
+    // ── statement_review ─────────────────────────────────────────
+    //   legacy は「直近 1 件の weaknesses」、canonical は履歴からの反復論点要約。
+    //   材料が違うので値一致は期待しない。差分として正しく現れることを見る。
+    compareField({ field: 'statement_review.repeatedAdvice', kind: 'statement_review',
+      legacy: stringList(record(legacyStatement?.result)?.weaknesses ?? legacyStatement?.weaknesses),
+      canonical: stringList(canonicalStatement?.repeatedAdvice), provenance: prov('statement_review') }),
+    // 志望理由書の本文は canonical に載せない（E-P5）。
+    compareField({ field: 'statement_review.essayBody', kind: 'statement_review',
+      legacy: text(legacyStatement?.essay), canonical: null, provenance: prov('statement_review'),
+      omitted: 'raw_body_excluded' }),
+
+    // ── legacy の Supabase 層（lib/contextBuilders/tutorContext.ts）由来 ──────
+    //   ★ この 3 kind は body ではなく **legacy 側の server read** から prompt に入る ★
+    //     buildTutorSupabaseContextSection が diagnosis.typeHint /
+    //     interviewAi / presentation を section に出している。
+    //     canonical 側には対応する Stage 2 block がまだ無いため、
+    //     Tutor を canonical へ移すとこれらが prompt から落ちる。
+    //     = consumer migration の実 blocker であることを明示的に記録する。
+    compareField({ field: 'diagnosis.typeHint', kind: 'diagnosis',
+      legacy: input.legacy.diagnosisTypeHint, canonical: null, provenance: prov('diagnosis'),
+      omitted: 'no_canonical_block' }),
+    compareField({ field: 'presentation.latest', kind: 'presentation',
+      legacy: input.legacy.presentationLatest, canonical: null, provenance: prov('presentation'),
+      omitted: 'no_canonical_block' }),
+
+    // ── canonical block coverage 外（Stage 2 未対応 kind）──────────
+    compareField({ field: 'essay.reviewLatest', kind: 'essay',
+      legacy: input.legacy.essayReviewLatest, canonical: null, provenance: prov('essay'),
+      omitted: 'no_canonical_block' }),
+    compareField({ field: 'interview_record.latest', kind: 'interview_record',
+      legacy: input.legacy.interviewRecordLatest, canonical: null, provenance: prov('interview_record'),
+      omitted: 'no_canonical_block' }),
+    compareField({ field: 'interview_ai.feedbackLatest', kind: 'interview_ai',
+      legacy: input.legacy.interviewFeedbackLatest, canonical: null, provenance: prov('interview_ai'),
+      omitted: 'no_canonical_block' }),
+
+    // ── legacy 専用（canonical source を持たない）────────────────
+    compareField({ field: 'legacy.mypageSummary', kind: null,
+      legacy: input.legacy.mypageSummary, canonical: null, provenance: null,
+      omitted: 'legacy_only_metadata' }),
+    compareField({ field: 'legacy.statementDraft', kind: null,
+      legacy: input.legacy.statementDraft, canonical: null, provenance: null,
+      omitted: 'not_server_capable' }),
+  ];
+
+  return summarize(input.context, entries);
+}
+
+// ── 集計 / readiness ──────────────────────────────────────────────────
+
+const COVERED_KINDS: readonly ExamSourceKind[] = [
+  'basic_info',
+  'activity',
+  'self_analysis',
+  'statement_review',
+];
+
+function summarize(
+  context: CanonicalExamContext,
+  entries: readonly ExamShadowDiffEntry[],
+): ExamShadowComparison {
+  const comparable = entries.filter(
+    (e) => e.diff !== 'INTENTIONALLY_OMITTED' && e.diff !== 'UNCOMPARABLE',
+  );
+  const matchCount = comparable.filter((e) => e.diff === 'MATCH').length;
+  const mismatchCount = comparable.length - matchCount;
+  const intentional = entries.length - comparable.length;
+
+  let overall: ExamShadowOverall;
+  if (comparable.length === 0) overall = 'insufficient_evidence';
+  else if (mismatchCount === 0) overall = intentional > 0 ? 'compatible_with_omissions' : 'equivalent';
+  else overall = 'not_equivalent';
+
+  const bySource = new Map<ExamSourceKind, ExamSourceProvenance>();
+  for (const s of context.sources) bySource.set(s.kind, s);
+
+  const readiness: ExamSourceReadinessEntry[] = COVERED_KINDS.map((kind) => {
+    const p = bySource.get(kind);
+    const kindEntries = comparable.filter((e) => e.kind === kind);
+    const blocking = [...new Set(kindEntries.filter((e) => e.diff !== 'MATCH').map((e) => e.diff))];
+    return {
+      kind,
+      readiness: readinessOf(blocking),
+      blockingDiffs: blocking,
+      canonicalState: p?.state ?? 'unsupported',
+      canonicalOrigin: (p?.origin ?? 'bridge') as ExamContextOrigin,
+    };
+  });
+
+  return {
+    version: EXAM_SHADOW_COMPARISON_VERSION,
+    purpose: context.purpose,
+    overall,
+    comparableCount: comparable.length,
+    matchCount,
+    mismatchCount,
+    intentionalOmissionCount: intentional,
+    entries,
+    readiness,
+    inputBytes: JSON.stringify(entries).length,
+  };
+}
+
+function readinessOf(blocking: readonly ExamShadowDiffKind[]): ExamMigrationReadiness {
+  if (blocking.length === 0) return 'READY';
+  // Source-Sync がまだ通電していない / block 未実装は「作業待ち」であって不可ではない。
+  if (blocking.every((d) => d === 'STATUS_MISMATCH' || d === 'ORIGIN_MISMATCH')) return 'DEFERRED';
+  if (blocking.includes('UNCOMPARABLE')) return 'DEFERRED';
+  return 'NOT_READY';
+}

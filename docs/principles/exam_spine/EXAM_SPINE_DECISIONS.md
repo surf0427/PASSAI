@@ -888,11 +888,11 @@ Exam-specific differences / Rollback implications
 
 ## E-S39 — device claim の request transport は 1 本だけとし、`signal.ts` を transport にしない
 
-- **Status:** `SUPERSEDED_IN_PART`（2026-08-26。**人間の裁定**により Decision 2 を `E-S42` が置換）
-- **★ 置換された範囲（`E-S42` を正本とする）★**
+- **Status:** `SUPERSEDED_IN_PART`（2026-08-26。**人間の裁定**により Decision 2 を `E-S44` が置換）
+- **★ 置換された範囲（`E-S44` を正本とする）★**
   ```text
   旧 Decision 2  signal.ts は transport ではない。内部 codec / verdict 入力として維持する。
-  新（E-S42）    signal.ts は transport codec としても廃止する。
+  新（E-S44）    signal.ts は transport codec としても廃止する。
                  runtime serialization / parsing authority を持ってはならない。
                  必要なら type-only module としてのみ維持してよい。
   ```
@@ -929,8 +929,8 @@ Exam-specific differences / Rollback implications
 
   2. 〔SUPERSEDED by E-S42〕sync/signal.ts は **transport ではない**。
      内部 codec / verdict 入力として維持する。verdict / enable の semantics は有用なので削除しない。
-     → E-S42 により「transport codec としても廃止。type-only なら可」へ置換。
-       verdict / enable の semantics は E-S42 の実装で **失われていない**
+     → E-S44 により「transport codec としても廃止。type-only なら可」へ置換。
+       verdict / enable の semantics は E-S44 の実装で **失われていない**
        （verdict の入力を transport 非依存 interface へ narrow したため）。
 
   3. signal.ts に header 定数・`Headers` 依存・request 束縛を **追加してはならない**。
@@ -1065,11 +1065,75 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** `essay` を map へ戻せば 2 段目の veto が復活する。
   consumer 側の変更が無いため rollback による挙動変化も無い。
 
+## E-S42 — shadow comparison は observer であり、enum と hash しか持たない
+
+- **Status:** `LOCKED`（Stage 5 / S5-P3 で Packet J とともに昇格）
+- **由来:** `exam-spine-w1-convergence-v2` が branch-local に `E-S36` として持っていた内容を、
+  E-S38 の手続きに従い canonical の未使用 ID へ**再採番**して登録する
+  （branch-local ID は持ち込まない）。
+- **Decision:** legacy consumer の出力と Canonical Exam Context の比較を
+  `lib/examSpine/context/shadow/compareTutor.ts`（純関数）で行い、
+  結果を `ExamShadowComparison`（`context/shadow/types.ts`）として返す。
+  比較器は **read も write もしない**。渡された 2 つの出力を突き合わせるだけで、
+  purpose を広げることも source を verified にすることもできない。
+  ```text
+  diff kind  MATCH / MISSING_CANONICAL / EXTRA_CANONICAL / VALUE_MISMATCH /
+             ORIGIN_MISMATCH / STATUS_MISMATCH / INTENTIONALLY_OMITTED / UNCOMPARABLE
+  overall    equivalent / compatible_with_omissions / not_equivalent / insufficient_evidence
+  readiness  READY / NOT_READY / DEFERRED / INTENTIONALLY_LEGACY（source 単位）
+  ```
+- **★ 差分ゼロを目的にしない ★** Canonical Spine は legacy の複製ではない。
+  意図的な省略（`INTENTIONALLY_OMITTED`）と不一致（`VALUE_MISMATCH`）を型で分ける。
+- **観測に出せる値:** enum と件数、および内容比較用の hash のみ。
+  本文 / fingerprint 値 / userId / UUID を出さない（E-S12 / E-S13）。
+- **Implementation evidence:** `lib/examSpine/context/shadow/{types,compareTutor}.ts`。
+  QA は `scripts/exam-spine-stage5-1-check.ts`（compare engine の purity: DB 動詞 0 /
+  AI SDK 0 / `Date` `Math.random` 0）。
+- **Failure semantics:** 比較の失敗は観測の欠落であって consumer の失敗ではない（E-S1）。
+- **Stage:** Stage 5（observability。consumer 切替を含まない）。
+- **Rollback implications:** なし（純関数 + 観測）。
+
+## E-S43 — shadow の結果と canonical の値を consumer 経路へ渡さない
+
+- **Status:** `LOCKED`（Stage 5 / S5-P3 で Packet J とともに昇格）
+- **由来:** `exam-spine-w1-convergence-v2` の branch-local `E-S37` を再採番して登録
+  （E-S38。branch-local ID は持ち込まない）。
+- **Decision:** shadow 実行は既存の default deny gate（E-S11 / `isExamSpineShadowEnabled`）の
+  背後でのみ動き、次を **consumer 経路へ渡さない**。
+  ```text
+  ExamShadowComparison / CanonicalExamContext / shadowResolvedInput
+    ↛ prompt builder / systemBlocks / messages / AI request / response
+  ```
+  `shadowResolvedInput` は assembler が返す **shadow 専用の副産物**であり、
+  `CanonicalExamContext` の一部ではない（context は生値を持たない / E-S29）。
+  shadow ブロックから外へ出てよいのは **観測用の enum と件数だけ**である。
+- **失敗は consumer を巻き込まない:** canonical read 失敗 / claim mismatch / 比較例外 /
+  正規化失敗 / fingerprint 失敗のいずれでも `/api/tutor` は 500 にならず、
+  legacy consumer がそのまま応答する（E-S1）。
+- **★ これは consumer switch ではない ★** 本 Decision は shadow を **観測に留める**
+  ための禁止であり、Stage 5 の最初の切替対象は **E-S40 のまま tutor の `basic_info` slot** である。
+- **Implementation evidence:** `app/api/tutor/route.ts`（gate 済み shadow ブロック。
+  脱出するのは `shadowOverall: string | undefined` と `shadowMismatchCount: number | undefined` のみ）。
+- **QA（2 層で検査する）:**
+  ```text
+  scripts/exam-spine-stage5-1-check.ts   prompt / systemBlocks 近傍に comparison と
+                                         shadowResolvedInput が現れないこと（近接検査）、
+                                         prompt builder が shadow を import しないこと
+  scripts/exam-spine-sync-signal-check.ts shadow ブロックが prompt 組み立てより前にあること、
+                                         prompt 以降に shadow 由来の識別子が現れないこと、
+                                         観測値が enum / 件数として宣言されていること
+  ```
+  ⚠️ Stage 5.0 期の proxy 検査「shadow の戻り値を変数へ束縛していない」は
+  **本 Decision で置き換えた**。比較には束縛が必要であり、束縛の有無は本来の不変条件ではない。
+  本来の不変条件は「shadow 由来の値が consumer 経路へ出ないこと」であり、上記 2 層がそれを直接検査する。
+- **Stage:** Stage 5（observability）。
+- **Rollback implications:** gate env を落とせば shadow ごと止まる。consumer 挙動は不変。
+
 ---
 
 # 5. Policy / persistence decisions
 
-## E-S42 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+## E-S44 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
 
 - **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
 - **HUMAN RULING（本 decision の権威）:**

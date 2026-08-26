@@ -72,11 +72,34 @@ check(
 // ── 2. Stage 5.1 / 5.2 の work が混入していない ───────────────────
 //   A branch（exam-spine-w1-convergence-v2）固有の shadow comparison は
 //   Stage 4 canonical に含まれない（arbitration / E-S38）。
-const shadowLeak = spineFiles.filter((f) => f.startsWith('lib/examSpine/context/shadow/'));
+// E-S34 の pilot allowlist（canonical namespace へ接続してよい production file）。
+const E_S34_PILOT_ALLOWLIST = ['app/api/tutor/route.ts', 'app/tutor/page.tsx'];
+
+// ★ S5-P2 lineage convergence で retarget ★
+//   本 check は Packet E 執筆時点で Stage 5.1 shadow comparison が **canonical ではなかった**
+//   ため「混入していないこと」を要求していた。その後 Packet J が canonical へ昇格し
+//   （E-S42 / E-S43）、shadow module は canonical namespace の正規メンバーになった。
+//   守るべき不変条件は「shadow が存在しないこと」ではなく
+//   **shadow が dormant であること**（production から直接 import されないこと）である。
+const shadowFiles = spineFiles.filter((f) => f.startsWith('lib/examSpine/context/shadow/'));
 check(
-  'Stage 5.1 shadow comparison が混入していない',
-  shadowLeak.length === 0,
-  shadowLeak.join(', '),
+  'shadow comparison module が canonical に存在する（E-S42 / E-S43）',
+  shadowFiles.length > 0,
+  shadowFiles.join(', '),
+);
+const shadowProdImporters: string[] = [];
+for (const dir of ['app', 'components', 'hooks', 'lib']) {
+  for (const file of walk(join(ROOT, dir))) {
+    const rel = relative(ROOT, file);
+    if (rel.startsWith('lib/examSpine/')) continue;
+    if (!/\.(ts|tsx)$/.test(rel)) continue;
+    if (/examSpine\/context\/shadow/.test(readFileSync(file, 'utf8'))) shadowProdImporters.push(rel);
+  }
+}
+check(
+  'shadow comparison の production importer は E-S34 の pilot allowlist だけ',
+  shadowProdImporters.every((f) => E_S34_PILOT_ALLOWLIST.includes(f)),
+  shadowProdImporters.join(', '),
 );
 
 // ── 2b. relocation が巻き戻っていないこと（E-S24 / Packet E の核心）───
@@ -109,7 +132,6 @@ check(
 //   守るべき不変条件は「importer が 0」ではなく **登録済み allowlist 以外が接続しないこと**。
 //   したがって allowlist を E-S34 の pilot 2 file に固定し、それ以外を落とす。
 //   （接続が transport 止まりであることは stage5 / syncSignal QA が behavioral に検査する）
-const E_S34_PILOT_ALLOWLIST = ['app/api/tutor/route.ts', 'app/tutor/page.tsx'];
 const PROD_DIRS = ['app', 'components', 'hooks', 'lib'];
 const prodImporters: string[] = [];
 for (const dir of PROD_DIRS) {

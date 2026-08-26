@@ -793,11 +793,63 @@ function staticBoundaries(): void {
   // ★ transport 止まりであることの behavioral 検査（条件緩和ではない）★
   const routeSrc = readFileSync(join(REPO_ROOT, 'app/api/tutor/route.ts'), 'utf8');
 
-  //   1. shadow 組み立ての戻り値を **受け取らない**（= AI へ渡らない）。
-  //      `const x = await buildCanonicalExamContext` の形になっていたら FAIL。
-  check('shadow build の結果を変数へ束縛していない（結果は破棄）',
-    /(?:^|\n)\s*await buildCanonicalExamContext\(/.test(routeSrc) &&
-      !/=\s*await buildCanonicalExamContext\(/.test(routeSrc));
+  //   1. shadow 組み立ての結果が shadow ブロックの外へ出ないこと。
+  //
+  //      ★ retarget の理由（条件緩和ではない）★
+  //        Stage 5.0 では shadow の戻り値が本当に未使用だったため
+  //        「変数へ束縛していない」を proxy として検査していた。
+  //        Packet J（shadow comparison）は **比較のために戻り値を束縛する必要がある**。
+  //        束縛したかどうかは本来の不変条件ではなく、本来の不変条件は
+  //        「shadow 由来の値が consumer 経路へ出ないこと」である。
+  //        そこで proxy を捨て、**脱出面**を直接検査する形へ retarget した。
+  //        より強い近接検査（prompt 近傍に comparison / shadowResolvedInput が
+  //        現れないこと等）は scripts/exam-spine-stage5-1-check.ts が担当する。
+  //
+  //      脱出してよいのは観測用の enum と件数だけ（E-S12 / E-S13）。
+  //      ★ コメント行を除いた実コードだけを見る（見出しコメントに builder 名が出るため）。
+  const routeCode = routeSrc
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  //      ★ S5-P2 lineage convergence で layout 非依存へ retarget ★
+  //        canonical では shadow が prompt より **前**にあり、その前提で
+  //        「prompt 以降に leak が無いこと」を検査していた。Packet E の合流後、
+  //        route は `composeTutorPrompt(...)` に整理され shadow が prompt の **後**へ移った。
+  //        順序そのものは不変条件ではない。不変条件は「shadow 由来の値が prompt へ届かない」
+  //        ことなので、どちらの layout でも同じ強さで検査する形にする。
+  //      ★ import 行は「使用」ではないので region から外す ★
+  //        module を import しただけで leak にはならない。判定するのは関数本体だけ。
+  const lastImport = routeCode.lastIndexOf("' ;".replace(' ', '')) >= 0
+    ? routeCode.lastIndexOf('\nimport ')
+    : -1;
+  const bodyStart = lastImport >= 0
+    ? routeCode.indexOf('\n', routeCode.indexOf(';', lastImport)) + 1
+    : 0;
+  const body = routeCode.slice(bodyStart);
+  const shadowStart = body.indexOf('isExamSpineShadowEnabled(');
+  const promptStart = Math.max(
+    body.indexOf('= composeTutorPrompt('),
+    body.indexOf('= buildTutorUserPrompt('),
+  );
+  const SHADOW_LEAKS = ['shadowResolvedInput', 'compareTutorShadow', '.context.blocks'];
+  check('shadow gate と prompt 組み立ての両方が route に存在する',
+    shadowStart >= 0 && promptStart >= 0, `shadow=${shadowStart} prompt=${promptStart}`);
+  if (shadowStart >= 0 && promptStart >= 0) {
+    // shadow が prompt より前 → prompt 以降に leak が無いこと
+    // shadow が prompt より後 → prompt 到達前に leak が無いこと（より強い状態）
+    const region = shadowStart < promptStart
+      ? body.slice(promptStart)
+      : body.slice(0, promptStart);
+    const label = shadowStart < promptStart ? 'prompt 以降' : 'prompt 到達前';
+    for (const leaked of SHADOW_LEAKS) {
+      check(`${label}に ${leaked} が現れない`, !region.includes(leaked));
+    }
+  }
+  //      観測へ出る値は enum（string）と件数（number）に限る。
+  check('shadow の観測値は enum（string）として宣言されている',
+    /\bshadowOverall\s*:\s*string \| undefined/.test(routeCode));
+  check('shadow の観測値は件数（number）として宣言されている',
+    /\bshadowMismatchCount\s*:\s*number \| undefined/.test(routeCode));
 
   //   2. shadow は default deny gate の内側だけで動く。
   check('shadow 組み立ては canary gate の内側にある',
