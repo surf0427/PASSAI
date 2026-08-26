@@ -608,7 +608,9 @@ export default function TutorPage() {
     //   Stage 5.2: diagnosis も申告する（class 1 なので claim が無いと
     //   canonical block が生成されない / G1）。localStorage は読み取りのみ。
     const deviceClaimHeader = serializeDeviceClaim(
-      buildTutorDeviceClaimEntries(basicInfo, loadDiagnosisResult()),
+      //   Stage 5.3: activity も申告する（G6）。**device canonical の
+      //   ActivityData 本体**を渡す（body に載せている counts 射影ではない）。
+      buildTutorDeviceClaimEntries(basicInfo, loadDiagnosisResult(), loadActivityData()),
     );
 
     try {
