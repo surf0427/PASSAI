@@ -110,9 +110,46 @@ function r1Register(): void {
     headerBound.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     headerBound.join(', '),
   );
+  // ★ E-S42（human ruling / E-S39 を一部 supersede）★
+  //   「header に束縛されていない」だけでは足りない。header を持たない **wire codec** が
+  //   もう 1 本あるだけで、旧 client の hex を新 schema として誤解釈する経路が開く。
+  //   したがって「active な device-claim wire codec は sync/claim/** だけ」を検査する。
+  const wireCodecs = spineFiles
+    .filter((f) => {
+      const t = readFileSync(f, 'utf8');
+      // wire version 定数を宣言し、かつ serialize / parse を export する module
+      const declaresWireVersion = /_(?:CLAIM|SIGNAL)_VERSION\s*=\s*'/.test(t);
+      const exportsCodec = /export function (?:serialize|parse)[A-Za-z]*\s*\(/.test(t);
+      return declaresWireVersion && exportsCodec;
+    })
+    .map((f) => relative(ROOT, f))
+    .sort();
   check(
-    'sync/signal.ts は transport に束縛されていない',
-    !headerBound.includes('lib/examSpine/sync/signal.ts'),
+    'active な device-claim wire codec は sync/claim/** だけ（E-S42）',
+    wireCodecs.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
+    wireCodecs.join(', '),
+  );
+
+  // ★ 退役した wire format が active code に残っていないこと（E-S42）★
+  //   docs の歴史記述は許す。active code に残ることは許さない。
+  const retiredWire: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    const base = join(ROOT, dir);
+    if (!existsSync(base)) continue;
+    (function walk(d: string): void {
+      for (const name of readdirSync(d)) {
+        const full = join(d, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(full) && readFileSync(full, 'utf8').includes('esy1')) {
+          retiredWire.push(relative(ROOT, full));
+        }
+      }
+    })(base);
+  }
+  check(
+    'active code に退役 wire format（esy1）が 0 箇所（E-S42）',
+    retiredWire.length === 0,
+    retiredWire.join(', '),
   );
 
   // ★ Stage 5 の最初の切替対象が動いていないこと（E-S40）★
