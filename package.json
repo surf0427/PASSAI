@@ -20,6 +20,7 @@
     "qa:mirrors": "npx tsx scripts/mirror-server-write-qa.ts",
     "qa:examSpine:characterization": "npx tsx scripts/exam-spine-characterization.ts --check",
     "qa:examSpine:characterization:record": "npx tsx scripts/exam-spine-characterization.ts --record",
+    "qa:examSpine:stage1": "npx tsx scripts/exam-spine-stage1-check.ts",
     "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
   },
   "dependencies": {
