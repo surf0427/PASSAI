@@ -51,6 +51,8 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 |---|---|---|---|
 | `exam-spine-w1-convergence-v2` | `3285d55`（継続前進中） | **NON_CANONICAL_STAGE5_CANDIDATE** | Stage 4 stabilization freeze 後に Stage 5.1（shadow comparison / Packet J 相当）と Stage 5.2（canonical diagnosis block）を追加した |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
+| `exam-spine-w5-r5-evidence` | `398e7f4` | **REQUIRED_FOR_LATER_STAGE5** | R5（essay の jsonb sub-path）を production evidence で closing し、`EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` から essay を外す。**runtime code を含む**（`sync/adapters/registry.ts`）ため evidence-only ではない。最初の切替（tutor / basic_info・E-S40）には essay が関与しないので Stage 5 entry の blocker ではない |
+| `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
 
 ### Deferred Stage 5 candidate（成果は保全する）
 
@@ -91,6 +93,47 @@ canonical に入れない理由:
    この branch の E-S35 / E-S36 / E-S37 / E-S38 は
    **canonical decision ID ではない**（衝突は branch の前進のたびに増える）。
 ```
+
+### Stage 5 candidate DAG（`exam-spine-w1-convergence-v2` / 昇格していない）
+
+観測時点の unique commits は **3 波・13 commit**。各波が
+「単一 authority 化 → canonical block 追加 → device claim 追加 → QA → Register/STATE」
+という同じ形をしており、**波の内部は直列・波の間も直列**である。
+
+```text
+Stage 5.1  shadow comparison（Packet J 相当）
+  42cdf18  compare tutor legacy and canonical context in shadow
+  6d5eee5  verify tutor shadow migration readiness            ← 42cdf18 に依存
+  d7b1100  freeze stage 5.1 comparison contract               ← 上 2 件に依存
+      ↓（5.2 は compareTutor.ts を拡張するため 5.1 が前提）
+Stage 5.2  diagnosis block
+  4b30dfd  make the diagnosis hint table a single authority   ← 独立に port 可能
+  4ad3bd1  add canonical diagnosis block                      ← 4b30dfd + 42cdf18 に依存
+  b151190  claim device diagnosis                             ← 4ad3bd1 に依存
+  7a80aaa  verify diagnosis block migration semantics         ← 上に依存
+  3285d55  resolve tutor diagnosis migration gap              ← 上に依存
+      ↓（5.3 も compareTutor.ts を拡張するため 5.2 が前提）
+Stage 5.3  activity category counts block
+  6432b54  unify the activity category label map              ← 独立に port 可能
+  e02c60c  add canonical activity category counts block       ← 6432b54 + 42cdf18 に依存
+  4309244  add activity to tutor device claims                ← e02c60c に依存
+  501734b  verify activity claim sync semantics               ← 上に依存
+  8a5bd09  resolve tutor activity claim gap                   ← 上に依存
+```
+
+**独立に port 可能な commit（2 件のみ）:**
+`4b30dfd`（diagnosis hint table の単一 authority 化）と
+`6432b54`（activity category label map の統一）は
+`lib/examDiagnosis/tutorHints.ts` / `lib/activityCategories.ts` を新設して
+`tutorContext.ts` の重複を畳む refactor であり、canonical block にも
+shadow comparison にも依存しない。
+
+**それ以外はすべて `42cdf18`（shadow comparison）に連鎖する。**
+したがって「5.1 だけ捨てて 5.2 を採る」はできない。
+
+⚠️ この branch の decision ID は **E-S35〜E-S39** を branch-local に使っている。
+canonical はすでに E-S35〜E-S40 を別の意味で確定済み（E-S38）。
+昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule
 

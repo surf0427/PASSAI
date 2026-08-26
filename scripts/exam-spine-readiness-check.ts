@@ -84,6 +84,37 @@ function r1Register(): void {
   // ★ canonical branch / HEAD の宣言が STATE に存在すること（E-S38）★
   //   Packet worker が「どの HEAD が canonical か」を推測せず解決できる状態を機械で守る。
   //   宣言が消えると canonical の所在が再び不明になるため FAIL にする。
+  // ★ device claim の request transport は 1 本だけ（E-S39 / E-H7 の解決）★
+  //   canonical namespace で HTTP header に束縛してよい device-claim module は
+  //   sync/claim/** だけである。signal.ts へ header 定数 / Headers 依存を足すと
+  //   wire format が 2 本になり、旧 client の hex を新 schema として誤解釈する
+  //   経路（false-positive verified）が開く。構造的に禁止する。
+  const spineFiles: string[] = [];
+  (function collect(dir: string): void {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) collect(full);
+      else if (full.endsWith('.ts')) spineFiles.push(full);
+    }
+  })(join(ROOT, 'lib/examSpine'));
+
+  const headerBound = spineFiles.filter((f) => {
+    const t = readFileSync(f, 'utf8');
+    // HTTP header への束縛 = header 名定数 or Headers 型の受け取り
+    return /_HEADER\s*=\s*'x-/.test(t) || /:\s*Headers\b/.test(t);
+  }).map((f) => relative(ROOT, f)).sort();
+
+  check(
+    'device claim の request transport は sync/claim/** 1 本だけ',
+    headerBound.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
+    headerBound.join(', '),
+  );
+  check(
+    'sync/signal.ts は transport に束縛されていない',
+    !headerBound.includes('lib/examSpine/sync/signal.ts'),
+  );
+
   const stateText = readFileSync(
     join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STATE.md'), 'utf8');
   check(
