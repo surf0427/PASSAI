@@ -27,6 +27,8 @@ import type {
   ExamStatementReviewServerRow,
   ExamSelfPrServerRow,
   ExamInterviewRecordServerRow,
+  ExamEssayServerRow,
+  ExamEssayReviewServerRow,
 } from '../../read/rowMappers';
 import { EXAM_SYNC_ADAPTER_CONTRACTS, EXAM_SYNC_VIEW_VERSION } from './registry';
 import type { ExamSyncSupportedKind } from './registry';
@@ -180,6 +182,78 @@ export function interviewRecordItemView(
     feedbackReceived: row.feedbackReceived,
     selfNoted: row.selfNoted,
     feedback: row.feedback,
+  };
+}
+
+// ── essay（E-S27 / Wave 2.5 で contract 確定）─────────────────────────
+
+/**
+ * review 1 件の content field。`bodyOnServer`（型目印）は入れない。
+ * QA がこの宣言と実 view の key 集合の一致を検査する。
+ */
+export const ESSAY_REVIEW_CONTENT_FIELDS = [
+  'totalScore',
+  'verdict',
+  'improvement',
+  'goodPoints',
+  'weakPoints',
+  'createdAt',
+  'source',
+  'parseError',
+] as const;
+
+export type ExamEssayReviewSyncInput = Pick<
+  ExamEssayReviewServerRow,
+  'totalScore' | 'verdict' | 'improvement' | 'goodPoints' | 'weakPoints' | 'createdAt' | 'source' | 'parseError'
+>;
+
+/**
+ * review 1 件。
+ *
+ * ★ `createdAt` はここでは正規化しない ★
+ *   これは timestamptz column ではなく **jsonb の中の文字列**であり、Postgres が
+ *   verbatim で往復させる（`ReviewEntry.createdAt`、types/essay.ts:48）。
+ *   触ると学生側の値を書き換えることになる（normalize.ts の方針どおり）。
+ */
+export function essayReviewView(review: ExamEssayReviewSyncInput): Record<string, unknown> {
+  return {
+    totalScore: review.totalScore,
+    verdict: review.verdict,
+    improvement: review.improvement,
+    goodPoints: review.goodPoints,
+    weakPoints: review.weakPoints,
+    createdAt: review.createdAt,
+    source: review.source,
+    parseError: review.parseError,
+  };
+}
+
+export type ExamEssaySyncInput = Pick<
+  ExamEssayServerRow,
+  'localWorkspaceId' | 'reviews' | 'reviewCount' | 'createdAt'
+>;
+
+/**
+ * workspace 1 件。
+ *
+ * ★ `reviews` の順序は sequence（sort しない）★
+ *   `mapEssayRow` は append-only 配列を **位置で反転**して新しい順にし、
+ *   `limits.recordItems` 件で cap する。時刻の再解釈をしないため、device 側も
+ *   同じ配列に同じ位置操作を適用すれば同じ並びを再現できる。
+ *   ＝ kind 単位の list（multiset）とは違い、ここは順序が往復する。
+ *
+ * `reviewCount` は cap 前の元件数。cap されると `reviews` からは復元できないため
+ *   独立した content として含める（`reviewsTruncated` は reviewCount からの導出なので外す）。
+ *
+ * `createdAt` は timestamptz column なので instant へ正規化する
+ *   （`EssayWorkspace.createdAt` は必須で、writer が無条件に送る）。
+ */
+export function essaySyncView(row: ExamEssaySyncInput): Record<string, unknown> {
+  return {
+    localWorkspaceId: row.localWorkspaceId,
+    reviews: row.reviews.map(essayReviewView),
+    reviewCount: row.reviewCount,
+    createdAt: normalizeSyncTimestamp(row.createdAt),
   };
 }
 

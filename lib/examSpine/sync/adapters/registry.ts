@@ -304,24 +304,48 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
     blocker: null,
   },
 
-  // ── class 1 / contract 未確定 ─────────────────────────────────────
+  // ── class 1 / E-S27 で projection が確定した kind ────────────────
+  //
+  // ★ Wave 2 では blocked だった（B7: workspace jsonb を丸ごと SELECT していたため
+  //   content field 集合が未確定）。Wave 2.5 の canonical convergence で **E-S27 が
+  //   `LOCKED`（Wave 2 で実装 + QA 済み）** になり、essayQuery / mapEssayRow が
+  //   bounded projection へ確定したので blocker が消滅した。分類を `possible` へ訂正する。
 
   essay: {
     kind: 'essay',
     authority: 'device_canonical_mirrored',
-    capability: 'blocked',
+    capability: 'possible',
     canonicalSource: 'localStorage（essayWorkspaces / EssayWorkspace[]）',
     physicalSource: 'essay_workspaces（UNIQUE(user_id, local_workspace_id)）',
-    readPath: 'queries.ts essayQuery → rowMappers.mapEssayRow',
-    contentFields: [],
-    excludedFields: [],
+    readPath: 'queries.ts essayQuery（reviews:workspace->reviews）→ rowMappers.mapEssayRow（E-S27）',
+    contentFields: ['localWorkspaceId', 'reviews', 'reviewCount', 'createdAt'],
+    excludedFields: [
+      { field: 'id', reason: 'db_generated_not_on_device', evidence: DB_UUID_EVIDENCE },
+      {
+        field: 'bodyOnServer',
+        reason: 'type_marker_not_content',
+        evidence: 'rowMappers.ts ExamEssayServerRow / ExamEssayReviewServerRow の bodyOnServer は false リテラルの型目印（E-S27・E-P8 と同手法）',
+      },
+      {
+        field: 'body / rewriteDraft / sparring.answers / reviews[*].essayBodySnapshot',
+        reason: 'not_selected_by_reader',
+        evidence:
+          'E-S27（LOCKED）: essayQuery が reviews:workspace->reviews へ絞り、mapEssayReview が essayBodySnapshot / breakdown / sourceIssueId を採らない。server projection に本文が 1 文字も載らないことを stage3 S15b/S15c が検証する',
+      },
+      {
+        field: 'reviewsTruncated',
+        reason: 'derived_from_included_field',
+        evidence: 'rowMappers.mapEssayRow が `all.length > limits.recordItems` から導出する。reviewCount を含めているため独立した情報を持たない',
+      },
+      { field: 'updatedAt', reason: 'trigger_overwritten', evidence: UPDATED_AT_EVIDENCE },
+    ],
     order: 'multiset',
     revision: {
       form: 'absent',
-      reason: 'contract 未確定（下記 blocker）。revision も content field も宣言しない',
+      reason:
+        'version 列が無く、updated_at は trigger 上書き。workspace 内の updatedAt は jsonb として往復するが reader が projection に載せないため比較できない。createdAt は content field として比較する（EssayWorkspace.createdAt は types/essay.ts:135 で必須、writer は essayWorkspaces.ts:94 で無条件に送る）',
     },
-    blocker:
-      'B7 / E-S27（proposed LOCKED）: essayQuery が workspace jsonb を丸ごと SELECT している状態を Stage 4 で通電してはならず、field 単位 projection へ変更される予定。content field 集合が確定していないため adapter を実装しない',
+    blocker: null,
   },
 
   // ── class 2 / Source-Sync 非適用（E-S3）───────────────────────────
@@ -360,7 +384,10 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
   },
 };
 
-/** adapter を実装した kind（capability === 'possible'）。 */
+/**
+ * adapter を実装した kind（capability === 'possible'）。
+ * Wave 2.5 で essay を追加（E-S27 が LOCKED になり blocker が消滅したため）。
+ */
 export const EXAM_SYNC_SUPPORTED_KINDS = [
   'basic_info',
   'activity',
@@ -368,6 +395,7 @@ export const EXAM_SYNC_SUPPORTED_KINDS = [
   'self_analysis',
   'statement_review',
   'self_pr',
+  'essay',
   'interview_record',
 ] as const;
 
