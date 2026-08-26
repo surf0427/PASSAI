@@ -656,22 +656,36 @@ function staticBoundaries(): void {
       if (/examSpine\/sync/.test(readFileSync(file, 'utf8'))) consumers.push(rel);
     }
   }
-  check('Runtime wiring = NONE（sync を import する production file が 0）',
-    consumers.length === 0, consumers.join(', '));
+  // ★ Stage 5.0（E-S33 / E-S34）で pilot 1 purpose の transport が接続済み ★
+  //   「production から 0 本」は Wave 4 時点の実態であり、現在の contract ではない。
+  //   ただし条件を緩めるのではなく、**接続してよい範囲**を allowlist で固定し、
+  //   接続が transport 止まりであること（consumer authority を切り替えないこと）を
+  //   behavioral に検査する側へ retarget する。
+  const PILOT_CONSUMERS = ['app/tutor/page.tsx', 'app/api/tutor/route.ts'];
+  const unexpectedConsumers = consumers.filter((f) => !PILOT_CONSUMERS.includes(f));
+  check('sync を import する production file は Stage 5.0 pilot だけ',
+    unexpectedConsumers.length === 0, unexpectedConsumers.join(', '));
 
-  const targeted: string[] = [];
-  for (const dir of ['lib/contextBuilders', 'lib/tutor', 'app/api']) {
-    const full = join(REPO_ROOT, dir);
-    try {
-      for (const file of listFiles(full)) {
-        if (/examSpine\/sync/.test(readFileSync(file, 'utf8'))) targeted.push(relative(REPO_ROOT, file));
-      }
-    } catch {
-      // directory が無い環境では skip（存在しないことは違反ではない）
-    }
-  }
-  check('contextBuilders / tutor / route から sync を参照していない',
-    targeted.length === 0, targeted.join(', '));
+  // ★ transport 止まりであることの behavioral 検査（条件緩和ではない）★
+  const routeSrc = readFileSync(join(REPO_ROOT, 'app/api/tutor/route.ts'), 'utf8');
+
+  //   1. shadow 組み立ての戻り値を **受け取らない**（= AI へ渡らない）。
+  //      `const x = await buildCanonicalExamContext` の形になっていたら FAIL。
+  check('shadow build の結果を変数へ束縛していない（結果は破棄）',
+    /(?:^|\n)\s*await buildCanonicalExamContext\(/.test(routeSrc) &&
+      !/=\s*await buildCanonicalExamContext\(/.test(routeSrc));
+
+  //   2. shadow は default deny gate の内側だけで動く。
+  check('shadow 組み立ては canary gate の内側にある',
+    /isExamSpineShadowEnabled\(/.test(routeSrc) && /if \(shadowEnabled\)/.test(routeSrc));
+
+  //   3. Spine 由来の値が prompt / response の組み立てに現れない。
+  const promptLines = routeSrc
+    .split('\n')
+    .filter((l) => /systemBlocks|userPrompt|messages:|NextResponse\.json/.test(l))
+    .filter((l) => /[Ss]pine|canonical|deviceClaim|shadow/.test(l));
+  check('prompt / response 経路に Spine 由来の値が現れない',
+    promptLines.length === 0, promptLines.join(' | '));
 }
 
 // ── run ───────────────────────────────────────────────────────────
