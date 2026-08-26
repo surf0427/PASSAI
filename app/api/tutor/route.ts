@@ -57,6 +57,14 @@ import {
 } from '@/lib/contextBuilders/tutorContext';
 import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
 import { authenticateRequest, checkPlanQuota } from '@/lib/billing/planGate';
+// Exam Spine — Stage 5.0 device claim。consumer 出力には影響しない side-path。
+import {
+  parseDeviceClaimHeader,
+  toDeviceClaims,
+} from '@/lib/examSpine/sync/claim/parse';
+import { sourcesForPurpose } from '@/lib/examSpine/purpose';
+import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.server';
+import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import { captureRouteException } from '@/lib/sentry/capture';
@@ -310,6 +318,49 @@ export async function POST(req: Request): Promise<Response> {
     return auth.response;
   }
   const userId = auth.userId;
+
+  // ── Exam Spine device revision claim（Stage 5.0 / E-S2 / E-S33）────────
+  //
+  // ★ consumer の出力経路には一切影響しない ★
+  //   claim は Source-Sync の **negative safety gate** の入力にすぎず、
+  //   回答生成 / prompt / response のいずれも変えない。header が無くても・壊れていても
+  //   request は従来どおり成立する（parser は never throw）。
+  //
+  // ★ auth binding ★
+  //   claim 自身に userId は入っていない（型に無い）。認可済み subject の request に
+  //   付いていたという事実だけで結び付ける。owner scoping の authority は server auth
+  //   だけである（E-L3）。
+  //
+  // ★ purpose gate を広げない ★
+  //   `toDeviceClaims` が purpose の許可 source で filter するため、
+  //   申告があっても読む kind は増えない（E-S28）。
+  const deviceClaimParse = parseDeviceClaimHeader(req.headers);
+  const deviceClaims = toDeviceClaims(deviceClaimParse, {
+    authenticatedUserId: userId,
+    allowedSources: sourcesForPurpose('tutor'),
+  });
+
+  // ── shadow assembly（default deny / E-S11）──────────────────────────
+  //   env で明示的に許可された purpose × userId のときだけ canonical context を
+  //   組み立てる。OFF（既定）では **1 query も増えない**。
+  //   read + assemble のみで、AI 呼び出し / DB 書き込み / response 変更はしない。
+  const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
+  if (shadowEnabled) {
+    const tShadow = lat.now();
+    try {
+      await buildCanonicalExamContext({
+        request: req,
+        purpose: 'tutor',
+        authorize: async () => ({ ok: true, userId }),
+        bridge: {},
+        deviceClaims,
+        client: auth.supabase,
+      });
+    } catch {
+      // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
+    }
+    lat.record('spineShadow_ms', tShadow);
+  }
 
   // ── intent / preferredProfileField 正規化 ──
   // 純粋・DB 不要なので並列ブロックの前に確定させる（context builder が intent を使うため）。

@@ -28,6 +28,13 @@ import { useQuotaDialog } from '@/components/billing/QuotaExceededDialog';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { tutorLimit, type DailyUsage } from '@/lib/dailyLimit';
 import { loadBasicInfo } from '@/lib/basicInfoStorage';
+// Exam Spine — device revision claim（Stage 5.0 / E-S2）。純関数のみ。
+import { buildTutorDeviceClaimEntries } from '@/lib/examSpine/sync/claim/deviceBasicInfo';
+import {
+  serializeDeviceClaim,
+  withDeviceClaimHeader,
+} from '@/lib/examSpine/sync/claim/serialize';
+import { EXAM_DEVICE_CLAIM_HEADER } from '@/lib/examSpine/sync/claim/types';
 import { getStudentProfileForFeature } from '@/lib/getStudentProfileForFeature';
 import { loadReviewHistory } from '@/lib/statement/review/statementStorage';
 import { loadActivityData } from '@/lib/activityStorage';
@@ -583,10 +590,30 @@ export default function TutorPage() {
       mypageSummary: studentContextSources?.mypageSummary ?? null,
     };
 
+    // ── Exam Spine device revision claim（Stage 5.0 / E-S2）──────────
+    //
+    //   device canonical（localStorage `basicFormData`）から算出した content 由来 token を
+    //   header で申告する。server はこれを **negative safety gate** の入力にのみ使い、
+    //   一致しない限り server 側 mirror を canonical として採用しない。
+    //
+    //   ★ 回答生成には影響しない ★
+    //     Stage 5.0 では consumer の prompt / 出力経路を一切変えない。
+    //     header が無くても・壊れていても request は従来どおり成立する。
+    //
+    //   ★ 本文・氏名・userId は送らない ★
+    //     serializer が受け取るのは kind と token だけ（型で閉じている）。
+    //   ★ 既存 header を壊さない ★
+    //     Content-Type は上書きせず、claim が無ければ header 自体を付けない。
+    const deviceClaimHeader = serializeDeviceClaim(buildTutorDeviceClaimEntries(basicInfo));
+
     try {
       const res = await fetch('/api/tutor', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withDeviceClaimHeader(
+          { 'Content-Type': 'application/json' },
+          EXAM_DEVICE_CLAIM_HEADER,
+          deviceClaimHeader,
+        ),
         body: JSON.stringify(requestBody),
       });
 
