@@ -34,6 +34,7 @@ import { assembleExamContext } from '../orchestrator/assemble';
 import type { ExamContextInput } from '../orchestrator/input';
 import type { ExamContextBlock } from '../blocks/types';
 import { EXAM_BUNDLE_SLOT } from '../read/readSources';
+import { isExamCappedSourceKind } from '../read/types';
 import type { ExamReadResult } from '../read/readSources';
 import { readExamSourcesForRequest } from '../read/requestSnapshot.server';
 import type { ExamRequestAuthorization } from '../read/requestSnapshot.server';
@@ -357,15 +358,31 @@ function normalizeSourceStates(args: {
       // 要求もされず許可もされていない。read を試行していない。
       return { kind, state: 'denied_by_purpose', readStatus, syncStatus: null, rowCount: 0, truncated: false, fingerprint: null };
     }
+    // ★ 実際の失敗だけを unreadable にする ★
+    //   query failure / mapping failure / 未要求。overflow はここに含まれない（E-S43）。
     if (readStatus === 'error' || readStatus === 'skipped') {
       return { kind, state: 'unreadable', readStatus, syncStatus: null, rowCount: 0, truncated: false, fingerprint: null };
     }
-    // truncated は「cap まで読めただけで全件ではない」。freshness の権威にしない（E-S8）。
-    if (readStatus === 'truncated') {
+
+    // ★ overflow（cap + 1 件目を受け取った）は unreadable ではない（E-S43）★
+    //
+    //   cap は「読めた範囲」ではなく **意図された比較 window** を定義する。
+    //   `cap + 1` 件目の存在は「window の外にまだ行がある」という観測であって、
+    //   canonical source が読めなかったことの証拠ではない。
+    //
+    //   ★ E-S8 と矛盾しない ★
+    //     E-S8 が禁じるのは「部分読みから **source 全体の同一性** を主張する」こと。
+    //     ここで fingerprint が主張するのは「両側の **top-N window** が一致する」という
+    //     より狭い命題で、両側とも決定論的に同じ window を選ぶ（E-S40）。
+    //     `readStatus` は `truncated` のまま保持し `ok` へ丸めない（overflow の事実を消さない）。
+    const truncated = readStatus === 'truncated';
+    if (truncated && !isExamCappedSourceKind(kind)) {
+      // capped でない kind が truncated を返すことは構造的に起きない
+      // （snapshot kind は maybeSingle）。起きたら契約違反なので unreadable に倒す。
       return { kind, state: 'unreadable', readStatus, syncStatus: null, rowCount, truncated: true, fingerprint: null };
     }
 
-    // ここから readStatus === 'ok'
+    // ここから readStatus === 'ok' または（capped kind の）'truncated'
     if (!isExamSyncSupportedKind(kind)) {
       // class 2（E-S3）と adapter 未実装 kind。Source-Sync を適用しない。
       // 「読めて 0 件」は empty、内容があれば available。
@@ -375,7 +392,7 @@ function normalizeSourceStates(args: {
         readStatus,
         syncStatus: null,
         rowCount,
-        truncated: false,
+        truncated,
         fingerprint: null,
       };
     }
@@ -385,11 +402,19 @@ function normalizeSourceStates(args: {
     //   新規ユーザー（データが無いだけ）と「検証できない」が区別できなくなる（Canon §40）。
     //   0 件なら注入され得る内容が存在しないので、verified を待つ意味も無い。
     if (rowCount === 0) {
-      return { kind, state: 'empty', readStatus, syncStatus: null, rowCount: 0, truncated: false, fingerprint: null };
+      // window が空 ＝ source が空。overflow と同時には起こり得ない。
+      return { kind, state: 'empty', readStatus, syncStatus: null, rowCount: 0, truncated, fingerprint: null };
     }
 
     const observation = buildObservation(kind, value);
-    const mirror: ExamSyncCandidate = serverMirrorCandidate({ status: readStatus, observation });
+    // ★ capped kind は比較 window 契約のもとで読んでいる（E-S43）★
+    //   device 側も `selectDeviceSyncWindow` で同一 window を選ぶ（E-S40）ため、
+    //   overflow（truncated）でも window 同士の比較は成立する。
+    const mirror: ExamSyncCandidate = serverMirrorCandidate({
+      status: readStatus,
+      observation,
+      windowed: isExamCappedSourceKind(kind),
+    });
     const claim = args.deviceClaims[kind];
     const canonical: ExamSyncCandidate = deviceCanonicalCandidate({
       claimPresented: claim?.presented ?? false,
@@ -412,7 +437,7 @@ function normalizeSourceStates(args: {
       readStatus,
       syncStatus: verification.status,
       rowCount,
-      truncated: false,
+      truncated,
       fingerprint: observation?.fingerprint ?? null,
     };
   });

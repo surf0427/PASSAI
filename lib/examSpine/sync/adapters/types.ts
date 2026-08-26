@@ -172,6 +172,14 @@ function assertOrigin(
  * E-S2 の verdict 優先順位（`unreadable` > `unclaimed` > `mismatch` > `verified`）と
  * E-S8（`truncated` / `error` を freshness の権威にしない）に従い、
  * **status が `ok` 以外はすべて unreadable** とする。
+ *
+ * ★ 例外は `windowed: true` を明示した場合だけ（E-S43）★
+ *   呼び出し側が「canonical read cap を決定論的な比較 window として扱い、
+ *   device 側も同一 window を選ぶ」ことを保証しているときに限り、
+ *   `truncated`（＝ window の外にまだ行がある）を readable として扱う。
+ *   **既定は従来どおり strict**（opt-in しなければ truncated は unreadable）。
+ *   window 契約が無いのに truncated を readable にすると、E-S8 が禁じる
+ *   「部分読みから source 全体の同一性を主張する」ことになるため。
  *   truncated : cap まで読めただけで全件ではない → 「読めた」と言ってはいけない
  *   error     : RLS / network / schema
  *   skipped   : その request で読んでいない（読めた証拠が無い）
@@ -198,8 +206,15 @@ export function serverMirrorCandidate(input: {
   readonly status: ExamSourceReadStatus;
   /** read が ok で、かつデータが存在したときだけ observation を渡す。空なら null。 */
   readonly observation: ExamSyncObservation | null;
+  /**
+   * 比較 window 契約のもとで読んだか（E-S43）。
+   * `true` のときだけ `truncated` を readable として扱う。既定は `false`（strict）。
+   */
+  readonly windowed?: boolean;
 }): ExamSyncCandidate {
-  if (input.status !== 'ok') return UNREADABLE_CANDIDATE;
+  const readable =
+    input.status === 'ok' || (input.status === 'truncated' && input.windowed === true);
+  if (!readable) return UNREADABLE_CANDIDATE;
   if (input.observation === null) return EMPTY_CANDIDATE;
   assertOrigin(input.observation, 'server_mirror');
   return presentCandidate({
