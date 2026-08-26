@@ -60,25 +60,18 @@ CREATE TRIGGER student_profile_mirrors_set_updated_at
   EXECUTE FUNCTION set_updated_at();
 
 
--- 4. RLS — write-only access for the anon role.
---    INSERT + UPDATE are required because the mirror helper performs an
---    upsert (INSERT ... ON CONFLICT DO UPDATE). SELECT and DELETE policies
---    are intentionally not created so the database mirrors the Phase1
---    no-reads / no-destructive-rollback contract at the storage layer.
+-- 4. RLS — no browser-role policies.
+--    Mirror tables intentionally expose no browser-role RLS policies.
+--    Writes are mediated by POST /api/mirrors using server-only credentials
+--    (service_role bypasses RLS). Reads never happen from the application.
+--
+--    History: anon INSERT / UPDATE policies were declared here originally,
+--    which forced a companion `<table> anon select_for_upsert` SELECT policy
+--    in production (PostgreSQL requires SELECT access for
+--    INSERT ... ON CONFLICT DO UPDATE) and exposed every row to the public
+--    anon key. Both were removed in production by
+--    supabase/mirror_select_exposure_migration.sql; this declaration follows.
 ALTER TABLE student_profile_mirrors ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "student_profile_mirrors anon insert"
-  ON student_profile_mirrors
-  FOR INSERT
-  TO anon
-  WITH CHECK (true);
-
-CREATE POLICY "student_profile_mirrors anon update"
-  ON student_profile_mirrors
-  FOR UPDATE
-  TO anon
-  USING (true)
-  WITH CHECK (true);
 
 
 -- 5. Mirror events sink (observability) — Phase1.
@@ -223,25 +216,18 @@ CREATE TRIGGER basic_info_mirrors_set_updated_at
   EXECUTE FUNCTION set_updated_at();
 
 
--- 9. RLS — write-only access for the anon role.
---    INSERT + UPDATE are required because the mirror helper performs an
---    upsert (INSERT ... ON CONFLICT DO UPDATE). SELECT and DELETE policies
---    are intentionally not created so the database mirrors the Phase1
---    no-reads / no-destructive-rollback contract at the storage layer.
+-- 9. RLS — no browser-role policies. See §4.
+--    Mirror tables intentionally expose no browser-role RLS policies.
+--    Writes are mediated by POST /api/mirrors using server-only credentials
+--    (service_role bypasses RLS). Reads never happen from the application.
+--
+--    History: anon INSERT / UPDATE policies were declared here originally,
+--    which forced a companion `<table> anon select_for_upsert` SELECT policy
+--    in production (PostgreSQL requires SELECT access for
+--    INSERT ... ON CONFLICT DO UPDATE) and exposed every row to the public
+--    anon key. Both were removed in production by
+--    supabase/mirror_select_exposure_migration.sql; this declaration follows.
 ALTER TABLE basic_info_mirrors ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "basic_info_mirrors anon insert"
-  ON basic_info_mirrors
-  FOR INSERT
-  TO anon
-  WITH CHECK (true);
-
-CREATE POLICY "basic_info_mirrors anon update"
-  ON basic_info_mirrors
-  FOR UPDATE
-  TO anon
-  USING (true)
-  WITH CHECK (true);
 
 
 -- 10. Third feature mirror table — diagnosis (受験タイプ診断).
@@ -313,24 +299,18 @@ CREATE TRIGGER diagnosis_mirrors_set_updated_at
   EXECUTE FUNCTION set_updated_at();
 
 
--- 12. RLS — write-only access for the anon role.
---     INSERT + UPDATE required for upsert (INSERT ... ON CONFLICT DO UPDATE).
---     SELECT / DELETE policies intentionally absent, matching the other
---     two mirror tables.
+-- 12. RLS — no browser-role policies. See §4.
+--    Mirror tables intentionally expose no browser-role RLS policies.
+--    Writes are mediated by POST /api/mirrors using server-only credentials
+--    (service_role bypasses RLS). Reads never happen from the application.
+--
+--    History: anon INSERT / UPDATE policies were declared here originally,
+--    which forced a companion `<table> anon select_for_upsert` SELECT policy
+--    in production (PostgreSQL requires SELECT access for
+--    INSERT ... ON CONFLICT DO UPDATE) and exposed every row to the public
+--    anon key. Both were removed in production by
+--    supabase/mirror_select_exposure_migration.sql; this declaration follows.
 ALTER TABLE diagnosis_mirrors ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "diagnosis_mirrors anon insert"
-  ON diagnosis_mirrors
-  FOR INSERT
-  TO anon
-  WITH CHECK (true);
-
-CREATE POLICY "diagnosis_mirrors anon update"
-  ON diagnosis_mirrors
-  FOR UPDATE
-  TO anon
-  USING (true)
-  WITH CHECK (true);
 
 
 -- 13. Fourth feature mirror table — activityData (活動整理).
@@ -348,9 +328,9 @@ CREATE POLICY "diagnosis_mirrors anon update"
 --         `futureConnection`, and their per-activity-type analogues) carry
 --         contextual identity. Cannot be stripped without destroying the
 --         artifact — the narrative IS the mirror's content.
---       - Phase1 anonymous posture rests on: (a) anon SELECT absent →
+--       - Anonymous posture rests on: (a) no browser-role policy at all →
 --         operator service-role only, (b) no `user_id` column → cross-row
---         linkage impossible, (c) anon UPDATE allowed for upsert idempotency.
+--         linkage impossible, (c) writes mediated by POST /api/mirrors.
 --
 --     Trigger contract — **submit-driven only**:
 --       Mirror dispatch lives in `hooks/useActivityForm.ts:handleSubmit`,
@@ -412,24 +392,18 @@ CREATE TRIGGER activity_mirrors_set_updated_at
   EXECUTE FUNCTION set_updated_at();
 
 
--- 15. RLS — write-only access for the anon role.
---     INSERT + UPDATE required for upsert (INSERT ... ON CONFLICT DO UPDATE).
---     SELECT / DELETE policies intentionally absent, matching the other
---     three mirror tables.
+-- 15. RLS — no browser-role policies. See §4.
+--    Mirror tables intentionally expose no browser-role RLS policies.
+--    Writes are mediated by POST /api/mirrors using server-only credentials
+--    (service_role bypasses RLS). Reads never happen from the application.
+--
+--    History: anon INSERT / UPDATE policies were declared here originally,
+--    which forced a companion `<table> anon select_for_upsert` SELECT policy
+--    in production (PostgreSQL requires SELECT access for
+--    INSERT ... ON CONFLICT DO UPDATE) and exposed every row to the public
+--    anon key. Both were removed in production by
+--    supabase/mirror_select_exposure_migration.sql; this declaration follows.
 ALTER TABLE activity_mirrors ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "activity_mirrors anon insert"
-  ON activity_mirrors
-  FOR INSERT
-  TO anon
-  WITH CHECK (true);
-
-CREATE POLICY "activity_mirrors anon update"
-  ON activity_mirrors
-  FOR UPDATE
-  TO anon
-  USING (true)
-  WITH CHECK (true);
 
 
 -- 16. profiles — auth user 行（STEP-AUTH-02）。
