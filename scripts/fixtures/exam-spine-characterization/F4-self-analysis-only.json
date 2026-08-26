@@ -1,0 +1,205 @@
+{
+  "builders": [
+    {
+      "feature": "cross-cutting（11 route が参照）",
+      "key": "basicInfoPromptSection",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildBasicInfoPromptSection"
+    },
+    {
+      "feature": "cross-cutting（subjectGrades section）",
+      "key": "subjectGradesPromptLines",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildSubjectGradesPromptLines"
+    },
+    {
+      "feature": "self-analysis / summarize（canonical projection）",
+      "key": "toStudentProfile",
+      "source": "lib/studentProfile.ts:toStudentProfile"
+    },
+    {
+      "feature": "statement-review",
+      "key": "statementStudentProfileContext",
+      "source": "lib/contextBuilders/statementContext.ts:buildStatementStudentProfileContext"
+    },
+    {
+      "feature": "interview-feedback",
+      "key": "interviewStudentProfileContext",
+      "source": "lib/contextBuilders/interviewContext.ts:buildInterviewStudentProfileContext"
+    },
+    {
+      "feature": "matching",
+      "key": "matchingStudentProfileContext",
+      "source": "lib/contextBuilders/matchingContext.ts:buildMatchingStudentProfileContext"
+    },
+    {
+      "feature": "interview-questions",
+      "key": "interviewQuestionMaterials",
+      "source": "lib/interview/buildInterviewQuestionMaterials.ts:buildInterviewQuestionMaterials"
+    },
+    {
+      "feature": "self-pr",
+      "key": "selfPRDraftSeed",
+      "source": "lib/buildSelfPRDraftSeed.ts:buildSelfPRDraftSeed"
+    },
+    {
+      "feature": "tutor（body 由来の横断要約）",
+      "key": "tutorStudentContext",
+      "source": "lib/contextBuilders/tutorStudentContext.ts:buildTutorStudentContext"
+    },
+    {
+      "feature": "tutor（SYSTEM block 2 の最終文字列）",
+      "key": "tutorStudentContextSection",
+      "source": "lib/tutor/tutorPrompt.ts:buildTutorStudentContextSection"
+    },
+    {
+      "feature": "statement-review / interview-feedback（divergence）",
+      "key": "divergencePreviousOutputSummary",
+      "source": "lib/contextBuilders/divergence/buildPreviousOutputSummary.ts:buildPreviousOutputSummary"
+    },
+    {
+      "feature": "statement-review / interview-feedback / self-pr（divergence）",
+      "key": "divergenceUnusedExperience",
+      "source": "lib/contextBuilders/divergence/buildUnusedExperience.ts:buildUnusedExperience"
+    },
+    {
+      "feature": "self-pr（divergence）",
+      "key": "divergenceThemeFrequency",
+      "source": "lib/contextBuilders/divergence/buildThemeFrequency.ts:buildThemeFrequency"
+    }
+  ],
+  "description": "自己分析だけ完了。基本情報・志望理由書・履歴は無い。",
+  "fixtureId": "F4-self-analysis-only",
+  "outputs": {
+    "basicInfoPromptSection": "【生徒の基本情報】\n（未登録）",
+    "divergencePreviousOutputSummary": {
+      "basis": {
+        "recordsConsidered": 0
+      },
+      "repeatedAdvice": [],
+      "repeatedThemes": []
+    },
+    "divergenceThemeFrequency": {
+      "basis": {
+        "documentsConsidered": 3
+      },
+      "themes": [
+        {
+          "count": 2,
+          "theme": "論理的思考"
+        },
+        {
+          "count": 1,
+          "theme": "継続力"
+        },
+        {
+          "count": 0,
+          "theme": "主体性"
+        },
+        {
+          "count": 0,
+          "theme": "探究心"
+        },
+        {
+          "count": 0,
+          "theme": "協調性"
+        },
+        {
+          "count": 0,
+          "theme": "行動力"
+        },
+        {
+          "count": 0,
+          "theme": "コミュニケーション"
+        },
+        {
+          "count": 0,
+          "theme": "適応力"
+        },
+        {
+          "count": 0,
+          "theme": "創造性"
+        },
+        {
+          "count": 0,
+          "theme": "責任感"
+        },
+        {
+          "count": 0,
+          "theme": "国際性"
+        },
+        {
+          "count": 0,
+          "theme": "課題解決"
+        },
+        {
+          "count": 0,
+          "theme": "挑戦"
+        }
+      ],
+      "underused": [
+        "主体性",
+        "探究心",
+        "協調性",
+        "行動力",
+        "コミュニケーション"
+      ]
+    },
+    "divergenceUnusedExperience": {
+      "basis": {
+        "totalExperiences": 0,
+        "usedExperiences": 0
+      },
+      "unused": []
+    },
+    "interviewQuestionMaterials": {
+      "activitySummary": "継続的な観察記録を残してきた。",
+      "applicantType": "__undefined__",
+      "department": null,
+      "examTypes": [],
+      "faculty": null,
+      "futureGoals": [
+        "環境データの分析"
+      ],
+      "interests": [
+        "観察"
+      ],
+      "statementSummary": null,
+      "strengths": [
+        "観察を続ける力"
+      ],
+      "subjectGradesLines": [],
+      "university": null
+    },
+    "interviewStudentProfileContext": "【自己分析サマリー（面接用・最小コンテキスト）】\nテスト用の自己分析サマリー。関心は環境分野にある。\n強み（上位 3）:\n・観察を続ける力\n将来とのつながり（上位 2）:\n・環境データの分析\n価値観タグ: 観察",
+    "matchingStudentProfileContext": "【自己分析サマリー（matching 用）】\nテスト用の自己分析サマリー。関心は環境分野にある。\n強み（上位 5）:\n・観察を続ける力\n将来とのつながり（上位 3）:\n・環境データの分析\n価値観タグ: 観察",
+    "selfPRDraftSeed": "私の強みは、観察を続ける力 です。\n\nこれまでの取り組みとしては、テスト用の自己分析サマリー。関心は環境分野にある。\n\n記録を止めない継続性\n\n今後は、環境データの分析 を目指したいと考えています。",
+    "statementStudentProfileContext": "【自己分析サマリー】\nテスト用の自己分析サマリー。関心は環境分野にある。\n強み: ・観察を続ける力\n価値観タグ: 観察",
+    "subjectGradesPromptLines": [],
+    "toStudentProfile": {
+      "applicantType": "__undefined__",
+      "futureConnections": [
+        "環境データの分析"
+      ],
+      "generatedAt": "2020-01-01T00:00:00.000Z",
+      "signatureEpisodes": [
+        {
+          "relatedStrengthIdx": 0,
+          "summary": "観察を続ける力",
+          "title": "観察を続ける力"
+        }
+      ],
+      "sourceHash": "h5w8pp",
+      "strengths": [
+        "観察を続ける力"
+      ],
+      "summary": "テスト用の自己分析サマリー。関心は環境分野にある。",
+      "valueKeywords": [
+        "継続力",
+        "論理的思考"
+      ],
+      "version": 1,
+      "weaknesses": []
+    },
+    "tutorStudentContext": "・志望校: 未入力\n・自己分析の要約: テスト用の自己分析サマリー。関心は環境分野にある。\n・自己分析で出ている強み: 観察を続ける力\n・自己分析で見えている課題: 未入力\n・志望理由書レビューの直近の課題: 未入力\n・面接練習の課題: 未入力\n・活動経験: 未入力\n・小論文添削の直近の課題: 未入力\n・マイページの利用状況: 未入力\n・最近よく使っている機能: 未入力\n・まだ未着手の機能: 未入力\n・最近の成長傾向: 未入力",
+    "tutorStudentContextSection": "【PASSAI内の生徒情報】\n・志望校: 未入力\n・自己分析の要約: テスト用の自己分析サマリー。関心は環境分野にある。\n・自己分析で出ている強み: 観察を続ける力\n・自己分析で見えている課題: 未入力\n・志望理由書レビューの直近の課題: 未入力\n・面接練習の課題: 未入力\n・活動経験: 未入力\n・小論文添削の直近の課題: 未入力\n・マイページの利用状況: 未入力\n・最近よく使っている機能: 未入力\n・まだ未着手の機能: 未入力\n・最近の成長傾向: 未入力\n\nこの生徒情報の扱い方:\n・受験・進路の話題では積極的に活用し、その生徒に合わせた個別最適化された助言を行ってください。\n・ただし単なる復唱・列挙や毎回の引用は避け、より良い助言のための背景知識として使ってください。\n・雑談・受験外の話題では無理に参照しないでください（利用頻度は低めに）。\n・これは参考情報です。ユーザーの現在の発言を常に最優先し、矛盾する場合は最新発言を信じてください。\n・情報が古い可能性があるため、断定しすぎないでください。\n・「あなたのデータによると」のように機械的に言いすぎないでください。\n・ここに無い個人情報を推測・補完しないでください。\n・「未入力」の項目を責めたり、入力を急かしたりしないでください。"
+  }
+}

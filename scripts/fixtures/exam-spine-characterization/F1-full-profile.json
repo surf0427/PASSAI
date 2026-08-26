@@ -1,0 +1,270 @@
+{
+  "builders": [
+    {
+      "feature": "cross-cutting（11 route が参照）",
+      "key": "basicInfoPromptSection",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildBasicInfoPromptSection"
+    },
+    {
+      "feature": "cross-cutting（subjectGrades section）",
+      "key": "subjectGradesPromptLines",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildSubjectGradesPromptLines"
+    },
+    {
+      "feature": "self-analysis / summarize（canonical projection）",
+      "key": "toStudentProfile",
+      "source": "lib/studentProfile.ts:toStudentProfile"
+    },
+    {
+      "feature": "statement-review",
+      "key": "statementStudentProfileContext",
+      "source": "lib/contextBuilders/statementContext.ts:buildStatementStudentProfileContext"
+    },
+    {
+      "feature": "interview-feedback",
+      "key": "interviewStudentProfileContext",
+      "source": "lib/contextBuilders/interviewContext.ts:buildInterviewStudentProfileContext"
+    },
+    {
+      "feature": "matching",
+      "key": "matchingStudentProfileContext",
+      "source": "lib/contextBuilders/matchingContext.ts:buildMatchingStudentProfileContext"
+    },
+    {
+      "feature": "interview-questions",
+      "key": "interviewQuestionMaterials",
+      "source": "lib/interview/buildInterviewQuestionMaterials.ts:buildInterviewQuestionMaterials"
+    },
+    {
+      "feature": "self-pr",
+      "key": "selfPRDraftSeed",
+      "source": "lib/buildSelfPRDraftSeed.ts:buildSelfPRDraftSeed"
+    },
+    {
+      "feature": "tutor（body 由来の横断要約）",
+      "key": "tutorStudentContext",
+      "source": "lib/contextBuilders/tutorStudentContext.ts:buildTutorStudentContext"
+    },
+    {
+      "feature": "tutor（SYSTEM block 2 の最終文字列）",
+      "key": "tutorStudentContextSection",
+      "source": "lib/tutor/tutorPrompt.ts:buildTutorStudentContextSection"
+    },
+    {
+      "feature": "statement-review / interview-feedback（divergence）",
+      "key": "divergencePreviousOutputSummary",
+      "source": "lib/contextBuilders/divergence/buildPreviousOutputSummary.ts:buildPreviousOutputSummary"
+    },
+    {
+      "feature": "statement-review / interview-feedback / self-pr（divergence）",
+      "key": "divergenceUnusedExperience",
+      "source": "lib/contextBuilders/divergence/buildUnusedExperience.ts:buildUnusedExperience"
+    },
+    {
+      "feature": "self-pr（divergence）",
+      "key": "divergenceThemeFrequency",
+      "source": "lib/contextBuilders/divergence/buildThemeFrequency.ts:buildThemeFrequency"
+    }
+  ],
+  "description": "全 source が揃った標準ケース。基本情報・活動・自己分析・志望理由書・履歴すべてあり。",
+  "fixtureId": "F1-full-profile",
+  "outputs": {
+    "basicInfoPromptSection": "【生徒の基本情報】\n氏名: テスト 受験子\n学年: 高校3年\n文理: 文系\n評定平均: 4.2\n受験予定の方式: 総合型選抜（AO入試）、学校推薦型選抜\n志望校:\n  1. サンプル大学 / サンプル学部 / サンプル学科\n  2. ダミー大学 / ダミー学部\n\n【科目別評定・出席状況】\n英語評定: 5\n国語評定: 4\n数学評定: 3\n社会評定: 5\n欠席日数: 2日\n※ 推薦条件・面接・志望理由書の判断材料として参照してください。出願可否は断定せず、公式要項を最終確認源とする前提でアドバイスしてください。",
+    "divergencePreviousOutputSummary": {
+      "basis": {
+        "recordsConsidered": 3
+      },
+      "repeatedAdvice": [
+        "志望学部との接続が弱い",
+        "学部のカリキュラムに触れる",
+        "結論が抽象的",
+        "具体的な数値が少ない"
+      ],
+      "repeatedThemes": [
+        "課題設定が具体的",
+        "検証の姿勢が一貫している"
+      ]
+    },
+    "divergenceThemeFrequency": {
+      "basis": {
+        "documentsConsidered": 11
+      },
+      "themes": [
+        {
+          "count": 5,
+          "theme": "探究心"
+        },
+        {
+          "count": 1,
+          "theme": "継続力"
+        },
+        {
+          "count": 1,
+          "theme": "論理的思考"
+        },
+        {
+          "count": 0,
+          "theme": "主体性"
+        },
+        {
+          "count": 0,
+          "theme": "協調性"
+        },
+        {
+          "count": 0,
+          "theme": "行動力"
+        },
+        {
+          "count": 0,
+          "theme": "コミュニケーション"
+        },
+        {
+          "count": 0,
+          "theme": "適応力"
+        },
+        {
+          "count": 0,
+          "theme": "創造性"
+        },
+        {
+          "count": 0,
+          "theme": "責任感"
+        },
+        {
+          "count": 0,
+          "theme": "国際性"
+        },
+        {
+          "count": 0,
+          "theme": "課題解決"
+        },
+        {
+          "count": 0,
+          "theme": "挑戦"
+        }
+      ],
+      "underused": [
+        "主体性",
+        "協調性",
+        "行動力",
+        "コミュニケーション",
+        "適応力"
+      ]
+    },
+    "divergenceUnusedExperience": {
+      "basis": {
+        "totalExperiences": 5,
+        "usedExperiences": 2
+      },
+      "unused": [
+        {
+          "category": "ボランティア",
+          "id": "volunteerActivities:ダミー清掃ボランティア",
+          "title": "ダミー清掃ボランティア"
+        },
+        {
+          "category": "資格",
+          "id": "certificationActivities:ダミー検定2級",
+          "title": "ダミー検定2級"
+        },
+        {
+          "category": "読書",
+          "id": "readingActivities:サンプル都市論",
+          "title": "サンプル都市論"
+        }
+      ]
+    },
+    "interviewQuestionMaterials": {
+      "activitySummary": "探究・部活・ボランティアを通じて、課題を設定し検証する経験を重ねてきた。",
+      "applicantType": "issue_driven",
+      "department": "サンプル学科",
+      "examTypes": [
+        "総合型選抜（AO入試）",
+        "学校推薦型選抜"
+      ],
+      "faculty": "サンプル学部",
+      "futureGoals": [
+        "地域政策の研究",
+        "公共データの利活用"
+      ],
+      "interests": [
+        "探究",
+        "協働",
+        "継続"
+      ],
+      "statementSummary": "私はサンプル商店街の来訪動機を調べる探究に取り組み、仮説の修正を繰り返しました。貴学のサンプル学部で公共データの利活用を学びたいと考えています。",
+      "strengths": [
+        "粘り強く仮説を修正する力",
+        "他者を巻き込む調整力",
+        "数値で振り返る習慣"
+      ],
+      "subjectGradesLines": [
+        "【科目別評定・出席状況】",
+        "英語評定: 5",
+        "国語評定: 4",
+        "数学評定: 3",
+        "社会評定: 5",
+        "欠席日数: 2日",
+        "※ 推薦条件・面接・志望理由書の判断材料として参照してください。出願可否は断定せず、公式要項を最終確認源とする前提でアドバイスしてください。"
+      ],
+      "university": "サンプル大学"
+    },
+    "interviewStudentProfileContext": "【自己分析サマリー（面接用・最小コンテキスト）】\nサンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。\n強み（上位 3）:\n・粘り強く仮説を修正する力\n・他者を巻き込む調整力\n・数値で振り返る習慣\n将来とのつながり（上位 2）:\n・地域政策の研究\n・公共データの利活用\n価値観タグ: 探究 / 協働 / 継続\n代表エピソード:\n・探究：仮説修正の粘り強さ：地域の商店街調査で初期仮説が外れ、聞き取り対象を変えて再設計し、3 回目で有意な傾向を掴んだ。\n・部活：役割の再設計：人数減に対応して練習メニューを再設計し、参加率を改善した。\n傾向（参考情報・断定ではない）: 社会課題型 — 社会課題への問題意識は話しやすい。自分の経験との具体的な接続、当事者性の深さを掘る方向を意識する",
+    "matchingStudentProfileContext": "【自己分析サマリー（matching 用）】\nサンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。\n強み（上位 5）:\n・粘り強く仮説を修正する力\n・他者を巻き込む調整力\n・数値で振り返る習慣\n弱み（上位 2）:\n・結論を急ぎがち\n・発信量が少ない\n将来とのつながり（上位 3）:\n・地域政策の研究\n・公共データの利活用\n価値観タグ: 探究 / 協働 / 継続\n代表エピソード:\n・探究：仮説修正の粘り強さ：地域の商店街調査で初期仮説が外れ、聞き取り対象を変えて再設計し、3 回目で有意な傾向を掴んだ。\n・部活：役割の再設計：人数減に対応して練習メニューを再設計し、参加率を改善した。",
+    "selfPRDraftSeed": "私の強みは、粘り強く仮説を修正する力 です。\n\n特に印象に残っているのは「探究：仮説修正の粘り強さ」での経験です。地域の商店街調査で初期仮説が外れ、聞き取り対象を変えて再設計し、3 回目で有意な傾向を掴んだ。\n\n失敗した仮説を捨てずに設計し直せる点\n\n今後は、地域政策の研究 を目指したいと考えています。",
+    "statementStudentProfileContext": "【自己分析サマリー】\nサンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。\n強み: ・粘り強く仮説を修正する力 ・他者を巻き込む調整力 ・数値で振り返る習慣\n弱み: ・結論を急ぎがち ・発信量が少ない\n価値観タグ: 探究 / 協働 / 継続\n傾向（参考情報・断定ではない）: 社会課題型 — 社会課題への問題意識は明確になりやすいが、自分の経験との具体的な接続が抜けがち。経験との結びつきと深掘りを意識する",
+    "subjectGradesPromptLines": [
+      "【科目別評定・出席状況】",
+      "英語評定: 5",
+      "国語評定: 4",
+      "数学評定: 3",
+      "社会評定: 5",
+      "欠席日数: 2日",
+      "※ 推薦条件・面接・志望理由書の判断材料として参照してください。出願可否は断定せず、公式要項を最終確認源とする前提でアドバイスしてください。"
+    ],
+    "toStudentProfile": {
+      "applicantType": "issue_driven",
+      "futureConnections": [
+        "地域政策の研究",
+        "公共データの利活用"
+      ],
+      "generatedAt": "2020-01-01T00:00:00.000Z",
+      "signatureEpisodes": [
+        {
+          "relatedStrengthIdx": 0,
+          "summary": "粘り強く仮説を修正する力",
+          "title": "粘り強く仮説を修正する力"
+        },
+        {
+          "relatedStrengthIdx": 1,
+          "summary": "他者を巻き込む調整力",
+          "title": "他者を巻き込む調整力"
+        },
+        {
+          "relatedStrengthIdx": 2,
+          "summary": "数値で振り返る習慣",
+          "title": "数値で振り返る習慣"
+        }
+      ],
+      "sourceHash": "2wmtab",
+      "strengths": [
+        "粘り強く仮説を修正する力",
+        "他者を巻き込む調整力",
+        "数値で振り返る習慣"
+      ],
+      "summary": "サンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。",
+      "valueKeywords": [
+        "継続力",
+        "探究心",
+        "論理的思考"
+      ],
+      "version": 1,
+      "weaknesses": [
+        "結論を急ぎがち",
+        "発信量が少ない"
+      ]
+    },
+    "tutorStudentContext": "・志望校: サンプル大学 サンプル学部 / ダミー大学 ダミー学部\n・自己分析の要約: サンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。\n・自己分析で出ている強み: 粘り強く仮説を修正する力 / 他者を巻き込む調整力 / 数値で振り返る習慣\n・自己分析で見えている課題: 結論を急ぎがち / 発信量が少ない\n・志望理由書レビューの直近の課題: 志望学部との接続が弱い / 具体的な数値が少ない\n・面接練習の課題: 結論を先に述べる / 具体例を 1 つに絞る\n・活動経験: 部活動1件・ボランティア1件・探究1件・資格1件・読書1件（計5件）\n・小論文添削の直近の課題: 反論への言及が薄い\n・マイページの利用状況: 自己分析 完了 / 志望理由書 継続利用中 / 面接練習 継続利用中 / 小論文 利用済み / 自己PR 利用済み\n・最近よく使っている機能: 志望理由書 / 面接練習\n・まだ未着手の機能: 未入力\n・最近の成長傾向: 志望理由書 改善傾向",
+    "tutorStudentContextSection": "【PASSAI内の生徒情報】\n・志望校: サンプル大学 サンプル学部 / ダミー大学 ダミー学部\n・自己分析の要約: サンプル高校で探究活動に取り組み、地域の課題を題材に仮説検証を繰り返してきた受験生。\n・自己分析で出ている強み: 粘り強く仮説を修正する力 / 他者を巻き込む調整力 / 数値で振り返る習慣\n・自己分析で見えている課題: 結論を急ぎがち / 発信量が少ない\n・志望理由書レビューの直近の課題: 志望学部との接続が弱い / 具体的な数値が少ない\n・面接練習の課題: 結論を先に述べる / 具体例を 1 つに絞る\n・活動経験: 部活動1件・ボランティア1件・探究1件・資格1件・読書1件（計5件）\n・小論文添削の直近の課題: 反論への言及が薄い\n・マイページの利用状況: 自己分析 完了 / 志望理由書 継続利用中 / 面接練習 継続利用中 / 小論文 利用済み / 自己PR 利用済み\n・最近よく使っている機能: 志望理由書 / 面接練習\n・まだ未着手の機能: 未入力\n・最近の成長傾向: 志望理由書 改善傾向\n\nこの生徒情報の扱い方:\n・受験・進路の話題では積極的に活用し、その生徒に合わせた個別最適化された助言を行ってください。\n・ただし単なる復唱・列挙や毎回の引用は避け、より良い助言のための背景知識として使ってください。\n・雑談・受験外の話題では無理に参照しないでください（利用頻度は低めに）。\n・これは参考情報です。ユーザーの現在の発言を常に最優先し、矛盾する場合は最新発言を信じてください。\n・情報が古い可能性があるため、断定しすぎないでください。\n・「あなたのデータによると」のように機械的に言いすぎないでください。\n・ここに無い個人情報を推測・補完しないでください。\n・「未入力」の項目を責めたり、入力を急かしたりしないでください。"
+  }
+}

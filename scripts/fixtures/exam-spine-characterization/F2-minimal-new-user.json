@@ -1,0 +1,175 @@
+{
+  "builders": [
+    {
+      "feature": "cross-cutting（11 route が参照）",
+      "key": "basicInfoPromptSection",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildBasicInfoPromptSection"
+    },
+    {
+      "feature": "cross-cutting（subjectGrades section）",
+      "key": "subjectGradesPromptLines",
+      "source": "lib/buildBasicInfoPromptSection.ts:buildSubjectGradesPromptLines"
+    },
+    {
+      "feature": "self-analysis / summarize（canonical projection）",
+      "key": "toStudentProfile",
+      "source": "lib/studentProfile.ts:toStudentProfile"
+    },
+    {
+      "feature": "statement-review",
+      "key": "statementStudentProfileContext",
+      "source": "lib/contextBuilders/statementContext.ts:buildStatementStudentProfileContext"
+    },
+    {
+      "feature": "interview-feedback",
+      "key": "interviewStudentProfileContext",
+      "source": "lib/contextBuilders/interviewContext.ts:buildInterviewStudentProfileContext"
+    },
+    {
+      "feature": "matching",
+      "key": "matchingStudentProfileContext",
+      "source": "lib/contextBuilders/matchingContext.ts:buildMatchingStudentProfileContext"
+    },
+    {
+      "feature": "interview-questions",
+      "key": "interviewQuestionMaterials",
+      "source": "lib/interview/buildInterviewQuestionMaterials.ts:buildInterviewQuestionMaterials"
+    },
+    {
+      "feature": "self-pr",
+      "key": "selfPRDraftSeed",
+      "source": "lib/buildSelfPRDraftSeed.ts:buildSelfPRDraftSeed"
+    },
+    {
+      "feature": "tutor（body 由来の横断要約）",
+      "key": "tutorStudentContext",
+      "source": "lib/contextBuilders/tutorStudentContext.ts:buildTutorStudentContext"
+    },
+    {
+      "feature": "tutor（SYSTEM block 2 の最終文字列）",
+      "key": "tutorStudentContextSection",
+      "source": "lib/tutor/tutorPrompt.ts:buildTutorStudentContextSection"
+    },
+    {
+      "feature": "statement-review / interview-feedback（divergence）",
+      "key": "divergencePreviousOutputSummary",
+      "source": "lib/contextBuilders/divergence/buildPreviousOutputSummary.ts:buildPreviousOutputSummary"
+    },
+    {
+      "feature": "statement-review / interview-feedback / self-pr（divergence）",
+      "key": "divergenceUnusedExperience",
+      "source": "lib/contextBuilders/divergence/buildUnusedExperience.ts:buildUnusedExperience"
+    },
+    {
+      "feature": "self-pr（divergence）",
+      "key": "divergenceThemeFrequency",
+      "source": "lib/contextBuilders/divergence/buildThemeFrequency.ts:buildThemeFrequency"
+    }
+  ],
+  "description": "新規ユーザー。全 source が空 / null。builder が落ちず空表現を返すことを固定する。",
+  "fixtureId": "F2-minimal-new-user",
+  "outputs": {
+    "basicInfoPromptSection": "【生徒の基本情報】\n（未登録）",
+    "divergencePreviousOutputSummary": {
+      "basis": {
+        "recordsConsidered": 0
+      },
+      "repeatedAdvice": [],
+      "repeatedThemes": []
+    },
+    "divergenceThemeFrequency": {
+      "basis": {
+        "documentsConsidered": 0
+      },
+      "themes": [
+        {
+          "count": 0,
+          "theme": "継続力"
+        },
+        {
+          "count": 0,
+          "theme": "主体性"
+        },
+        {
+          "count": 0,
+          "theme": "探究心"
+        },
+        {
+          "count": 0,
+          "theme": "協調性"
+        },
+        {
+          "count": 0,
+          "theme": "論理的思考"
+        },
+        {
+          "count": 0,
+          "theme": "行動力"
+        },
+        {
+          "count": 0,
+          "theme": "コミュニケーション"
+        },
+        {
+          "count": 0,
+          "theme": "適応力"
+        },
+        {
+          "count": 0,
+          "theme": "創造性"
+        },
+        {
+          "count": 0,
+          "theme": "責任感"
+        },
+        {
+          "count": 0,
+          "theme": "国際性"
+        },
+        {
+          "count": 0,
+          "theme": "課題解決"
+        },
+        {
+          "count": 0,
+          "theme": "挑戦"
+        }
+      ],
+      "underused": [
+        "継続力",
+        "主体性",
+        "探究心",
+        "協調性",
+        "論理的思考"
+      ]
+    },
+    "divergenceUnusedExperience": {
+      "basis": {
+        "totalExperiences": 0,
+        "usedExperiences": 0
+      },
+      "unused": []
+    },
+    "interviewQuestionMaterials": {
+      "activitySummary": null,
+      "applicantType": "__undefined__",
+      "department": null,
+      "examTypes": [],
+      "faculty": null,
+      "futureGoals": [],
+      "interests": [],
+      "statementSummary": null,
+      "strengths": [],
+      "subjectGradesLines": [],
+      "university": null
+    },
+    "interviewStudentProfileContext": "",
+    "matchingStudentProfileContext": "",
+    "selfPRDraftSeed": null,
+    "statementStudentProfileContext": "",
+    "subjectGradesPromptLines": [],
+    "toStudentProfile": null,
+    "tutorStudentContext": "",
+    "tutorStudentContextSection": ""
+  }
+}
