@@ -306,6 +306,104 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** script の削除のみ。
 - **再判断:** `E-H3`（Stage 5 の前）
 
+## E-S15 — `presentation` の table registry を read graph と一致させる
+
+- **Status:** `LOCKED`
+- **Decision:** `EXAM_SOURCE_TABLES.presentation` を `presentation_results` / `presentation_attempts` / `presentation_sessions` の 3 table とする。reader が実際に読む table を registry が過不足なく覆う。
+- **Reason:** presentation の read graph は `presentation_results → attempt_id → presentation_attempts → session_id → presentation_sessions` であり、enrichment が `presentation_sessions` を実際に読む。registry に無い table を reader が黙って SELECT する状態を残すと、「どの table が Spine の権限内か」が registry から読めなくなる。
+- **Alternatives rejected:**
+  - *`presentation_sessions` を読まない* — 大学 / 学部 / テーマ / 発表形式は presentation purpose の context 本体であり、読まないと機能しない。
+  - *registry を read graph の部分集合のままにする* — QA が「registry 外 SELECT」を検出できなくなる。
+- **Upstream CAREER decision:** —（受験版固有）
+- **Exam-specific differences:** 1 kind が複数 table にまたがるため CAREER の 1:1 map ではなく配列で持つ。
+- **Rollback implications:** 宣言のみ。runtime 挙動を持たない。
+- **補足:** これは **1:N registry の completeness 修正**であり、新しい `ExamSourceKind` の追加ではない。
+
+## E-S16 — `presentation_practice_records` は `dormant_no_author`
+
+- **Status:** `LOCKED`
+- **Decision:** `presentation_practice_records` を `ExamSourceKind` に追加せず、authority binary（`device_canonical_mirrored` / `server_authoritative`）にも入れず、Stage 3 reader から SELECT しない。分類は `dormant_no_author`。
+- **Reason:** schema と write route（`app/api/presentation/practice-record/route.ts`）は存在するが、`app/**` / `lib/**` に呼び出し元が 1 つも無く、実質的に行が書かれていない。著者のいない table を kind に昇格させると、authority class の 2 分類がどちらも当てはまらない例外を作ることになる。
+- **Alternatives rejected:**
+  - *11 個目の kind として追加する* — 著者がいないため authority を決められない。
+  - *authority token を 3 分類へ rename する* — 既存 2 分類の意味は正しく、dormant は authority の軸ではない。
+- **Upstream CAREER decision:** —（受験版固有）
+- **Exam-specific differences:** —
+- **Rollback implications:** 宣言のみ。
+- **補足:** これは「将来も使わない」という決定ではなく **現時点の観測事実の記録**である。使うことになった時点で kind 追加として別 decision を起こす。
+
+## E-S17 — Stage 3 の出力は未 verify な server candidate
+
+- **Status:** `LOCKED`
+- **Decision:** Stage 3 の reader が返す `ExamSourceBundle` は **未 verify な候補**として扱う。`device_canonical_mirrored` の 8 kind について「server row が存在する == canonical」と解釈しない。Stage 3 の結果**だけ**を理由に bridge / client source を排除しない。
+- **Reason:** class 1 の canonical は端末の localStorage であり、server の mirror が「今 request を出している端末の canonical」と一致する保証が無い（E-L1 / E-S2）。ここで verified を名乗ると、Stage 4 の Source-Sync が「既に verified なものを再検証する」意味の無い層になる。
+- **Alternatives rejected:**
+  - *Stage 3 で verified フラグを付ける* — 検証していないものに verified と名付けることになる。
+  - *server row があれば bridge を止める* — 古い mirror で新しい端末の入力を上書きする事故経路になる。
+- **Upstream CAREER decision:** `D-S2` 系（Source-Sync の負の安全ゲート）
+- **Exam-specific differences:** class 2（`interview_ai` / `presentation`）は Source-Sync の対象外だが、Stage 3 では runtime activation 自体をしないため差は出ない。
+- **Rollback implications:** なし（Stage 3 は runtime に接続しない）。
+
+## E-S18 — `interview_ai` は result を driver にする
+
+- **Status:** `LOCKED`
+- **Decision:** `interview_ai` の読み取りは `interview_ai_results` を driver とし、`created_at DESC, id DESC` で **result が実在する最新 record**を取る。親 `interview_ai_sessions` は `!inner` embed で解決し、所有は **session 側**の `user_id` でも filter する。
+- **Reason:** 旧経路（最新の completed session を取り、その session の result を探す）は、production の実形状（completed session が多数 / result は少数）では空振りが常態化する。最新 session に result が無いというだけで、実在する過去の result まで一切見えなくなる。また RLS（schema §60）は親 session の所有を EXISTS で判定する設計なので、query 側でも同じ構造で閉じる。
+- **Alternatives rejected:**
+  - *session を driver にして result を後追いする* — 上記の空振りが起きる。
+  - *results の `user_id` だけで閉じる* — 列は複製にすぎず、親の所有と結果の所有が一致することを構造的に保証しない。
+- **Upstream CAREER decision:** —（受験版固有 / class 2 の server_authoritative source）
+- **Exam-specific differences:** `interview_ai_turns`（逐語）は SELECT しない（E-P5）。
+- **Rollback implications:** query 定義の変更のみ。
+
+## E-S19 — read cap は read layer が所有し、Stage 2 の budget と分離する
+
+- **Status:** `LOCKED`
+- **Decision:** history / array source は `EXAM_READ_CAPS` に **row count cap** を持ち、`cap + 1` 件取得して `<= cap` を `ok` / `cap + 1` を `truncated` とし余剰行を drop する。count query は追加しない。これは Stage 2 の `EXAM_CONTEXT_BUDGETS`（character budget）とは別物であり、相互に流用しない。
+- **Reason:** 無制限 read は 1 request の latency と memory を予測不能にする。一方で「prompt に何文字載せるか」は feature の判断であり、read layer が持つと Stage 2 の byte-equivalence と二重管理になる。cap + 1 方式なら追加 round-trip 無しで truncated を判定できる。
+- **Alternatives rejected:**
+  - *count query で総数を取る* — 1 往復増やす価値が無い。
+  - *Stage 2 の budget から row 数を導く* — 文字数と行数は別次元で、budget は現状 `observed_only` が大半（enforcement contract ではない）。
+- **Upstream CAREER decision:** —（受験版固有）
+- **Exam-specific differences:** —
+- **Rollback implications:** 定数変更のみ。**Stage 2 の budget は引き続き enforce しない。**
+
+## E-S20 — row mapper は policy-free で、既定値を持たない
+
+- **Status:** `LOCKED`
+- **Decision:** row mapper は「server row → 同型 projection」だけを行う。Supabase / fetch / localStorage / server auth / Date / Math.random / prompt 文言 / 日本語見出し / feature ラベル / storage を持たない。`max` / `maxItemLength` の類は **required argument** とし、mapper 内に既定値を置かない。jsonb と embedded relation は必ず shape guard（`asRecord` / `firstRecord` / `unwrapEmbedded`）を通し、object / 配列 / null のいずれでも throw しない。
+- **Reason:** 既定値は「なぜその長さか」という feature 都合を mapper に埋め込む経路になり、後から policy がどこにあるか追えなくなる。PostgREST の embedded relation は同じ relation でも object / 配列 / null のいずれでも返り得るため、型 assertion して field access すると schema 変更で落ちる。
+- **Alternatives rejected:**
+  - *使いやすさのため既定値を持たせる* — 呼び出し側が値を意識しなくなり、policy が暗黙化する。
+  - *jsonb を domain 型へ cast する* — 実データが型と食い違ったときに throw する（`basic_info_logs.payload` に氏名が無い件が実例）。
+- **Upstream CAREER decision:** `D-L7` 系（rowMapper の純粋性）
+- **Exam-specific differences:** —
+- **Rollback implications:** なし。
+
+## E-S21 — request-local snapshot（`WeakMap<Request, …>`）
+
+- **Status:** `LOCKED`
+- **Decision:** 1 request 内で同じ kind を 2 度読まないための memo を `WeakMap<Request, …>` で持つ。global TTL cache（module-level `Map<userId, …>` + TTL）を作らない。認可は **cache hit でも毎回**再評価し、unauthenticated / unauthorized の結果は保存も返却もしない。保存済み entry の userId が認可結果と一致しない場合はその entry を破棄する。snapshot を外しても reader の正しさが変わらない設計にする。
+- **Reason:** userId を key にした module-level Map は、process 内で request を跨いで他人の request が入れた値に触れ得る構造になる。TTL は「いつの時点のデータか」を曖昧にし、Stage 4 の verification を無意味にする。また「stale を使わない」という fail-open の定義（E-S1 / E-S8）と正面から衝突する。`WeakMap<Request>` なら別 request での再利用が **構造的に**起きず、TTL も明示 invalidation も不要になる。
+- **Alternatives rejected:**
+  - *60 秒 TTL の per-user cache* — 上記のとおり request 跨ぎと stale の両方を招く。
+  - *cache hit 時に認可を省く* — snapshot は読み取り結果の memo であって認可の memo ではない。
+- **Upstream CAREER decision:** `D-S3` 系（request-local snapshot）
+- **Exam-specific differences:** —
+- **Rollback implications:** snapshot 経路を外すだけで reader の出力は変わらない。
+
+## E-S22 — query を data として持ち、I/O 境界を 1 箇所に閉じる
+
+- **Status:** `LOCKED`
+- **Decision:** 各 kind の SELECT を `ExamReadQuery`（table / 列配列 / filter / ordering / limit / mode）という **データ**として宣言し、実行は注入された `ExamReadExecutor` 1 本に閉じる。実際に PostgREST を叩くのは `supabaseExecutor.server.ts` だけとする。
+- **Reason:** (1) read layer が Supabase / next を知らずに済み、純粋で決定論的になる。(2) QA が ordering / limit / filter / **列名**を宣言的に freeze でき、「逐語列を SELECT していない」を文字列 grep ではなく構造で示せる。(3) `ExamReadQuery` は SELECT しか表現できないため、mutation を書く手段が構造的に存在しない。(4) 実 DB 無しで cap + 1 / enrichment 本数 / embedded の形まで検証できる。
+- **Alternatives rejected:**
+  - *reader が直接 Supabase client を呼ぶ* — 実 DB 無しでは query shape を検証できず、mutation 禁止も grep 頼みになる。
+  - *ORM / query builder を導入する* — dependency 追加禁止（E-S14）。
+- **Upstream CAREER decision:** —（受験版固有）
+- **Exam-specific differences:** —
+- **Rollback implications:** executor 差し替えのみ。
+
 ---
 
 # 5. Policy / persistence decisions
@@ -405,6 +503,20 @@ Exam-specific differences / Rollback implications
 - **Upstream CAREER path:** `PASSAI-CAREER/app/api/career/consultation/resolveContextInputs.ts`
 - **Exam-specific differences:** なし。
 - **Rollback implications:** なし。
+
+## E-P8 — server 由来 `basicInfo` に氏名を捏造しない
+
+- **Status:** `LOCKED`
+- **Decision:** `basic_info_logs.payload` には氏名が存在しない。したがって server 側 projection は **`name` を持たない専用 type**（`ExamBasicInfoServerRow`。`nameOnServer: false` を型で固定）として扱い、`name: ''` を作らない・ダミー名を作らない・`as BasicInfo` の unsafe cast をしない・server row に無い field を mapper で生成しない。氏名は bridge 側に残し、統合は Stage 4 の mixed-source resolution が行う。
+- **Reason:** writer（`lib/supabase/basicInfoLogs.ts`）が氏名を strip して書く契約であり、schema の COMMENT にも明記されている。Stage 2 の `ExamContextInput.basicInfo` は `BasicInfo`（`name` 必須）を要求するが、その型を満たすために空文字を入れると「氏名が空のユーザー」と「server から氏名が来ないユーザー」が区別できなくなり、prompt から氏名が黙って消える。型の辻褄合わせのために Stage 2 contract（byte-equivalence 済み）を壊すのは順序が逆である。
+- **Alternatives rejected:**
+  - *`name: ''` で埋める* — 空文字が prompt に流れ、E-P4（氏名の prompt 除外）を意図せず前倒しで実施したのと同じ結果になる。しかも意図的でないため観測もできない。
+  - *`as BasicInfo` で cast する* — 実データと型が食い違ったまま下流へ流れる。
+  - *Stage 2 の `ExamContextInput.basicInfo` を optional な型へ変える* — Stage 2 は byte-equivalence 済みで凍結中。Stage 3 の都合で触らない。
+- **Upstream CAREER decision:** —（受験版固有 / 氏名を mirror しない受験版の writer 契約に由来）
+- **Exam-specific differences:** —
+- **Rollback implications:** なし（Stage 3 は runtime に接続しない）。
+- **関連:** `E-P4`（氏名を将来 prompt から落とす）と混同しない。E-P4 は「載せるのをやめる」判断、本 decision は「無いものを作らない」判断。
 
 ---
 
