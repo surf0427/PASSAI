@@ -148,7 +148,15 @@ function buildWeaknessesLine(profile: unknown): string | null {
 
 // 志望理由書レビューの直近の課題:
 //   StatementResult.weaknesses をそのまま、または ReviewHistoryItem.result.weaknesses を掘る。
-function buildStatementWeaknessLine(latest: unknown): string | null {
+/**
+ * ★ export する理由（Stage 5.6 / E-S44）★
+ *   canonical 側が「legacy と同じ表現を作れるか」を shadow で測るため、
+ *   同一の正規化（先頭 2 件 / 各 60 字 / ' / ' 連結）を **再実装せず**共有する。
+ *   定数を複製すると legacy と canonical で表現がずれ、比較が意味を失う。
+ *   ★ 呼び出してよいのは prompt 経路と shadow comparator だけで、
+ *     canonical の consumer contract にはしない（E-S44）。
+ */
+export function buildStatementWeaknessLine(latest: unknown): string | null {
   const rec = asRecord(latest);
   if (!rec) return null;
   // ReviewHistoryItem 形（result を内包）なら result を、そうでなければ自身を見る。

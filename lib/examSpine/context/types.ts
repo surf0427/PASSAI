@@ -219,6 +219,17 @@ export type CanonicalExamContextResult =
 
 /**
  * shadow 比較のために公開する解決済み入力。
- * `ExamContextInput` そのものだが、**context ではない**ことを型名で示す。
+ * `ExamContextInput` を含むが、**context ではない**ことを型名で示す。
+ *
+ * ★ shadow 専用 slot ★
+ *   `ExamContextInput`（＝ block builder が受け取る型）には入れない値を、
+ *   ここにだけ足す。block へ流れない一方で comparator からは参照できる。
+ *   これらは canonical の consumer contract ではない（E-S44）。
  */
-export type ExamContextInputSnapshot = Readonly<ExamContextInput>;
+export type ExamContextInputSnapshot = Readonly<ExamContextInput> & {
+  /**
+   * canonical rows から作った legacy 相当の「志望理由書の課題」行（E-S44）。
+   * canonical 固有の反復論点（`previousOutputSummary`）とは別物。
+   */
+  readonly statementWeaknessLine?: string | null;
+};

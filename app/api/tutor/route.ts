@@ -68,6 +68,7 @@ import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.serv
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
 import { formatActivityCategoryCounts } from '@/lib/activityCategories';
+import { buildStatementWeaknessLine } from '@/lib/contextBuilders/tutorStudentContext';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import { captureRouteException } from '@/lib/sentry/capture';
@@ -534,6 +535,9 @@ export async function POST(req: Request): Promise<Response> {
             diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
             // legacy の Supabase 層が prompt に出している自己分析 projection。
             selfAnalysis: contextResult.context.selfAnalysis ?? null,
+            // legacy が prompt に出している「志望理由書の課題」行。
+            // canonical 側と同じ normalizer を通して比較する（E-S44）。
+            statementWeaknessLine: buildStatementWeaknessLine(body.statementReviewLatest ?? null),
             // legacy の Supabase 層が出している件数 1 行表現。canonical block と
             // 同じ formatter を通すことで、表現の差ではなく値の差だけを見る。
             activityCategoryCounts: contextResult.context.activity
