@@ -25,6 +25,7 @@
     "qa:examSpine:stage3": "npx tsx scripts/exam-spine-stage3-check.ts",
     "qa:examSpine:syncCore": "npx tsx scripts/exam-spine-sync-core-check.ts",
     "qa:examSpine:syncAdapters": "npx tsx scripts/exam-spine-sync-adapters-check.ts",
+    "qa:examSpine:syncDevice": "npx tsx scripts/exam-spine-sync-device-check.ts",
     "qa:examSpine:liveSchema": "npx tsx scripts/exam-spine-live-schema-check.ts",
     "qa:examSpine:readiness": "npx tsx scripts/exam-spine-readiness-check.ts",
     "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
