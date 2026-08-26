@@ -1,58 +1,71 @@
 -- ============================================================
--- anonymous mirror の SELECT 露出を閉じる migration（security fix）
+-- anonymous mirror の anon policy を全削除する migration（security fix / 第 2 段）
 --
--- 目的:
---   4 つの anonymous mirror テーブルを、supabase/schema.sql が宣言している
---   「anon / authenticated から読み戻せない write-only sink」の状態へ戻す。
+-- ★★ 適用前提（これを満たすまで実行しないこと）★★
+--   1. `POST /api/mirrors`（server-only writer）が **本番にデプロイ済み**であること。
+--   2. 4 つの client mirror helper が server route 経由へ切替済みであること
+--      （lib/supabase/mirror{StudentProfile,BasicInfo,ActivityData,Diagnosis}.ts）。
+--   3. 本番で server 経由の mirror write が **成功することを実測済み**であること
+--      （mirror_events に mirror_status='success' が新規に積まれる、または
+--        service_role で対象 table の updated_at 更新を確認）。
+--   これらの前に本 migration を適用すると、mirror の書き込みが停止する。
+--   （停止しても canonical UX は無傷だが、mirror が無音で欠落する）
 --
---     student_profile_mirrors
---     basic_info_mirrors
---     activity_mirrors
---     diagnosis_mirrors
+-- ── 確定した Root Cause ────────────────────────────────────────
+--   本番 (oarzldvteiuyuwkdoauq) の実 policy を取得した結果、原因は
+--   **B = anon SELECT policy** で確定した。
 --
---   2026-08-26 の read-only preflight で、本番（oarzldvteiuyuwkdoauq）では
---   anon key でこれらの行が読める状態にあることを観測した。
---   schema.sql の "No SELECT policy by design" と本番の drift を解消する。
+--     student_profile_mirrors : "student_profile_mirrors anon select_for_upsert"
+--     basic_info_mirrors      : "basic_info_mirrors anon select_for_upsert"
+--     activity_mirrors        : "activity_mirrors anon select_for_upsert"
+--     diagnosis_mirrors       : "diagnosis_mirrors anon select_for_upsert"
+--         いずれも FOR SELECT TO anon USING (true)
 --
--- 前提: 先に supabase/mirror_select_exposure_check.sql を実行し、原因（A/B/C/D）
---   を確認していること。本 migration は A（RLS disabled）と B（SELECT policy 存在）
---   の双方を安全に解消する。C / D が主因だった場合は §5 の注記を参照。
+--   4 table とも RLS = enabled、FOR ALL policy は無し。
+--   `USING (true)` の SELECT policy が全行露出の直接原因。
 --
--- ── 実行順序（この順序が安全性の本体）────────────────────────────
---   1. 書き込み policy（anon insert / anon update）が無ければ **先に補完**する。
---      ★ RLS が無効の環境では policy が未作成の可能性がある。補完せずに RLS を
---        有効化すると mirror の書き込みが即座に止まる（しかも mirror writer は
---        never-throw のため **無音で失敗する**）。必ず補完を先に行う。
---   2. RLS を有効化する（原因 A の解消）。既に有効なら no-op。
---   3. cmd='SELECT' の policy だけを削除する（原因 B の解消）。
---   4. 検証し、閉じられていなければ例外を投げて中断する。
+--   policy 名が示すとおり、これは browser の anon client が
+--   `INSERT ... ON CONFLICT DO UPDATE`（upsert）を実行するために追加されたもの。
+--   PostgreSQL は ON CONFLICT DO UPDATE に対応する SELECT アクセスを要求するため、
+--   anon 直接 upsert を維持したまま SELECT policy だけを落とすことはできない。
+--
+--   → そこで **書き込みを server へ移設**し（第 1 段・別 commit）、
+--     その後に anon policy を全削除する（本ファイル・第 2 段）。
+--
+-- ── 本ファイルの旧版について ──────────────────────────────────
+--   旧版は「SELECT policy だけを落とし、anon insert/update は維持する」内容だった。
+--   実 policy が判明した結果、それでは anon 直接 upsert が壊れるため **置換した**。
+--   （commit 809141b の内容は history として残す。rewrite はしない）
+--
+-- ── 目標状態（4 mirror 共通）──────────────────────────────────
+--   RLS            = enabled（維持）
+--   anon policy    = 0 件（select_for_upsert / insert / update をすべて削除）
+--   authenticated  = policy 無し（＝直接アクセス不可）
+--   service_role   = RLS を bypass するため policy 不要。server writer のみが書ける
+--
+--   mirror_events は **対象外**。別目的（観測 sink）であり現状のまま維持する。
 --
 -- ── 安全性 ────────────────────────────────────────────────────
---   - DROP TABLE / DROP COLUMN / TRUNCATE / DELETE を含まない。
---   - payload の shape・内容を変更しない。行を 1 件も読まない / 書き換えない。
---   - 新規テーブル・新規列を作らない。
---   - INSERT / UPDATE policy を削除しない（＝ mirror writer を壊さない）。
---   - **GRANT を REVOKE しない。**
---       理由: mirror writer は `.upsert(..., { onConflict: 'source_hash' })`
---       ＝ `INSERT ... ON CONFLICT DO UPDATE` を発行する。PostgreSQL は
---       ON CONFLICT DO UPDATE において「EXCLUDED 側で読まれる対象列」に対して
---       SELECT 権限を要求するため、anon から SELECT を REVOKE すると
---       書き込みが壊れる。RLS で閉じるのが正しい手段。
---   - FORCE ROW LEVEL SECURITY は付けない（table owner / 管理経路への影響を避ける）。
---   - 冪等。複数回実行しても結果は同じ。
---   - cmd='ALL' の policy は **自動削除しない**（書き込みも兼ねるため）。
---     検出した場合は WARNING を出して手動判断に委ねる。
+--   - DROP TABLE / DROP COLUMN / TRUNCATE / DELETE / UPDATE を含まない。
+--   - 既存行（21 / 10 / 6 / 3）を 1 件も削除・書き換えしない。
+--   - payload / source_hash / schema_version を変更しない。
+--   - 新規 table / 新規 column を作らない。
+--   - GRANT / REVOKE を変更しない（RLS 有効 + policy 0 件で anon は拒否されるため不要。
+--     追加の hardening として REVOKE する場合は §4 の注記を参照）。
+--   - 冪等（policy が既に無ければ no-op）。
+--   - 検証ブロックが目標状態でなければ RAISE EXCEPTION で中断する。
 --
--- ── 適用方法 ──────────────────────────────────────────────────
---   本番 Supabase の SQL Editor に全文を貼って実行する。
---   実行後、NOTICE に before / after の状態が出力される。
---   適用後は supabase/mirror_select_exposure_check.sql を再実行して確認すること。
+-- ── 適用後の確認 ──────────────────────────────────────────────
+--   1. supabase/mirror_select_exposure_check.sql を実行
+--   2. anon key で 4 table を SELECT → 0 行
+--   3. anon key で 4 table へ INSERT / UPDATE → 拒否
+--   4. UI 操作で mirror write → mirror_events に success が積まれる
 --
 -- 関連:
---   supabase/schema.sql（正本の宣言）
+--   supabase/schema.sql（宣言の正本。SELECT policy は元々存在しない）
 --   supabase/mirror_select_exposure_check.sql（原因確定 / 事後検証）
---   lib/supabase/mirror{StudentProfile,BasicInfo,ActivityData,Diagnosis}.ts（唯一の writer）
---   docs/supabase/schema_phase1_student_profile.md
+--   app/api/mirrors/route.ts（唯一の書き込み経路）
+--   lib/mirrors/mirrorWriteServer.ts（service_role writer / server-only）
 -- ============================================================
 
 DO $$
@@ -63,99 +76,62 @@ DECLARE
     'activity_mirrors',
     'diagnosis_mirrors'
   ];
-  t              text;
-  r              record;
-  rls_before     boolean;
-  select_policies_dropped int := 0;
-  write_policies_created  int := 0;
-  all_policy_found        int := 0;
+  t         text;
+  r         record;
+  dropped   int := 0;
+  kept_all  int := 0;
 BEGIN
   FOREACH t IN ARRAY mirror_tables LOOP
-
-    -- テーブルが存在しない環境では黙ってスキップする（冪等性）。
     IF to_regclass('public.' || t) IS NULL THEN
       RAISE NOTICE '[skip] % : テーブルが存在しません', t;
       CONTINUE;
     END IF;
 
-    -- ── before の状態を記録（適用ログが原因の証跡になる）──
-    SELECT c.relrowsecurity INTO rls_before
-    FROM pg_class c WHERE c.oid = to_regclass('public.' || t);
-
-    RAISE NOTICE '[before] % : rls_enabled=%', t, rls_before;
+    -- before 状態を記録（適用ログを証跡として残す）
     FOR r IN
       SELECT policyname, cmd, array_to_string(roles, ',') AS roles
       FROM pg_policies WHERE schemaname = 'public' AND tablename = t
       ORDER BY policyname
     LOOP
-      RAISE NOTICE '[before] %   policy: % | cmd=% | roles=%', t, r.policyname, r.cmd, r.roles;
+      RAISE NOTICE '[before] % : % | cmd=% | roles=%', t, r.policyname, r.cmd, r.roles;
     END LOOP;
 
-    -- ── 1. 書き込み policy の補完（RLS 有効化より必ず先）──
-    --    schema.sql の宣言と同一の名前・条件で作る。既存なら触らない。
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_policies
-      WHERE schemaname = 'public' AND tablename = t AND policyname = t || ' anon insert'
-    ) THEN
-      EXECUTE format(
-        'CREATE POLICY %I ON public.%I FOR INSERT TO anon WITH CHECK (true)',
-        t || ' anon insert', t
-      );
-      write_policies_created := write_policies_created + 1;
-      RAISE NOTICE '[fix] % : INSERT policy を補完しました（RLS 有効化前）', t;
-    END IF;
-
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_policies
-      WHERE schemaname = 'public' AND tablename = t AND policyname = t || ' anon update'
-    ) THEN
-      EXECUTE format(
-        'CREATE POLICY %I ON public.%I FOR UPDATE TO anon USING (true) WITH CHECK (true)',
-        t || ' anon update', t
-      );
-      write_policies_created := write_policies_created + 1;
-      RAISE NOTICE '[fix] % : UPDATE policy を補完しました（RLS 有効化前）', t;
-    END IF;
-
-    -- ── 2. RLS を有効化（原因 A の解消。既に有効なら no-op）──
+    -- RLS は有効のまま維持する（無効化は禁止）。既に有効なら no-op。
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-    IF rls_before IS NOT TRUE THEN
-      RAISE NOTICE '[fix] % : ROW LEVEL SECURITY を有効化しました（原因A）', t;
-    END IF;
 
-    -- ── 3. SELECT policy だけを削除（原因 B の解消）──
-    --      INSERT / UPDATE / DELETE policy には触れない。
+    -- anon / public を対象に含む policy をすべて削除する。
+    --   ★ 書き込みは server (service_role) が RLS を bypass して行うため、
+    --     anon 向け policy は 1 件も必要ない。
+    --   ★ roles に anon / public を含むものだけを対象にする。将来
+    --     authenticated 向けや service_role 向けの policy が追加されていても壊さない。
     FOR r IN
-      SELECT policyname FROM pg_policies
-      WHERE schemaname = 'public' AND tablename = t AND cmd = 'SELECT'
+      SELECT policyname, cmd, roles
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = t
+        AND (roles && ARRAY['anon', 'public']::name[])
     LOOP
+      IF r.cmd = 'ALL' THEN
+        -- 想定外（実測では存在しない）。書き込みも兼ねるため自動削除しない。
+        kept_all := kept_all + 1;
+        RAISE WARNING '[manual] % : FOR ALL policy "%" は自動削除しません。手動で確認してください', t, r.policyname;
+        CONTINUE;
+      END IF;
       EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, t);
-      select_policies_dropped := select_policies_dropped + 1;
-      RAISE NOTICE '[fix] % : SELECT policy "%" を削除しました（原因B）', t, r.policyname;
+      dropped := dropped + 1;
+      RAISE NOTICE '[drop] % : "%" (cmd=%) を削除', t, r.policyname, r.cmd;
     END LOOP;
-
-    -- ── 3b. cmd='ALL' は自動削除しない（書き込みも兼ねるため）──
-    FOR r IN
-      SELECT policyname, array_to_string(roles, ',') AS roles FROM pg_policies
-      WHERE schemaname = 'public' AND tablename = t AND cmd = 'ALL'
-    LOOP
-      all_policy_found := all_policy_found + 1;
-      RAISE WARNING '[manual] % : FOR ALL policy "%" (roles=%) が存在します。読み取りも許可しますが、削除すると書き込みも失われるため自動削除しません。手動で INSERT/UPDATE 専用へ分割してください。',
-        t, r.policyname, r.roles;
-    END LOOP;
-
   END LOOP;
 
-  RAISE NOTICE '---- summary: SELECT policy 削除=% / 書き込み policy 補完=% / 要手動対応(FOR ALL)=% ----',
-    select_policies_dropped, write_policies_created, all_policy_found;
+  RAISE NOTICE '---- summary: 削除した anon policy=% / 要手動確認(FOR ALL)=% ----', dropped, kept_all;
 END $$;
 
 
 -- ============================================================
--- 4. 事後検証（閉じられていなければ例外で中断する）
---    - RLS が有効であること
---    - SELECT policy / ALL policy が 1 件も残っていないこと
---    - 書き込み policy（insert / update）が揃っていること
+-- 検証: 目標状態でなければ中断する
+--   - RLS が有効であること
+--   - anon / public を対象にする policy が 0 件であること
+--   - 行が削除されていないこと（件数 > 0 の table は件数を維持）
 -- ============================================================
 
 DO $$
@@ -166,12 +142,10 @@ DECLARE
     'activity_mirrors',
     'diagnosis_mirrors'
   ];
-  t          text;
-  rls_on     boolean;
-  n_select   int;
-  n_all      int;
-  n_insert   int;
-  n_update   int;
+  t        text;
+  rls_on   boolean;
+  n_anon   int;
+  n_rows   bigint;
 BEGIN
   FOREACH t IN ARRAY mirror_tables LOOP
     IF to_regclass('public.' || t) IS NULL THEN CONTINUE; END IF;
@@ -179,56 +153,41 @@ BEGIN
     SELECT c.relrowsecurity INTO rls_on
     FROM pg_class c WHERE c.oid = to_regclass('public.' || t);
 
-    SELECT
-      count(*) FILTER (WHERE cmd = 'SELECT'),
-      count(*) FILTER (WHERE cmd = 'ALL'),
-      count(*) FILTER (WHERE cmd = 'INSERT'),
-      count(*) FILTER (WHERE cmd = 'UPDATE')
-    INTO n_select, n_all, n_insert, n_update
-    FROM pg_policies WHERE schemaname = 'public' AND tablename = t;
+    SELECT count(*) INTO n_anon
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = t
+      AND (roles && ARRAY['anon', 'public']::name[]);
+
+    EXECUTE format('SELECT count(*) FROM public.%I', t) INTO n_rows;
 
     IF rls_on IS NOT TRUE THEN
-      RAISE EXCEPTION '[verify] % : RLS が有効になっていません', t;
+      RAISE EXCEPTION '[verify] % : RLS が有効ではありません', t;
     END IF;
-    IF n_select > 0 THEN
-      RAISE EXCEPTION '[verify] % : SELECT policy が % 件残っています', t, n_select;
-    END IF;
-    IF n_all > 0 THEN
-      RAISE EXCEPTION '[verify] % : FOR ALL policy が % 件残っています（手動対応が必要）', t, n_all;
-    END IF;
-    IF n_insert = 0 OR n_update = 0 THEN
-      RAISE EXCEPTION '[verify] % : 書き込み policy が不足しています（insert=% / update=%）。mirror の書き込みが壊れます',
-        t, n_insert, n_update;
+    IF n_anon > 0 THEN
+      RAISE EXCEPTION '[verify] % : anon/public 向け policy が % 件残っています', t, n_anon;
     END IF;
 
-    RAISE NOTICE '[verify] % : OK  rls=true / select=0 / all=0 / insert=% / update=%',
-      t, n_insert, n_update;
+    RAISE NOTICE '[verify] % : OK  rls=true / anon_policies=0 / rows=%', t, n_rows;
   END LOOP;
 
-  RAISE NOTICE '---- verify PASS: 4 mirror すべてが write-only sink の状態です ----';
+  RAISE NOTICE '---- verify PASS: 4 mirror は anon から読み書きできない状態です ----';
+  RAISE NOTICE '---- 次: anon key で SELECT / INSERT / UPDATE を実測し、UI 操作で mirror write を確認すること ----';
 END $$;
 
 
 -- ============================================================
--- 5. 注記
+-- §4 注記 — 追加 hardening としての REVOKE について
 --
--- 原因 C（table-level GRANT のみが原因）だった場合:
---   上記 1〜3 を適用しても anon が読めるなら、RLS が効いていない経路
---   （例: policy 無しで RLS 無効、または view 経由）が残っている。
---   その場合でも **SELECT を REVOKE してはいけない**（§安全性を参照）。
---   mirror_select_exposure_check.sql の 3.grant / 4.view を再確認し、
---   view 経由なら該当 view を落とす（本 migration の範囲外・別途判断）。
+--   RLS 有効 + anon policy 0 件で anon の SELECT / INSERT / UPDATE は拒否される。
+--   したがって REVOKE は **必須ではない**。
 --
--- 原因 D（view / security definer function 経由）だった場合:
---   本 migration は view を作成も削除もしない。
---   check.sql の 4.view に出た object を個別に確認すること。
+--   将来の事故（誰かが Studio から "Enable read access" を押す等）に対する
+--   多層防御として GRANT を絞る選択肢はある:
 --
--- 適用後の確認手順:
---   1. supabase/mirror_select_exposure_check.sql を再実行
---      → 1.rls が全て rls_enabled=true / 2.policy に cmd=SELECT が無いこと
---   2. anon key で 4 テーブルを SELECT
---      → 行が返らないこと（0 行）
---   3. mirror 書き込みの非回帰確認
---      → 基本情報 / 活動 / 診断 / 自己分析のいずれかを保存し、
---        service_role で該当テーブルの updated_at が更新されることを確認
+--     REVOKE SELECT, INSERT, UPDATE, DELETE ON public.student_profile_mirrors FROM anon, authenticated;
+--     -- 他 3 table も同様
+--
+--   ただし Data API の schema cache 表現が変わるため、適用する場合は
+--   server writer（service_role）の書き込みを再検証してから行うこと。
+--   本 migration には含めない（範囲を「anon policy 削除」に限定するため）。
 -- ============================================================

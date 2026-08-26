@@ -124,28 +124,34 @@ WHERE v.schemaname NOT IN ('pg_catalog', 'information_schema')
 
 UNION ALL
 
--- 5. schema.sql が期待する書き込み policy の実在確認
---    migration は RLS を有効化する前にこれらを補完する（無い状態で有効化すると
---    mirror の書き込みが止まるため）。mirror_events は insert のみが正。
+-- 5. 目標状態の判定
+--    書き込みは server (service_role) 経由へ移設したため、4 mirror の anon 向け policy は
+--    **0 件が目標**（select_for_upsert / insert / update をすべて削除する）。
+--    mirror_events は対象外で、anon insert 1 件のままが正。
 SELECT
-  '5.expected',
-  e.t,
-  e.expected_name || ' (' || e.expected_cmd || ')' ||
-    CASE WHEN EXISTS (
-      SELECT 1 FROM pg_policies p
-      WHERE p.schemaname = 'public' AND p.tablename = e.t AND p.policyname = e.expected_name
-    ) THEN ' : EXISTS' ELSE ' : MISSING  <== RLS 有効化前に要補完' END,
+  '5.target',
+  t,
+  CASE
+    WHEN t = 'mirror_events' THEN
+      CASE WHEN (SELECT count(*) FROM pg_policies p
+                  WHERE p.schemaname='public' AND p.tablename=t
+                    AND (p.roles && ARRAY['anon','public']::name[])) = 1
+           THEN 'anon policy=1 : OK（観測 sink。今回は変更しない）'
+           ELSE 'anon policy=' || (SELECT count(*) FROM pg_policies p
+                                    WHERE p.schemaname='public' AND p.tablename=t
+                                      AND (p.roles && ARRAY['anon','public']::name[]))
+                || ' : 想定外' END
+    ELSE
+      CASE WHEN (SELECT count(*) FROM pg_policies p
+                  WHERE p.schemaname='public' AND p.tablename=t
+                    AND (p.roles && ARRAY['anon','public']::name[])) = 0
+           THEN 'anon policy=0 : OK（目標状態）'
+           ELSE 'anon policy=' || (SELECT count(*) FROM pg_policies p
+                                    WHERE p.schemaname='public' AND p.tablename=t
+                                      AND (p.roles && ARRAY['anon','public']::name[]))
+                || '  <== 未適用。server write path 稼働後に migration を適用すること' END
+  END,
   '-'
-FROM (
-  SELECT 'student_profile_mirrors' AS t, 'student_profile_mirrors anon insert' AS expected_name, 'INSERT' AS expected_cmd
-  UNION ALL SELECT 'student_profile_mirrors', 'student_profile_mirrors anon update', 'UPDATE'
-  UNION ALL SELECT 'basic_info_mirrors',      'basic_info_mirrors anon insert',      'INSERT'
-  UNION ALL SELECT 'basic_info_mirrors',      'basic_info_mirrors anon update',      'UPDATE'
-  UNION ALL SELECT 'activity_mirrors',        'activity_mirrors anon insert',        'INSERT'
-  UNION ALL SELECT 'activity_mirrors',        'activity_mirrors anon update',        'UPDATE'
-  UNION ALL SELECT 'diagnosis_mirrors',       'diagnosis_mirrors anon insert',       'INSERT'
-  UNION ALL SELECT 'diagnosis_mirrors',       'diagnosis_mirrors anon update',       'UPDATE'
-  UNION ALL SELECT 'mirror_events',           'mirror_events anon insert',           'INSERT'
-) e
+FROM targets
 
 ORDER BY 1, 2, 3;
