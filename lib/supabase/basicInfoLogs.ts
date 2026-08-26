@@ -35,7 +35,11 @@ import { getBrowserSupabaseClient } from "./browserClient";
 import { sha256Hex } from "./mirrorSourceHash";
 
 const TABLE = "basic_info_logs";
-const SCHEMA_VERSION = "1";
+// ★ device 側の Source-Sync view が同じ値を使う必要があるため export する（E-S33）。
+//   server row の `schema_version` は書き込み時のこの値であり、device 側が別値を
+//   使うと fingerprint が永久に一致しない。値の正本はここ 1 箇所。
+export const BASIC_INFO_SCHEMA_VERSION = "1";
+const SCHEMA_VERSION = BASIC_INFO_SCHEMA_VERSION;
 
 // select で取り出す列（snake_case）。schema.sql §41 の列順に合わせる。
 const ROW_COLUMNS =
