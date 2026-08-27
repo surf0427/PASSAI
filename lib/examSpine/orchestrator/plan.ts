@@ -408,6 +408,11 @@ export const EXAM_PURPOSE_PLANS: Readonly<
       { id: 'diagnosis_type_hint' },
       { id: 'activity_category_counts' },
       { id: 'interview_issue_line' },
+      //   ★ Stage 5.9: presentation_result_summary を追加（G4）★
+      //     legacy の Supabase 層が出している「・直近のプレゼン練習（…）の結果が
+      //     保存されています。」以下の行に対応する block。presentation は class 2
+      //     （server_authoritative / E-S3）なので device claim は持たない。
+      { id: 'presentation_result_summary' },
     ],
     render: null,
     legacyBuilder: null,

@@ -50,6 +50,7 @@ import type {
   ExamBasicInfoServerRow,
   ExamDiagnosisServerRow,
   ExamInterviewRecordServerRow,
+  ExamPresentationServerRow,
   ExamSelfAnalysisServerRow,
   ExamStatementReviewServerRow,
 } from '../read/rowMappers';
@@ -93,6 +94,7 @@ import {
 import { evaluateContextVeto } from './veto';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
 import { projectInterviewIssueLine } from './interviewRecordProjection';
+import { projectPresentationResultSummary } from './presentationProjection';
 import {
   projectActivity,
   projectBasicInfo,
@@ -636,6 +638,24 @@ function resolveContextInput(args: {
     if (line) {
       next.interviewIssueLine = line;
       origins.interview_record = 'server';
+    }
+  }
+
+  // presentation → presentationResultSummary（Stage 5.9 / G4）
+  //
+  // ★ class 2 = server_authoritative（E-S3）★
+  //   device claim を要求しない。authority は「authenticated owner + owner-scoped
+  //   RLS + server state」であり、Source-Sync の verified/mismatch 軸を持たない。
+  //
+  // ★ 本文を持ち込まない ★
+  //   transcript / storage_path / script / material_path は canonical query が
+  //   そもそも SELECT しない。ここで取り出すのも要約行だけである（E-P5 / Canon §55）。
+  if (usable('presentation')) {
+    const rows = slot<readonly ExamPresentationServerRow[] | null>('presentation');
+    const summary = projectPresentationResultSummary(rows);
+    if (summary) {
+      next.presentationResultSummary = summary;
+      origins.presentation = 'server';
     }
   }
 

@@ -105,6 +105,12 @@ export type ExamContextInput = {
    * 通った値をそのまま入れる。ここで再整形しない。
    */
   interviewIssueLine?: string | null;
+  /**
+   * 直近 1 件のプレゼン評価の要約行（Stage 5.9）。legacy の
+   * `renderTutorPresentationLines` と同じ正規化を通った値をそのまま入れる。
+   * ここで再整形しない。
+   */
+  presentationResultSummary?: string | null;
 
   /**
    * 活動整理のカテゴリ別件数（`formatActivityCategoryCounts` の出力）。
