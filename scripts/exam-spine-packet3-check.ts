@@ -537,8 +537,32 @@ function gateChecks(): void {
   set(saveSlots, saveUsers);
 
   // ★ Rule 10: 次の slot へ勝手に進まない ★
-  eq('切替可能 slot は tutor.basic_info だけ',
-    [...EXAM_SPINE_SWITCHABLE_SLOTS], ['tutor.basic_info']);
+  // ★ S5-P9: 承認済み slot は 2 つ ★ 勝手に 3 つ目が増えていないことを固定する。
+  //   （順序も含めて pin する。allowlist は「今どこまで切替を実測したか」の記録なので、
+  //     packet を経ずに token を足すと gate が意味を失う。）
+  eq('切替可能 slot は承認済みの 2 つだけ',
+    [...EXAM_SPINE_SWITCHABLE_SLOTS], ['tutor.basic_info', 'tutor.activity']);
+  check('gate: tutor.activity も slot + allowlist の連言が要る（片方では deny）', (() => {
+    const s0 = process.env.EXAM_SPINE_SLOT_SWITCH_SLOTS;
+    const u0 = process.env.EXAM_SPINE_SLOT_SWITCH_USER_IDS;
+    const set = (a?: string, b?: string): void => {
+      if (a === undefined) delete process.env.EXAM_SPINE_SLOT_SWITCH_SLOTS;
+      else process.env.EXAM_SPINE_SLOT_SWITCH_SLOTS = a;
+      if (b === undefined) delete process.env.EXAM_SPINE_SLOT_SWITCH_USER_IDS;
+      else process.env.EXAM_SPINE_SLOT_SWITCH_USER_IDS = b;
+    };
+    set('tutor.activity', undefined);
+    const slotOnly = isExamSpineSlotSwitchEnabled('tutor.activity', USER);
+    set(undefined, USER);
+    const userOnly = isExamSpineSlotSwitchEnabled('tutor.activity', USER);
+    set('tutor.activity', USER);
+    const both = isExamSpineSlotSwitchEnabled('tutor.activity', USER);
+    // basic_info だけを許可しても activity は ON にならない（slot 独立）
+    set('tutor.basic_info', USER);
+    const otherSlotOnly = isExamSpineSlotSwitchEnabled('tutor.activity', USER);
+    set(s0, u0);
+    return !slotOnly && !userOnly && both && !otherSlotOnly;
+  })());
 }
 
 // ── static（切替範囲と legacy 保全）──────────────────────────────────
@@ -558,27 +582,24 @@ function staticChecks(): void {
     readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8')
       .includes('export function buildTutorSupabaseContextSection'));
 
-  // Rule 1: basic_info **以外**の slot を差し替えていない
-  const spread = /const spineContext =[\s\S]{0,400}?;/.exec(route);
+  // Rule 1: 承認済み slot **以外**を差し替えていない
+  //
+  // ★ S5-P9 retarget ★ slot が 2 つになり、差し替えが条件付き spread
+  //   （`...(cond ? { key: … } : {})`）になった。不変条件は「差し替えられる
+  //   top-level key の集合」なので、literal の形ではなくその集合を見る。
+  //   ネストした object（slot の値そのもの）を拾わないよう depth を数える。
+  const spread = /const spineContext =[\s\S]{0,900}?\n      : contextResult\.context;/.exec(route);
   check('spineContext の派生が読める', spread !== null);
   if (spread) {
-    // object literal の **全 top-level key** を拾う（先頭 1 個だけ見ると 2 個目の追加を見逃す）。
-    const lit = /\{\s*\.\.\.contextResult\.context,([\s\S]*?)\}/.exec(spread[0]);
-    check('差し替え literal が読める', lit !== null, spread[0].slice(0, 200));
-    if (lit) {
-      let depth = 0;
-      const keys: string[] = [];
-      for (const part of lit[1].split(/(?<![:=])[,]/)) {
-        const seg = part;
-        if (depth === 0) {
-          const m = /^\s*(\w+)\s*:/.exec(seg);
-          if (m) keys.push(m[1]);
-        }
-        depth += (seg.match(/[{[(]/g) ?? []).length - (seg.match(/[}\])]/g) ?? []).length;
-      }
-      eq('差し替える slot は basicInfo だけ', keys, ['basicInfo']);
-    }
-    check('slot 値は decideTutorBasicInfoSlot 由来', spread[0].includes('slotDecision.value'));
+    const body = spread[0];
+    // `...contextResult.context` 以降で、depth 1（＝差し替え literal の直下）に現れる `key:` を拾う。
+    const after = body.slice(body.indexOf('...contextResult.context'));
+    // 差し替えられる key は必ず `{` か `,` の直後に `key:` として現れる
+    //   `{ ...ctx, basicInfo: v }` / `? { activity: v }` のどちらの形でも拾える。
+    const keys = [...after.matchAll(/[{,]\s*(\w+)\s*:/g)].map((m) => m[1]);
+    eq('差し替える slot は承認済みの 2 つだけ', [...new Set(keys)].sort(), ['activity', 'basicInfo']);
+    check('basic_info の slot 値は decideTutorBasicInfoSlot 由来', body.includes('slotDecision.value'));
+    check('activity の slot 値は decideTutorActivitySlot 由来', body.includes('activitySlotDecision.value'));
   }
 
   // canonical slot は usable('basic_info') の内側でしか作らない
@@ -601,7 +622,7 @@ function staticChecks(): void {
   eq('canonical への代入先は 1 つだけ',
     (routeBody.match(/=\s*await\s+buildCanonicalExamContext\s*\(/g) ?? []).length, 1);
   check('canonical assembly は gate 変数を条件に持つ block の内側',
-    /if \(slotSwitchEnabled \|\| shadowEnabled\) \{[\s\S]*?buildCanonicalExamContext\s*\(/.test(routeBody));
+    /if \(anySlotSwitchEnabled \|\| shadowEnabled\) \{[\s\S]*?buildCanonicalExamContext\s*\(/.test(routeBody));
   // legacy loader も 1 回だけ（二重 read を legacy 側で作らない）
   eq('legacy loader の呼び出しも 1 箇所だけ',
     (routeBody.match(/loadTutorStudentContextCached\s*\(/g) ?? []).length, 1);
@@ -624,13 +645,33 @@ function staticChecks(): void {
   check('canonical assembly の gate 条件を取り出せる', gateCond !== null);
   if (gateCond) {
     const cond = gateCond[1].trim();
-    eq('gate 条件は slot OR shadow', cond, 'slotSwitchEnabled || shadowEnabled');
-    const reads = ([[false, false], [true, false], [false, true], [true, true]] as const).map(
-      ([slotSwitchEnabled, shadowEnabled]) =>
-        // 呼び出しは 1 箇所だけ（上で固定済み）なので、条件が真なら 1 本・偽なら 0 本。
-        (slotSwitchEnabled || shadowEnabled) ? 1 : 0,
-    );
-    eq('canonical read 本数（OFF/OFF, ON/OFF, OFF/ON, ON/ON）', reads, [0, 1, 1, 1]);
+    // ★ S5-P9: slot が 2 つになったので条件は 2 段になった ★
+    //   `anySlotSwitchEnabled` の定義まで遡って評価し、read 本数表を導く。
+    eq('gate 条件は anySlot OR shadow', cond, 'anySlotSwitchEnabled || shadowEnabled');
+    const anyDecl = /const anySlotSwitchEnabled = ([^;]+);/.exec(routeBody);
+    check('anySlotSwitchEnabled の定義が読める', anyDecl !== null);
+    if (anyDecl) {
+      eq('anySlotSwitchEnabled は承認済み 2 slot の OR',
+        anyDecl[1].trim(), 'slotSwitchEnabled || activitySlotSwitchEnabled');
+    }
+    // 2 slot × shadow の 8 通り。呼び出しは 1 箇所だけ（上で固定済み）なので
+    // 条件が真なら 1 本・偽なら 0 本。**どの組合せでも 2 本にならない**ことが要点。
+    const combos = [
+      [false, false, false], [true, false, false], [false, true, false], [true, true, false],
+      [false, false, true], [true, false, true], [false, true, true], [true, true, true],
+    ] as const;
+    const reads = combos.map(([basicOn, activityOn, shadowOn]) => {
+      const anySlot = basicOn || activityOn;
+      return (anySlot || shadowOn) ? 1 : 0;
+    });
+    eq('canonical read 本数（basic × activity × shadow の 8 通り）',
+      reads, [0, 1, 1, 1, 1, 1, 1, 1]);
+    eq('canonical read が 2 本になる組合せは無い', reads.filter((n) => n > 1), []);
+    // 要求表（slot 単独視点）: slot OFF/shadow OFF = 0、それ以外は最大 1。
+    eq('slot OFF / shadow OFF は 0 本', reads[0], 0);
+    eq('activity ON / shadow OFF は 1 本', reads[2], 1);
+    eq('activity OFF / shadow ON は 1 本', reads[4], 1);
+    eq('activity ON / shadow ON は 1 本（共用）', reads[6], 1);
     // 共用の証拠: slot 決定と shadow 比較が同じ変数を読む
     check('slot 決定は canonical assembly の結果を読む',
       /decideTutorBasicInfoSlot\(\{[\s\S]{0,400}?canonical/.test(routeBody));

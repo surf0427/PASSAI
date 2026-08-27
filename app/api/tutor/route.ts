@@ -60,6 +60,7 @@ import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.server';
 import { isExamSpineSlotSwitchEnabled } from '@/lib/examSpine/context/slotSwitchGate.server';
 import { decideTutorBasicInfoSlot } from '@/lib/examSpine/context/tutorBasicInfoSlot';
+import { decideTutorActivitySlot } from '@/lib/examSpine/context/tutorActivitySlot';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -417,11 +418,14 @@ export async function POST(req: Request): Promise<Response> {
   // ★ fail-open（E-S1）★
   //   canonical 側が落ちても tutor 応答は止めない。legacy のまま進む。
   const slotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.basic_info', userId);
+  const activitySlotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.activity', userId);
+  // canonical assembly を要求する slot が 1 つでも ON か（read 本数を決めるのはこの 1 つの式）。
+  const anySlotSwitchEnabled = slotSwitchEnabled || activitySlotSwitchEnabled;
   const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
 
   let canonical: Awaited<ReturnType<typeof buildCanonicalExamContext>> | null = null;
   const tShadow = lat.now();
-  if (slotSwitchEnabled || shadowEnabled) {
+  if (anySlotSwitchEnabled || shadowEnabled) {
     try {
       const canonicalBridge = {
         // body は unknown 由来。canonical 側の shape guard に委ねるため型を明示する
@@ -507,7 +511,7 @@ export async function POST(req: Request): Promise<Response> {
       // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
     }
   }
-  if (slotSwitchEnabled || shadowEnabled) {
+  if (anySlotSwitchEnabled || shadowEnabled) {
     lat.record('spineShadow_ms', tShadow);
   }
 
@@ -522,9 +526,31 @@ export async function POST(req: Request): Promise<Response> {
     canonical: canonical?.ok === true ? canonical.tutorBasicInfoSlot : null,
     legacy: contextResult.context.basicInfo,
   });
+
+  // ── activity slot の consumer 切替（E-S54）──
+  //
+  // ★ basic_info と独立に判定する ★
+  //   slot ごとに env gate / Source-Sync usability / 同値 veto を持つ。
+  //   片方が legacy に倒れても、もう片方の判定には影響しない。
+  //   canonical context は上で **1 回だけ**組み立てたものを共用する（query は増えない）。
+  const activitySlotDecision = decideTutorActivitySlot({
+    usable: activitySlotSwitchEnabled && canonical?.ok === true,
+    canonical: canonical?.ok === true ? canonical.tutorActivitySlot : null,
+    legacy: contextResult.context.activity,
+  });
+
+  // ★ 差し替えるのは採用された slot だけ ★
+  //   他 slot（self_analysis / diagnosis / interviewAi / presentation / …）は
+  //   contextResult.context のまま 1 つも触らない。
   const spineContext =
-    slotDecision.authority === 'canonical'
-      ? { ...contextResult.context, basicInfo: slotDecision.value }
+    slotDecision.authority === 'canonical' || activitySlotDecision.authority === 'canonical'
+      ? {
+          ...contextResult.context,
+          ...(slotDecision.authority === 'canonical' ? { basicInfo: slotDecision.value } : {}),
+          ...(activitySlotDecision.authority === 'canonical'
+            ? { activity: activitySlotDecision.value }
+            : {}),
+        }
       : contextResult.context;
 
   // ── prompt 合成（lib/tutor/composeTutorPrompt.ts）──
@@ -727,6 +753,15 @@ export async function POST(req: Request): Promise<Response> {
       ? {
           spineSlotBasicInfo: slotDecision.authority,
           ...(slotDecision.reason === null ? {} : { spineSlotBasicInfoReason: slotDecision.reason }),
+        }
+      : {}),
+    // activity slot も同じ形（enum のみ / E-S12・E-S13）。OFF なら key ごと出ない。
+    ...(activitySlotSwitchEnabled
+      ? {
+          spineSlotActivity: activitySlotDecision.authority,
+          ...(activitySlotDecision.reason === null
+            ? {}
+            : { spineSlotActivityReason: activitySlotDecision.reason }),
         }
       : {}),
     contextCache: contextResult.cacheHit ? 'hit' : 'miss',

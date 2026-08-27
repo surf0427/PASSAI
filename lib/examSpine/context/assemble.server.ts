@@ -91,6 +91,7 @@ import {
 } from './identity';
 import { evaluateContextVeto } from './veto';
 import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasicInfoSlot';
+import { projectTutorActivitySlot, type TutorActivitySlot } from './tutorActivitySlot';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
 import {
   projectActivity,
@@ -295,6 +296,7 @@ export async function buildCanonicalExamContext(
       statementWeaknessLine: resolved.statementWeaknessLine,
     },
     tutorBasicInfoSlot: resolved.tutorBasicInfoSlot,
+    tutorActivitySlot: resolved.tutorActivitySlot,
   };
 }
 
@@ -526,6 +528,7 @@ type ResolvedInput = {
    *   採用するかどうかは consumer 側の `decideTutorBasicInfoSlot` が決める。
    */
   readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
+  readonly tutorActivitySlot: TutorActivitySlot | null;
 };
 
 /**
@@ -560,6 +563,7 @@ function resolveContextInput(args: {
 
   // basic_info（E-P8: name は server に無い）
   let tutorBasicInfoSlot: TutorBasicInfoSlot | null = null;
+  let tutorActivitySlot: TutorActivitySlot | null = null;
   if (usable('basic_info')) {
     const basicInfoRow = snapshotRow<ExamBasicInfoServerRow>('basic_info');
     const p = projectBasicInfo(basicInfoRow, args.bridge.basicInfo ?? null);
@@ -593,6 +597,11 @@ function resolveContextInput(args: {
       next.activityCategoryCounts = formatActivityCategoryCounts(summary);
       origins.activity = 'server';
     }
+    // ★ E-S54: tutor の activity slot を別途 project する ★
+    //   block（activityCategoryCounts）が持つのは行の「値」部分だけで、legacy の
+    //   section 行は `計N件` も要る。slot は totalCount + categoryCounts の pair を返す。
+    //   同じ row / 同じ集計関数を使うので追加 query は 1 本も出ない。
+    tutorActivitySlot = projectTutorActivitySlot(row);
   }
 
   // diagnosis → typeHint（Stage 5.2 / G1）
@@ -640,7 +649,14 @@ function resolveContextInput(args: {
   // durable source を持たない slot は構造的 bridge のまま（E-P3 / E-S9）。
   next.notServerCapableSlots = args.bridge.notServerCapableSlots ?? ['statementDraft'];
 
-  return { input: next, origins, bridgeFields, tutorBasicInfoSlot, statementWeaknessLine };
+  return {
+    input: next,
+    origins,
+    bridgeFields,
+    tutorBasicInfoSlot,
+    tutorActivitySlot,
+    statementWeaknessLine,
+  };
 }
 
 // ── provenance ────────────────────────────────────────────────────────

@@ -196,6 +196,7 @@ export type CanonicalExamContext = {
 };
 
 import type { TutorBasicInfoSlot } from './tutorBasicInfoSlot';
+import type { TutorActivitySlot } from './tutorActivitySlot';
 
 /** veto されたときに consumer が受け取る形。blocks は空で返す（渡さない）。 */
 export type CanonicalExamContextResult =
@@ -220,6 +221,12 @@ export type CanonicalExamContextResult =
        *   （AI-visible 出力を変えないため）。
        */
       readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
+      /**
+       * tutor の `activity` slot（E-S54）。basic_info slot と同じ扱いで、
+       * **これを prompt へ直接載せてはいけない**。consumer 側の
+       * `decideTutorActivitySlot` が legacy と突き合わせ、完全一致した場合だけ採用する。
+       */
+      readonly tutorActivitySlot: TutorActivitySlot | null;
     }
   | {
       readonly ok: false;
