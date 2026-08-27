@@ -94,6 +94,7 @@ import {
 import { evaluateContextVeto } from './veto';
 import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasicInfoSlot';
 import { projectTutorActivitySlot, type TutorActivitySlot } from './tutorActivitySlot';
+import { projectTutorDiagnosisSlot, type TutorDiagnosisSlot } from './tutorDiagnosisSlot';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
 import { projectInterviewIssueLine } from './interviewRecordProjection';
 import { projectPresentationResultSummary } from './presentationProjection';
@@ -301,6 +302,8 @@ export async function buildCanonicalExamContext(
     },
     tutorBasicInfoSlot: resolved.tutorBasicInfoSlot,
     tutorActivitySlot: resolved.tutorActivitySlot,
+    tutorDiagnosisSlot: resolved.tutorDiagnosisSlot,
+    tutorDiagnosisSchemaVersion: resolved.tutorDiagnosisSchemaVersion,
   };
 }
 
@@ -533,6 +536,16 @@ type ResolvedInput = {
    */
   readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
   readonly tutorActivitySlot: TutorActivitySlot | null;
+  /**
+   * ★ Stage 5.11 / E-S60 ★ tutor が `diagnosis` slot を canonical から取るための narrow 値。
+   *   `usable('diagnosis')` が真のときだけ入る。採用は `decideTutorDiagnosisSlot` が決める。
+   */
+  readonly tutorDiagnosisSlot: TutorDiagnosisSlot | null;
+  /**
+   * canonical が読んだ `diagnosis_logs.schema_version`。
+   * ★ prompt の材料ではない ★ slot 側の eligibility 判定（E-S59）だけに使う。
+   */
+  readonly tutorDiagnosisSchemaVersion: string | null;
 };
 
 /**
@@ -568,6 +581,8 @@ function resolveContextInput(args: {
   // basic_info（E-P8: name は server に無い）
   let tutorBasicInfoSlot: TutorBasicInfoSlot | null = null;
   let tutorActivitySlot: TutorActivitySlot | null = null;
+  let tutorDiagnosisSlot: TutorDiagnosisSlot | null = null;
+  let tutorDiagnosisSchemaVersion: string | null = null;
   if (usable('basic_info')) {
     const basicInfoRow = snapshotRow<ExamBasicInfoServerRow>('basic_info');
     const p = projectBasicInfo(basicInfoRow, args.bridge.basicInfo ?? null);
@@ -621,6 +636,12 @@ function resolveContextInput(args: {
       next.diagnosisTypeHint = hint;
       origins.diagnosis = 'server';
     }
+    // ★ E-S60: tutor の diagnosis slot を別途 project する ★
+    //   block（diagnosisTypeHint）は cap を build.ts 側で掛けるが、legacy section の
+    //   材料は 120 字 cap 済みの 1 文である。slot は cap 適用後の値を返す。
+    //   同じ row / 同じ hint 表を使うので追加 query は 1 本も出ない。
+    tutorDiagnosisSlot = projectTutorDiagnosisSlot(row);
+    tutorDiagnosisSchemaVersion = row?.schemaVersion ?? null;
   }
 
   // self_analysis → wallHittingResult（Stage 2 が studentProfile を派生させる）
@@ -696,6 +717,8 @@ function resolveContextInput(args: {
     bridgeFields,
     tutorBasicInfoSlot,
     tutorActivitySlot,
+    tutorDiagnosisSlot,
+    tutorDiagnosisSchemaVersion,
     statementWeaknessLine,
   };
 }

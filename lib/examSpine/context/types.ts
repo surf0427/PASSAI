@@ -197,6 +197,7 @@ export type CanonicalExamContext = {
 
 import type { TutorBasicInfoSlot } from './tutorBasicInfoSlot';
 import type { TutorActivitySlot } from './tutorActivitySlot';
+import type { TutorDiagnosisSlot } from './tutorDiagnosisSlot';
 
 /** veto されたときに consumer が受け取る形。blocks は空で返す（渡さない）。 */
 export type CanonicalExamContextResult =
@@ -227,6 +228,17 @@ export type CanonicalExamContextResult =
        * `decideTutorActivitySlot` が legacy と突き合わせ、完全一致した場合だけ採用する。
        */
       readonly tutorActivitySlot: TutorActivitySlot | null;
+      /**
+       * tutor の `diagnosis` slot（E-S60）。他 slot と同じ扱いで、
+       * **これを prompt へ直接載せてはいけない**。consumer 側の
+       * `decideTutorDiagnosisSlot` が legacy と突き合わせ、完全一致した場合だけ採用する。
+       */
+      readonly tutorDiagnosisSlot: TutorDiagnosisSlot | null;
+      /**
+       * canonical が読んだ `diagnosis_logs.schema_version`（E-S59 の eligibility 判定用）。
+       * ★ prompt / block の材料ではない ★ 値は writer contract の版であって受験生の情報を含まない。
+       */
+      readonly tutorDiagnosisSchemaVersion: string | null;
     }
   | {
       readonly ok: false;

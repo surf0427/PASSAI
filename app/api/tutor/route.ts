@@ -61,6 +61,7 @@ import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.ser
 import { isExamSpineSlotSwitchEnabled } from '@/lib/examSpine/context/slotSwitchGate.server';
 import { decideTutorBasicInfoSlot } from '@/lib/examSpine/context/tutorBasicInfoSlot';
 import { decideTutorActivitySlot } from '@/lib/examSpine/context/tutorActivitySlot';
+import { decideTutorDiagnosisSlot } from '@/lib/examSpine/context/tutorDiagnosisSlot';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -423,8 +424,10 @@ export async function POST(req: Request): Promise<Response> {
   //   canonical 側が落ちても tutor 応答は止めない。legacy のまま進む。
   const slotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.basic_info', userId);
   const activitySlotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.activity', userId);
+  const diagnosisSlotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.diagnosis', userId);
   // canonical assembly を要求する slot が 1 つでも ON か（read 本数を決めるのはこの 1 つの式）。
-  const anySlotSwitchEnabled = slotSwitchEnabled || activitySlotSwitchEnabled;
+  // ★ slot を増やしてもここに OR を足すだけ ★ 専用の assembly を作らない（E-S60）。
+  const anySlotSwitchEnabled = slotSwitchEnabled || activitySlotSwitchEnabled || diagnosisSlotSwitchEnabled;
   const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
 
   let canonical: Awaited<ReturnType<typeof buildCanonicalExamContext>> | null = null;
@@ -558,16 +561,34 @@ export async function POST(req: Request): Promise<Response> {
     legacy: contextResult.context.activity,
   });
 
+  // ── diagnosis slot の consumer 切替（E-S60）──
+  //
+  // ★ 他 2 slot と独立に判定する ★
+  //   slot ごとに env gate / Source-Sync usability / schema_version eligibility /
+  //   同値 veto を持つ。1 つが legacy に倒れても他 slot の判定には影響しない。
+  //   canonical context は上で **1 回だけ**組み立てたものを共用する（query は増えない）。
+  const diagnosisSlotDecision = decideTutorDiagnosisSlot({
+    usable: diagnosisSlotSwitchEnabled && canonical?.ok === true,
+    canonical: canonical?.ok === true ? canonical.tutorDiagnosisSlot : null,
+    canonicalSchemaVersion: canonical?.ok === true ? canonical.tutorDiagnosisSchemaVersion : null,
+    legacy: contextResult.context.diagnosis,
+  });
+
   // ★ 差し替えるのは採用された slot だけ ★
   //   他 slot（self_analysis / diagnosis / interviewAi / presentation / …）は
   //   contextResult.context のまま 1 つも触らない。
   const spineContext =
-    slotDecision.authority === 'canonical' || activitySlotDecision.authority === 'canonical'
+    slotDecision.authority === 'canonical'
+    || activitySlotDecision.authority === 'canonical'
+    || diagnosisSlotDecision.authority === 'canonical'
       ? {
           ...contextResult.context,
           ...(slotDecision.authority === 'canonical' ? { basicInfo: slotDecision.value } : {}),
           ...(activitySlotDecision.authority === 'canonical'
             ? { activity: activitySlotDecision.value }
+            : {}),
+          ...(diagnosisSlotDecision.authority === 'canonical'
+            ? { diagnosis: diagnosisSlotDecision.value }
             : {}),
         }
       : contextResult.context;
@@ -781,6 +802,16 @@ export async function POST(req: Request): Promise<Response> {
           ...(activitySlotDecision.reason === null
             ? {}
             : { spineSlotActivityReason: activitySlotDecision.reason }),
+        }
+      : {}),
+    // diagnosis slot も同じ形（enum のみ / E-S12・E-S13）。OFF なら key ごと出ない。
+    //   ★ schema_version の **値** は載せない ★ 載せるのは authority / reason enum だけ。
+    ...(diagnosisSlotSwitchEnabled
+      ? {
+          spineSlotDiagnosis: diagnosisSlotDecision.authority,
+          ...(diagnosisSlotDecision.reason === null
+            ? {}
+            : { spineSlotDiagnosisReason: diagnosisSlotDecision.reason }),
         }
       : {}),
     contextCache: contextResult.cacheHit ? 'hit' : 'miss',

@@ -8,15 +8,20 @@
 //   shadowGate.server.ts と同じ構造。purpose ではなく **slot** 単位で列挙させる。
 //
 // ★ 認識する slot は正式に切替を完了したものだけ ★
-//   E-S40 が開けた `tutor.basic_info`（E-S56）と、S5-P10 で切り替えた
-//   `tutor.activity`（E-S58）の 2 つ。他の token は env に書かれても無視する。
+//   E-S40 が開けた `tutor.basic_info`（E-S56）、S5-P10 で切り替えた
+//   `tutor.activity`（E-S58）、Stage 5.11 で切り替えた `tutor.diagnosis`（E-S60）の
+//   3 つ。他の token は env に書かれても無視する。
 //   「次の slot へ勝手に進まない」を env ではなくコードで担保するため allowlist 方式にする。
 //   slot を増やすのは、その slot の AI-visible 同値を実測した packet の明示的な仕事。
 //
 // server-only の env（`NEXT_PUBLIC_` を付けない）。値は毎回読む（cache しない）。
 
 /** 切替可能な consumer slot。切替を完了し AI-visible 同値を実測したもののみ。 */
-export const EXAM_SPINE_SWITCHABLE_SLOTS = ['tutor.basic_info', 'tutor.activity'] as const;
+export const EXAM_SPINE_SWITCHABLE_SLOTS = [
+  'tutor.basic_info',
+  'tutor.activity',
+  'tutor.diagnosis',
+] as const;
 export type ExamSpineSwitchableSlot = (typeof EXAM_SPINE_SWITCHABLE_SLOTS)[number];
 
 function isSwitchableSlot(value: string): value is ExamSpineSwitchableSlot {
@@ -47,8 +52,8 @@ function allowlist(): ReadonlySet<string> {
  *
  * ★ これは「canonical を使ってよいか」であって「canonical が正しいか」ではない ★
  *   正しさ（Source-Sync verified / veto）は assembler 側の gate が別途見ており、
- *   AI-visible 同値性は `decideTutorBasicInfoSlot` / `decideTutorActivitySlot` が
- *   slot ごとに最終検査する。
+ *   AI-visible 同値性は `decideTutorBasicInfoSlot` / `decideTutorActivitySlot` /
+ *   `decideTutorDiagnosisSlot` が slot ごとに最終検査する。
  *   本 gate はそれらより手前の、人間が握る ON/OFF でしかない。
  */
 export function isExamSpineSlotSwitchEnabled(slot: ExamSpineSwitchableSlot, userId: string): boolean {
