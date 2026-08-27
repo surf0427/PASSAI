@@ -473,6 +473,95 @@ S5-P11 の negative control は実際にこれを踏んだ（delimiter / 件数 
 を併置する。
 ```
 
+### diagnosis readiness（Stage 5.11 / Run 2 / schema 収束 + consumer 切替）
+
+```text
+schema_version の意味   **writer contract の版**（E-S59）。payload shape の版でも
+                        storage row の版でもなく、device が保持する値でもない
+                        （device は EXAM_DEVICE_SCHEMA_VERSIONS を合成して比較に載せる）
+
+writer / device / DDL   writer  lib/supabase/diagnosisLogs.ts  SCHEMA_VERSION = "3"
+                        device  EXAM_DEVICE_SCHEMA_VERSIONS.diagnosis = '3'（一致）
+                        DDL     schema_version text NOT NULL DEFAULT '1'（**変更しない**）
+
+legacy 版の実測         mirror に存在し得る版は '1' / '2' / '3' の 3 つ。
+                        ★ '1' だけではない ★ writer 定数は 1 → 2 → 3 と 2 度 bump している
+                        （E-S44 の記述は '1' のみを挙げていた。Run 2 で '2' を追加）
+
+legacy v1/v2 ruling     **comparison ineligible**（内容が違うのではなく比較の資格が無い）。
+                        canonical 経路に乗らず legacy へ倒れる。verified へ格上げしない
+
+DDL default の所見       **latent hazard であって現に発火していない**。
+                        diagnosis_logs への write path は repo 全走査で 1 本
+                        （upsertDiagnosisLogToSupabase）のみで schema_version を必ず明示送信し、
+                        caller 2 つ（dualWrite / backfill）も同関数を通る。
+                        DEFAULT に落ちる経路が存在しないため変更せず、
+                        「全 write path が明示送信すること」を QA で pin した
+                        （default が発火し得る経路が生まれたら落ちる）
+
+自然治癒しない          backfillDiagnosisLogOnce は localStorage の supabaseBackfill flag で
+                        一度きりに gate される。bump 前に backfill を終えた端末は
+                        診断を取り直さない限り再 upsert しない。旧版 row は持続する母集団
+
+mixed 版は存在しない     diagnosis_logs は UNIQUE(user_id) の 1 行/ユーザー。
+                        1 user 内で v1 と v3 が混在することはあり得ない。
+                        混在は **母集団レベル**（user ごとに版が違う）であり QA はその形で検証する
+
+projection compatible   resolveDiagnosisTypeHint が number(1-4) と ExamType(9種) の両系統を
+                        扱うため、v1 / v2 の row でも hint 1 文は現行と同じ規則で解決できる。
+                        ★ 射影の互換性と比較の資格は別軸 ★ 前者が真でも ineligible は開かない
+
+AI-visible 同値         legacy   projectDiagnosis → resolveDiagnosisTypeHint → truncate(hint,120)
+                        canonical projectTutorDiagnosisSlot → 同関数 → slice(0,120)
+                        truncate は省略記号を足さないため slice と byte 一致（rowMappers.ts）。
+                        言い換え表は E-S44 で 1 箇所に集約済み。同じ row を読む。
+                        → 12 fixture で divergent projection **0 件**
+
+consumer switch         CONSUMER_SWITCHED = YES（slot token `tutor.diagnosis` / E-S60）
+                        採用条件は basic_info / activity と同じ AI-visible 同値。
+                        fallback reason は not_usable / schema_version_ineligible /
+                        canonical_absent / divergent_projection の 4 つ
+                        （would_reduce_context は **作らない**。hint 1 文に量の概念が無い）
+
+overall                 READY（schema authority 確定 / 切替済み / 旧版は legacy へ倒れる）
+```
+
+### ★ 「ineligible」を「壊れている」と読まない ★
+
+```text
+旧版 row を持つ user でも AI が見る文字列は **変わらない**。
+canonical に乗らないだけで、legacy 経路が同じ hint を同じ cap で出す。
+したがって schema_version の divergence は **coverage の制限**であって
+**correctness の欠陥ではない**。backfill を急ぐ理由にしない。
+```
+
+### Run 2 — diagnosis 収束（完了）
+
+```text
+開始 canonical HEAD   012183a（clean / drift なし = Case A）
+採った戦略            Strategy B（eligibility gate）
+                      A（read-time normalization）は却下: 版は writer contract の事実であり
+                        正規化すると「古い contract で書かれた」情報が消え、E-S44 が挙げた
+                        検出性 defect が悪化する
+                      C（semantic incompatibility で BLOCKED）は却下: payloadMappingStable
+                        かつ projectionCompatible が実測で真で、旧版 row は legacy へ倒れて
+                        出力が変わらない
+
+runtime の比較規則     **変えていない**。schemaVersion は content field のまま。
+                      Run 2 が足したのは **宣言（EXAM_WRITER_SCHEMA_CONTRACTS）と
+                      検出可能性（schema_version_ineligible の reason enum）** である
+
+switchable slots      ['tutor.basic_info', 'tutor.activity', 'tutor.diagnosis']
+canonical read        3 slot × shadow の 16 通りで 0 か 1（2 にならない）。
+                      gate は anySlotSwitchEnabled || shadowEnabled の 1 段のまま
+AI call               1 request 1 本（Run 1 の N6 guard を保持）
+
+Run 2 で触っていないもの
+  self_pr / statement_review / essay / presentation / interview_record の semantics
+  basic_info / activity の出力
+  DB / migration / env / deploy
+```
+
 ### self_pr readiness（Stage 5.10 / ruling = Level C）
 
 ```text

@@ -2305,6 +2305,209 @@ window parity を要求する理由にならない。
   slot module を削除しても AI-visible 出力は不変（legacy 経路が土台のまま）。
   DB / wire / deploy への影響なし。
 
+## E-S59 — `schema_version` は writer contract の版であり、旧版 row は「内容が違う」のではなく「比較の資格が無い」
+
+- **Status:** `LOCKED`（Stage 5.11 / Run 2。`E-S44` が migration blocker として記録した
+  schema_version divergence の解消。`E-S44` の block 定義・hint 正本は変更しない）
+- **背景:** `E-S44` は「`diagnosisSyncView` は `schemaVersion` を content field に含む。
+  writer は `"3"` を書くが DDL default は `'1'` であり、bump 前に書かれた行は `'1'` のまま。
+  その行を持つ user は永久 `mismatch` になる」を **切替時の受け入れ条件**として残していた。
+  本 Decision がその受け入れ条件に答える。
+
+## 1. `schema_version` が表すもの（実測で確定）
+
+```text
+schema_version = **writer contract の版**
+
+× payload の shape 版          diagnosis の v1→v2 は shape を変えずに bump した
+                               （calcDiagnosisResultType の判定変更のみ）
+× storage row の版             行の物理形式は DDL が決めており版に依らない
+× device が保持する値          device は保存していない。`EXAM_DEVICE_SCHEMA_VERSIONS`
+                               という **build 時定数を合成**して比較に載せている
+```
+
+したがって sync view の `schemaVersion` を突き合わせることは
+「この行を最後に書いた writer は、今の build と同じ contract か」を問うている。
+**内容の一致とは別の問い**である。
+
+## 2. 版の実測（`EXAM_WRITER_SCHEMA_CONTRACTS` が正本）
+
+```text
+basic_info   current '1' / superseded なし  … bump 実績なし。DDL DEFAULT も '1'（divergence なし）
+activity     current '1' / superseded なし  … 同上
+diagnosis    current '3' / superseded '2','1'
+
+★ "1" だけではない ★ diagnosis の writer 定数は 1 → 2 → 3 と **2 度** bump している。
+  各時期に書かれた行がそのまま残るため、mirror に存在し得る版は '1' / '2' / '3' である
+  （`E-S44` の記述は '1' のみを挙げていた。本 Decision で '2' を追加した）。
+```
+
+## 3. 版が上がると既存 row は comparison ineligible になる（一般則）
+
+`schemaVersion` は content field なので、writer が bump した瞬間に **bump 前に書かれた
+全 row** が device 側の新定数と一致しなくなる。これは事故ではなく、
+「古い contract で書かれた行を verified と呼ばない」という fail-closed な設計である。
+ineligible な行は canonical 経路に乗らず legacy へ倒れる。
+
+**したがって writer の `SCHEMA_VERSION` を bump する packet は、その kind の既存 mirror row
+全件を comparison から外すことになる。** `EXAM_WRITER_SCHEMA_CONTRACTS` へ影響を明示すること。
+
+## 4. ineligible ≠ 内容が違う（consumer switch を許す根拠）
+
+```text
+payloadMappingStable   writer が device canonical を **無加工で** payload に載せるか
+                       diagnosis: true（upsertDiagnosisLogToSupabase は payload: input.diagnosis）
+                       basic_info: false（stripName が氏名を落とす / E-P8）
+
+projectionCompatible   superseded な版の row でも canonical 射影が現行版と同じ
+                       AI-visible 値になるか
+                       diagnosis: true（resolveDiagnosisTypeHint が number(1-4) と
+                       ExamType(9種) の両系統を扱うため、v1 / v2 の row でも
+                       hint 1 文は現行と同じ規則で解決できる）
+```
+
+`projectionCompatible = true` は **射影の互換性**であって **比較の資格**ではない。
+両者を混同しないこと。前者が真でも ineligible は開かない。
+
+## 5. 採った戦略 — eligibility gate（Strategy B）
+
+```text
+v3（current）    comparison eligible → verified になり得る → canonical 経路
+v1 / v2         comparison ineligible → legacy 経路へ倒れる（fail-open / E-P7）
+```
+
+現行の Source-Sync では `schemaVersion` が content field なので、この結果は
+**既に成立している**（旧版 row は fingerprint が一致せず `usable` の時点で落ちる）。
+本 Decision が足したのは **宣言と検出可能性**である。`E-S44` は
+「検出性: runtime では mismatch としか見えず原因が表面化しない」を defect として
+挙げていた。`decideTutorDiagnosisSlot` は `schema_version_ineligible` を
+`divergent_projection` と **別の reason enum** として返し、telemetry に enum で残す。
+
+## 6. やらないこと（禁止事項）
+
+```text
+× DB backfill / migration apply        本 Run は DB write をしない。将来やる場合も
+                                       本表の役目ではなく別 Decision が要る
+× v1 row を verified 扱いする          「たぶん同じ contract だろう」で verified を作らない
+× `schemaVersion` を sync view から    `E-S44` が既に rejected。比較を弱めて mismatch を
+  外して一致させる                     消すのは authority を一致させたことにならない
+× DDL DEFAULT '1' を '3' へ変える      DEFAULT は「版を明示しない writer」のための値であり、
+                                       現行版を入れると **未知の contract で書かれた行に
+                                       現行版のラベルを貼る**ことになる。全 write path が
+                                       明示送信する以上 DEFAULT に落ちる経路は存在せず、
+                                       変更の便益は無い。schema.sql は live DB の写しなので、
+                                       apply しない変更を書くと doc drift を作る
+```
+
+- **DDL default の扱い（結論）:** `diagnosis_logs.schema_version` の
+  `NOT NULL DEFAULT '1'` は **latent hazard であって現に発火していない**。
+  repo 全走査で diagnosis_logs への write path は
+  `lib/supabase/diagnosisLogs.ts:upsertDiagnosisLogToSupabase` **1 本のみ**で、
+  `schema_version: SCHEMA_VERSION` を必ず送る（caller は `dualWriteDiagnosisLog` /
+  `backfillDiagnosisLogOnce` の 2 つで、どちらも同関数を通る）。
+  したがって DEFAULT に落ちる経路は存在しない。**変更せず、QA で「全 write path が
+  明示送信すること」を pin する**方を選ぶ（default が発火し得る経路が生まれたら QA が落ちる）。
+
+## 7. legacy row は自然治癒しない（静的推論）
+
+`backfillDiagnosisLogOnce` は `backfillDone(userId, 'diagnosisLog')` で **一度きり**に
+gate されており、flag は localStorage（`supabaseBackfill`）にある。
+したがって bump 前に backfill を終えた端末は、ユーザーが **診断を取り直さない限り**
+再 upsert しない。旧版 row は持続する母集団である。
+live DB を見ずに（本 Run は DB read も禁止）QA fixture で v1 / v2 / v3 を再現して
+safety ruling を作る。
+
+- **★ snapshot kind に「mixed 版」は存在しない ★**
+  `diagnosis_logs` は `UNIQUE(user_id)` の 1 行/ユーザーなので、1 user の中で
+  v1 と v3 が混在することはあり得ない。混在は **母集団レベル**（user ごとに版が違う）
+  であり、QA はそれを「版の異なる user を並べて全員 fallback が正しく決まるか」で検証する。
+
+- **Decision:** 上記 1〜7 を `EXAM_WRITER_SCHEMA_CONTRACTS` /
+  `isComparableSchemaVersion()`（`lib/examSpine/sync/adapters/registry.ts`）として宣言し、
+  `diagnosis` の consumer 切替の受け入れ条件に組み込む。
+- **Implementation evidence:** `lib/examSpine/sync/adapters/registry.ts`
+  （`EXAM_WRITER_SCHEMA_CONTRACTS` / `isComparableSchemaVersion`）／
+  `lib/examSpine/context/tutorDiagnosisSlot.ts`（`schema_version_ineligible`）。
+  QA は `scripts/exam-spine-stage5-11-check.ts`。
+- **Alternatives rejected:**
+  - *Strategy A（read-time normalization で v1 を v3 相当に正規化）* — 版は writer contract の
+    事実であって正規化の対象ではない。正規化すると「古い contract で書かれた」という
+    情報が消え、`E-S44` の検出性 defect が悪化する。
+  - *Strategy C（semantic incompatibility として consumer switch を BLOCKED）* —
+    `payloadMappingStable` かつ `projectionCompatible` が実測で真であり、
+    旧版 row は legacy へ倒れて **出力が変わらない**。BLOCKED にする根拠が無い。
+  - *DDL DEFAULT を bump する* — 上記 §6 のとおり。
+- **Rollback implications:** 宣言と reason enum の追加のみ。runtime の比較規則は変えていない
+  ため、削除しても AI-visible 出力・verdict・fingerprint は不変。
+
+## E-S60 — tutor `diagnosis` を 3 番目の controlled consumer 切替とし、旧 schema 版は legacy へ倒す
+
+- **Status:** `LOCKED`（Stage 5.11 / Run 2）
+- **Decision:** Stage 5 の 3 番目の consumer 切替を **tutor purpose の `diagnosis` slot 単独**とする。
+  slot token は `tutor.diagnosis`。同じ request の他 slot（self_analysis / statement_review /
+  interview_record / presentation / …）は legacy のまま。
+  `basic_info`（`E-S56`）/ `activity`（`E-S58`）の authority には触れない。
+- **採用条件（`E-S56` / `E-S58` と同じ **AI-visible 同値**）:** canonical から作った slot が
+  legacy と **完全一致**したときだけ canonical を採る。一致しなければ legacy を維持する。
+- **同値の構造的根拠:**
+  ```text
+  legacy    tutorContext.ts:projectDiagnosis
+            resolveDiagnosisTypeHint(payload.resultType) → truncate(hint, 120)
+  canonical tutorDiagnosisSlot.ts:projectTutorDiagnosisSlot
+            resolveDiagnosisTypeHint(row.payload.resultType) → slice(0, 120)
+
+  ★ 言い換え表は 1 箇所（E-S44）★ 両者は同じ pure module を通る
+  ★ cap も同値 ★ truncate(v, max) は `v.length > max ? v.slice(0, max) : v` で
+    省略記号を足さない（rowMappers.ts）。したがって slice(0, max) と byte 一致する
+  ★ 同じ行 ★ legacy も canonical も diagnosis_logs の同一 row を読む
+  ```
+  それでも同値 veto は **恒久的な安全網**として残す。将来
+  `resolveDiagnosisTypeHint` の呼び出し側が片方だけ差し替えられたとき、黙って prompt が
+  変わるのではなく legacy へ倒れて観測に残るようにするため。
+- **fallback reason（closed enum / PII なし）:**
+  ```text
+  not_usable                canary / verdict / runtime block が canonical を許さない
+  schema_version_ineligible mirror row が現行 writer contract の版でない（E-S59）
+  canonical_absent          server 0 行 / resultType を解決できない
+  divergent_projection      canonical と legacy の射影が一致しない
+  ```
+  **`would_reduce_context` を持たない。** activity の slot は「カテゴリ数 / 総件数」という
+  **量**を持つため「減った」が定義できるが、diagnosis の slot は hint 1 文しか持たず
+  量の概念が無い。`E-P7` の語彙を意味の無い場所へコピーしない。
+- **★ `summary` を作らない ★** `TutorStudentContext['diagnosis']` は `summary?: string` も
+  宣言しているが、legacy はこれを **一度も書かず** section renderer も読まない（repo 全走査 0 件）。
+  canonical 側で埋めると legacy に無い行が prompt に出る（`E-P7` 違反）。
+  同値検査は `summary` の有無も見るため、将来 legacy が使い始めたら
+  `divergent_projection` で legacy へ倒れる。
+- **query 本数:** slot 切替 3 つと shadow は同じ canonical context を **1 回だけ**組み立てて
+  共用する。gate は `anySlotSwitchEnabled || shadowEnabled` の 1 段のままで、
+  3 slot × shadow の 16 通りすべてで canonical read は 0 か 1（2 にならない）。
+  **diagnosis 専用の assembly を作らない。**
+- **slot 独立:** gate / usability / eligibility / veto は slot ごとに独立に評価する。
+  `tutor.basic_info` を許可しても `tutor.diagnosis` は ON にならない（`E-S11` の連言を slot 単位で維持）。
+- **★ 2 枚目の gate は近道の trap である ★**
+  `schema_version_ineligible` は現行の Source-Sync では **通常到達しない**
+  （旧版 row は fingerprint 不一致で `usable` の時点で落ちる）。それでも置くのは、
+  `E-S44` が禁じた近道（`schemaVersion` を sync view から外して mismatch を消す）を
+  取った瞬間に **黙って旧版 row が canonical 経路へ流れ込む**のを止めるためである。
+  近道を取れば本 gate が発火し QA が落ちる（negative control D-N4 で実測）。
+- **保持したもの:** legacy serverRead は削除しない（同値検査の相手であり fallback）/
+  `E-S44` の block `diagnosis_type_hint` と hint 正本は不変 / shadow は observer のまま
+  （`E-S42` / `E-S43`）/ canary は default deny の連言（`E-S11`）/ AI call は 1 request 1 本
+  （Run 1 の N6 guard）。
+- **QA:** `scripts/exam-spine-stage5-11-check.ts`。negative control D-N1〜D-N10 を
+  mutation で実測しすべて検出。
+- **Alternatives rejected:**
+  - *schema_version を先に backfill してから切り替える* — DB write が要り、
+    本 Run の scope 外。かつ旧版 row は legacy へ倒れて出力が変わらないため不要。
+  - *`schemaVersion` を sync view から外して全 user を eligible にする* — `E-S44` が
+    既に rejected。比較を弱めて mismatch を消すのは authority の一致ではない。
+  - *`would_reduce_context` を activity からコピーする* — hint 1 文に量の概念が無く、
+    到達不能な reason を増やすだけになる。
+- **Rollback implications:** env から `tutor.diagnosis` を外せば legacy へ戻る。
+  slot module を削除しても AI-visible 出力は不変（legacy 経路が土台のまま）。
+  DB / wire / deploy への影響なし。
+
 ## E-P1 — 3 層のみ採用する（Layer 3/4/5 を持ち込まない）
 
 - **Status:** `LOCKED`
