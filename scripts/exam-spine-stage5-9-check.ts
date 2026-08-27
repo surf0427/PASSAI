@@ -797,6 +797,23 @@ function s7Consumer(): void {
     iCompose !== -1 && iPresLine < iCompose);
   check('C5 route は presentation block を prompt 合成へ渡さない',
     !routeCode.slice(iCompose === -1 ? 0 : iCompose).includes(BLOCK));
+
+  // ★ presentation shadow は canonical assembly を増やさない（S5-P12 / §13）★
+  //   controlled consumer lineage は slot 切替と shadow で **同じ** canonical context を
+  //   1 回だけ組み立てて共用する。presentation の比較はその共用 context を読むだけで、
+  //   専用の gate も専用の assembly も持たない。持ってしまうと同一 request 内で
+  //   canonical read が二重化し、E-S5（purpose 単位 1 read）に反する。
+  eq('C7 canonical assembly の呼び出しは route に 1 箇所だけ',
+    (routeCode.match(/buildCanonicalExamContext\s*\(/g) ?? []).length, 1);
+  check('C7 presentation 専用の gate を作っていない',
+    !/presentation(Shadow|Gate|Enabled)/i.test(routeCode));
+  check('C7 presentation の比較は共用 context から読む',
+    /presentationResultSummary:\s*\n?\s*renderTutorPresentationLines\(contextResult\.context\.presentation\)/
+      .test(routeCode));
+  // gate 変数の集合が増えていないこと（増えたら 8 通り表を拡張する必要がある）。
+  const gateVars = [...routeCode.matchAll(/const (\w*[Ee]nabled) =/g)].map((m) => m[1]).sort();
+  eq('C7 gate 変数は basic_info / activity / shadow の 3 つ + 集約 1 つ', gateVars,
+    ['activitySlotSwitchEnabled', 'anySlotSwitchEnabled', 'shadowEnabled', 'slotSwitchEnabled']);
 }
 
 // ══════════════════════════════════════════════════════════════════
