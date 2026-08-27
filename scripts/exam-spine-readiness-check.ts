@@ -442,17 +442,30 @@ function r1Register(): void {
   }
   //   (3) subject → ID（STATE / 実装が引く根拠の向きを固定する）
   //       readiness 宣言が「実在するが別主題の ID」へ張り替えられても落ちる。
-  const SEMANTIC_REFS: ReadonlyArray<readonly [string, string, string]> = [
-    // [label, その主張が書かれている文脈, 期待する decision ID]
-    ['statement_review semantics DEFERRED', 'semantics  DEFERRED（', 'E-S49'],
-    ['essay semantics DEFERRED', 'semantics       DEFERRED ★ ', 'E-S53'],
-    ['essay transport BLOCKED', 'transport       BLOCKED  ★ ', 'E-S52'],
+  //   ★ 検索は readiness 節の中へ閉じる ★
+  //     行頭 needle を STATE 全体へ当てると、別 kind の節に同形の行が増えた瞬間に
+  //     **意図しない節を掴む**（実際 Stage 5.10 の self_pr 節を追加した時に起きた）。
+  const SEMANTIC_REFS: ReadonlyArray<readonly [string, string, string, string]> = [
+    // [label, 節の見出し, その主張が書かれている行の needle, 期待する decision ID]
+    ['statement_review semantics DEFERRED',
+      '### statement_review readiness', 'semantics  DEFERRED（', 'E-S49'],
+    ['essay semantics DEFERRED',
+      '### essay readiness', 'semantics       DEFERRED ★ ', 'E-S53'],
+    ['essay transport BLOCKED',
+      '### essay readiness', 'transport       BLOCKED  ★ ', 'E-S52'],
+    ['self_pr transport BLOCKED',
+      '### self_pr readiness', 'transport       BLOCKED  ★ ', 'E-S50'],
   ];
-  for (const [label, ctx, id] of SEMANTIC_REFS) {
-    const at = stateSrc.indexOf(ctx);
+  for (const [label, heading, ctx, id] of SEMANTIC_REFS) {
+    const sectionAt = stateSrc.indexOf(heading);
+    check(`R1c STATE: ${label} の節がある`, sectionAt !== -1, heading);
+    if (sectionAt === -1) continue;
+    const endAt = stateSrc.indexOf('\n### ', sectionAt + heading.length);
+    const section = stateSrc.slice(sectionAt, endAt === -1 ? stateSrc.length : endAt);
+    const at = section.indexOf(ctx);
     check(`R1c STATE: ${label} の文脈がある`, at !== -1, ctx);
     if (at === -1) continue;
-    const line = stateSrc.slice(at, stateSrc.indexOf('\n', at));
+    const line = section.slice(at, section.indexOf('\n', at));
     check(`R1c STATE: ${label} の根拠は ${id}`, line.includes(id), line.slice(0, 110));
   }
 

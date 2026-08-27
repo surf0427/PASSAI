@@ -596,20 +596,29 @@ function verdictMap(): void {
 function enableContract(): void {
   const verified: ExamSyncExternalVerdict = 'verified';
 
+  // ★ canary / verdict の段を試すには「runtime blocked でない kind」が要る ★
+  //   veto は 4 段の連言で、2 段目（runtime_blocked）に落ちる kind を使うと
+  //   3 段目（canary）も 4 段目（verdict）も **到達しないまま緑になる**。
+  //   Stage 5.10 で self_pr が blocked になったため、この節の fixture kind を
+  //   明示し、「fixture が blocked でないこと」自体を先に固定する。
+  const HEALTHY = 'statement_review' as const;
+  check('enable 節の fixture kind は runtime blocked でない（前提の自己検査）',
+    !isExamSyncRuntimeBlocked(HEALTHY));
+
   const canaryValues: unknown[] = [undefined, null, false, 0, 1, '', 'true', 'TRUE', {}, [], Number.NaN];
   const leaked: string[] = [];
   for (const value of canaryValues) {
-    const d = examSyncUsability({ kind: 'self_pr', verdict: verified, canaryAllowed: value });
+    const d = examSyncUsability({ kind: HEALTHY, verdict: verified, canaryAllowed: value });
     if (d.usability !== 'veto' || d.reason !== 'canary_denied') leaked.push(String(value));
   }
   check(`E-S11 default deny: canary が true 以外（${canaryValues.length} 種）はすべて veto`,
     leaked.length === 0, leaked.join(', '));
   eq('canary true + verified → usable',
-    examSyncUsability({ kind: 'self_pr', verdict: verified, canaryAllowed: true }),
+    examSyncUsability({ kind: HEALTHY, verdict: verified, canaryAllowed: true }),
     { usability: 'usable', reason: null });
 
   for (const v of EXAM_SYNC_EXTERNAL_VERDICTS) {
-    const d = examSyncUsability({ kind: 'self_pr', verdict: v, canaryAllowed: true });
+    const d = examSyncUsability({ kind: HEALTHY, verdict: v, canaryAllowed: true });
     if (v === 'verified') check(`enable: ${v} → usable`, d.usability === 'usable');
     else check(`enable: ${v} → veto / not_verified`,
       d.usability === 'veto' && d.reason === 'not_verified');
@@ -633,11 +642,21 @@ function enableContract(): void {
   check('essay は runtime_blocked で veto（E-S52 read window）',
     essay.usability === 'veto' && essay.reason === 'runtime_blocked');
   check('essay は runtime block 宣言に載っている', isExamSyncRuntimeBlocked('essay'));
-  eq('runtime block は essay のみ（機構は残す）',
-    EXAM_SOURCE_KINDS.filter(isExamSyncRuntimeBlocked), ['essay']);
-  //   essay 以外は宣言に載らない（blocker が黙って広がらない）。
-  check('essay 以外の kind は runtime block されていない',
-    EXAM_SOURCE_KINDS.filter((k) => k !== 'essay').every((k) => isExamSyncRuntimeBlocked(k) === false));
+  //   ★ Stage 5.10: self_pr が Level C 監査で追加（E-S50）★
+  const selfPr = examSyncUsability({ kind: 'self_pr', verdict: verified, canaryAllowed: true });
+  check('self_pr は runtime_blocked で veto（E-S50 Level C）',
+    selfPr.usability === 'veto' && selfPr.reason === 'runtime_blocked');
+  check('self_pr は runtime block 宣言に載っている', isExamSyncRuntimeBlocked('self_pr'));
+  //   ★ runtime_blocked は canary / verdict より **先に**落ちる（順序の固定）★
+  eq('blocked kind は canary 許可 + verified でも runtime_blocked で落ちる',
+    selfPr, { usability: 'veto', reason: 'runtime_blocked' });
+  //   ★ 宣言順（EXAM_SOURCE_KINDS の順）で pin する。sort しない ★
+  eq('runtime block は self_pr と essay のみ（機構は残す）',
+    EXAM_SOURCE_KINDS.filter(isExamSyncRuntimeBlocked), ['self_pr', 'essay']);
+  //   この 2 kind 以外は宣言に載らない（blocker が黙って広がらない）。
+  check('essay / self_pr 以外の kind は runtime block されていない',
+    EXAM_SOURCE_KINDS.filter((k) => k !== 'essay' && k !== 'self_pr')
+      .every((k) => isExamSyncRuntimeBlocked(k) === false));
   //   ★ R5 の結論自体は覆っていない ★ 落ちる理由が read window であって
   //     jsonb sub-path（E-S27）ではないことを、宣言文で確認する。
   const essayReason = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay ?? '';
@@ -650,28 +669,36 @@ function enableContract(): void {
   const map = verdicts as ExamSyncVerdictMap;
   const usable = examSyncUsableKinds({ kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: true });
   check('usable kinds に essay は含まれない（E-S52 runtime block）', !usable.includes('essay'));
-  eq('usable kinds は essay を除く 7 kind',
+  check('usable kinds に self_pr は含まれない（E-S50 Level C runtime block）',
+    !usable.includes('self_pr'));
+  //   ★ 実際に blocked な kind の集合から導出する（2 箇所に数字を書かない）★
+  eq('usable kinds は blocked 2 kind を除く 6 kind',
     [...usable].sort(),
-    [...EXAM_SYNC_SUPPORTED_KINDS].filter((k) => k !== 'essay').sort());
+    [...EXAM_SYNC_SUPPORTED_KINDS].filter((k) => !isExamSyncRuntimeBlocked(k)).sort());
+  eq('usable kinds は 6 件', usable.length, EXAM_SYNC_SUPPORTED_KINDS.length - 2);
   eq('canary false なら usable 0',
     examSyncUsableKinds({ kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: false }).length, 0);
   eq('要求していない kind は足されない',
-    examSyncUsableKinds({ kinds: ['self_pr'], verdicts: map, canaryAllowed: true }), ['self_pr']);
+    examSyncUsableKinds({ kinds: [HEALTHY], verdicts: map, canaryAllowed: true }), [HEALTHY]);
+  //   blocked kind だけを要求しても usable は空（要求が veto を上書きしない）。
+  eq('blocked kind だけを要求しても usable は空',
+    examSyncUsableKinds({ kinds: ['self_pr'], verdicts: map, canaryAllowed: true }), []);
 
   const summary = summarizeExamSyncEnable({
     kinds: [...EXAM_SYNC_SUPPORTED_KINDS], verdicts: map, canaryAllowed: true,
   });
   eq('summary: requested', summary.requested, EXAM_SYNC_SUPPORTED_KINDS.length);
-  eq('summary: usable は essay を除く 7', summary.usable, EXAM_SYNC_SUPPORTED_KINDS.length - 1);
-  eq('summary: essay が veto されるので reason は runtime_blocked',
+  eq('summary: usable は blocked 2 kind を除く 6', summary.usable, EXAM_SYNC_SUPPORTED_KINDS.length - 2);
+  eq('summary: blocked kind があるので reason は runtime_blocked',
     summary.reason, 'runtime_blocked');
-  //   essay を要求しなければ全 usable / reason null に戻る（veto が essay 固有であること）。
-  const noEssay = summarizeExamSyncEnable({
-    kinds: EXAM_SYNC_SUPPORTED_KINDS.filter((k) => k !== 'essay'),
+  //   blocked kind を要求しなければ全 usable / reason null に戻る
+  //   （veto が blocked kind 固有であって、他 kind へ波及していないこと）。
+  const noBlocked = summarizeExamSyncEnable({
+    kinds: EXAM_SYNC_SUPPORTED_KINDS.filter((k) => !isExamSyncRuntimeBlocked(k)),
     verdicts: map, canaryAllowed: true,
   });
-  eq('summary: essay を外せば全 usable', noEssay.usable, EXAM_SYNC_SUPPORTED_KINDS.length - 1);
-  eq('summary: essay を外せば reason は null', noEssay.reason, null);
+  eq('summary: blocked kind を外せば全 usable', noBlocked.usable, EXAM_SYNC_SUPPORTED_KINDS.length - 2);
+  eq('summary: blocked kind を外せば reason は null', noBlocked.reason, null);
   eq('summary の field が 3 つだけ', Object.keys(summary).sort(),
     ['reason', 'requested', 'usable']);
   check('summary が number / enum / null のみ',

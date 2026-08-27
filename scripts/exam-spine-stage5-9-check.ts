@@ -833,8 +833,11 @@ function s8PriorStages(): void {
   const blocked = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay;
   check('X1 essay の runtime blocker が存在する', typeof blocked === 'string' && blocked.length > 0);
   check('X1 blocker は E-S52 を根拠にする', (blocked ?? '').includes('E-S52'));
-  eq('X1 runtime blocker は essay だけ（presentation を足していない）',
-    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
+  //   Stage 5.10 で self_pr が加わったが、presentation（class 2）は依然として載らない。
+  eq('X1 runtime blocker は essay と self_pr だけ（presentation を足していない）',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay', 'self_pr']);
+  check('X1 presentation は class 2 なので blocker に載らない（E-S3 / E-S54）',
+    !Object.prototype.hasOwnProperty.call(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED, 'presentation'));
   eq('X1 essay は runtime_blocked で veto される',
     examSyncUsability({
       kind: 'essay' as never,

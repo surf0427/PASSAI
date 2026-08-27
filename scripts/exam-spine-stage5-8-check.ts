@@ -512,9 +512,16 @@ function s5Invariants(): void {
     (blockedReason ?? '').includes('read window'));
   check('I6 decision layer が構造的に veto する',
     isExamSyncRuntimeBlocked('essay'));
-  //   禁止 kind の集合は essay のみ（他 kind が黙って増えない）。
-  eq('I6 runtime block は essay のみ',
-    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
+  //   禁止 kind の集合を pin する（3 つ目が黙って増えない）。
+  //   ★ Stage 5.10 で self_pr が Level C 監査により追加された（E-S50）。
+  //     essay の根拠（backfill による updated_at 完全反転）とは別根拠であり、
+  //     ここでは集合だけを固定する。理由の検査は各 Stage の script が持つ。
+  eq('I6 runtime block は essay と self_pr のみ',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay', 'self_pr']);
+  //   ★ essay 側の根拠が self_pr のもので上書きされていない ★
+  check('I6 essay の理由は essay 固有のまま（self_pr の根拠を流用していない）',
+    (EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay ?? '').includes('E-S52')
+    && !(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay ?? '').includes('propagateDelete'));
   //   ★ 宣言であって gate ではない ★ production は blocker を読まない。
   const blockerConsumers: string[] = [];
   const walkB = (dir: string): void => {

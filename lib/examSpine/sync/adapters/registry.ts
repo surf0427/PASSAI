@@ -391,7 +391,8 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
  *   capability = possible : sync view の contract が確定し、device / mirror の両 mapper がある
  *   runtime enable        : その kind の claim を実際の request に載せてよいか
  *
- * essay は前者を満たすが後者を満たさない。
+ * essay / self_pr は前者を満たすが後者を満たさない。**理由は kind ごとに別である。**
+ * 片方の根拠をもう片方へ流用しない（essay の「完全反転」は self_pr では成立しない）。
  *
  * ★ blocker は「消えた」のではなく Stage 5.8 で **入れ替わった**（E-S52）★
  *
@@ -421,6 +422,36 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
  *   本 blocker はまさにその口を **想定どおりに使い直した**ものであり、R5 の結論を
  *   覆すものではない（R5 は CLOSED のまま）。
  *
+ * ★ self_pr の blocker は essay とは別根拠である（Stage 5.10 / E-S50 Level C）★
+ *
+ *   `selfPrQuery` も `ORDER BY updated_at DESC, created_at DESC, id DESC` で上位 cap（5）件を
+ *   選ぶが、**essay の「完全反転」はここでは起きない**。`prToRow` が
+ *   `updated_at: pr.updatedAt` を明示送信するため、全件 INSERT で終わる backfill 経路では
+ *   device の recency がそのまま DB に入る（`lib/supabase/selfPRs.ts`）。
+ *   したがって essay の根拠をコピーしてはいけない。self_pr が blocked なのは次の 4 点である。
+ *
+ *   1. device が window を持たない
+ *      `deviceSelfPrView` は `selectDeviceSyncWindow` を掛けず **全件**を hash する。
+ *      server は上位 5 件しか読まない。6 件以上の user は内容が同期していても mismatch。
+ *   2. window を足しても揃わない
+ *      `selectDeviceSyncWindow` は `created_at` でしか上位 N 件を選べないが、
+ *      server の第 1 ソートキーは `updated_at` である。さらに UPDATE 経路では
+ *      trigger `self_prs_set_updated_at` が `now()` で上書きするため、
+ *      編集を重ねた端末の `updatedAt` と DB の `updated_at` は一致しない。
+ *   3. delete が mirror へ伝播しない
+ *      `dualWriteSelfPRsDelta` は `propagateDelete: false` 固定
+ *      （`app/self-pr/page.tsx`）。device で消した PR が mirror に残り、
+ *      server の top-5 を **device に存在しない行**が占め得る。
+ *   4. id tie-break を device が再現できない
+ *      `deviceSelfPrRow` は `id: null` を置く。server の最終 tie-break は `id DESC` であり、
+ *      device 表現はこの順序を canonical に再現できない。
+ *
+ *   ★ ここで mismatch を消しにいかない ★
+ *     1〜4 の解消は ordering / cap / delete の product semantics（STATE の HD-1〜HD-6）を
+ *     決めることであり、Stage 5.10 の scope ではない。Level C ruling は
+ *     「未解決だから runtime enable しない」という安全側の判断であって、
+ *     semantics を決めたことにはしない。
+ *
  * ★ これは宣言であって gate ではない ★
  *   feature flag も canary も env もここでは持たない。判定は enable.ts が行う。
  *   `examSyncUsability` の 4 段 veto のうち 2 段目にすぎず、3 段目の canary は既定 deny。
@@ -434,6 +465,14 @@ export const EXAM_SYNC_RUNTIME_ENABLE_BLOCKED: Readonly<
     + '（updated_at は mirror 書込時刻で、backfill 経路では device の recency と完全反転する）ため、'
     + 'runtime claim / enable / canary を引き続き禁止する。'
     + 'pure な device ↔ mirror parity は成立済み（qa:examSpine:syncDevice / qa:examSpine:stage5_8）',
+  self_pr:
+    'E-S50 Level C: server は updated_at DESC / created_at DESC / id DESC の上位 5 件を読むが、'
+    + 'deviceSelfPrView は window 未適用で全件を hash し、device は server の id tie-break も '
+    + 'updated_at も再現できない。さらに dualWriteSelfPRsDelta は propagateDelete=false 固定で、'
+    + 'device で削除した PR が mirror に残り server の top-5 を占め得る。'
+    + 'したがって cap 超過 / 編集順 / 削除残存のいずれでも verified を主張できないため、'
+    + 'runtime claim / enable / canary を禁止する。'
+    + 'pure な device ↔ mirror parity は成立済み（qa:examSpine:syncDevice / qa:examSpine:stage5_10）',
 };
 
 /**

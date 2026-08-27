@@ -924,9 +924,18 @@ function essayEnableInvariant(): void {
       !(reason.includes('E-S27') || reason.includes('R5'))
         || reason.includes('CLOSED') || reason.includes('解消'));
   }
-  //   禁止 kind の集合は pin する（essay 以外が黙って増えないこと）。
-  eq('runtime block は essay のみ（機構は残す）',
-    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
+  //   禁止 kind の集合は pin する（3 つ目が黙って増えないこと）。
+  //   Stage 5.10 で self_pr を追加（E-S50 Level C / window 未適用 + delete 非伝播）。
+  eq('runtime block は essay と self_pr のみ（機構は残す）',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay', 'self_pr']);
+  //   self_pr の理由も「現に有効な blocker」を名指しする（essay と同じ規律）。
+  const selfPrBlockedReason = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.self_pr ?? '';
+  check('★ self_pr: 禁止理由が Level C の実体（window / delete）を名指しする',
+    selfPrBlockedReason.includes('E-S50')
+      && selfPrBlockedReason.includes('window')
+      && selfPrBlockedReason.includes('propagateDelete'));
+  check('★ self_pr: essay 固有の根拠（完全反転）を流用していない',
+    !selfPrBlockedReason.includes('反転'));
 
   // ★ 宣言を読んでよいのは「宣言元」と「pure な decision layer」だけ ★
   //   Wave 3 時点では consumer 0 本を要求していたが、Wave 4 で pure decision layer
