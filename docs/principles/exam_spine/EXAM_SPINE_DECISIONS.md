@@ -1977,7 +1977,7 @@ window parity を要求する理由にならない。
   `presentation_results` は `UNIQUE(attempt_id)` を持ち 1 attempt 1 結果なので実運用では
   起きにくいが、構造的保証ではない。**これは E-S50 の device window tie-break とは別物**で、
   server 内部の legacy read と canonical read の差である（device は関与しない）。
-- **QA:** `scripts/exam-spine-stage5-9-check.ts`（175 checks）。§1 class-2 / no-claim の構造的証明、
+- **QA:** `scripts/exam-spine-stage5-9-check.ts`（183 checks）。§1 class-2 / no-claim の構造的証明、
   §2 canonical query と legacy read の一致・非読取列、§3 正本共有と `feedback.categories` authority、
   §4 semantic matrix S1〜S10、§5 block registry / purpose、§6 privacy と boundedness、
   §7 consumer invariance（robust prompt anchor）、§8 先行 Stage 境界（essay E-S52 blocker /

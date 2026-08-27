@@ -701,6 +701,22 @@ function s7Consumer(): void {
       !/\.context\??\.blocks/.test(afterPrompt));
   }
 
+  // ★ prompt の入力そのものを固定する（S5-P11 negative control N14）★
+  //   「禁止語が現れない」検査は形を変えた注入をすり抜ける
+  //   （`blocks.map(b=>b.content).join()` を contextString の位置へ渡す等）。
+  //   consumer 切替の本質は **prompt の第 1 引数が legacy の contextString か**なので、
+  //   呼び出し形を丸ごと固定する。legacy 経路を変えるとここが必ず落ちる。
+  const callForm = /=\s*buildTutorUserPrompt\(\{\s*contextString\s*,\s*userMessage:\s*message\s*\}\)/;
+  check('C6 prompt は legacy の contextString をそのまま受け取る（加工・置換なし）',
+    callForm.test(routeCode),
+    routeCode.slice(Math.max(0, promptIdx - 20), promptIdx + 120).replace(/\n/g, ' '));
+  // contextString の生成元も legacy の Supabase 層のままであること。
+  check('C6 contextString は legacy の section builder から作られる',
+    /contextString\s*=/.test(routeCode)
+    && route.includes('buildTutorSupabaseContextSection'));
+  eq('C6 buildTutorUserPrompt の呼び出しは 1 箇所',
+    (routeCode.match(/buildTutorUserPrompt\(/g) ?? []).length, 1);
+
   // ★ shadow 経路の内側に閉じている ★
   //   presentation の legacy 値を作る行は isExamSpineShadowEnabled gate の内側にあり、
   //   prompt 組み立てより前で閉じていること（位置関係で固定する）。
@@ -745,9 +761,15 @@ function s8PriorStages(): void {
     (REG.essay_university_context as { sourceKind?: string }).sourceKind === undefined);
 
   // ── statement_review（E-S49）────────────────────────────────
+  // ★ 本文ではなく **見出し行**を見る（S5-P11 negative control N9）★
+  //   `body.includes('statement_review')` は見出しを presentation に書き換えても
+  //   本文中に語が残るため通ってしまった。decision の同一性は見出しで判定する。
   const es49 = decisionBody(dec, 'E-S49');
-  check('X2 E-S49 は statement_review の decision（presentation で上書きしていない）',
-    (es49 ?? '').includes('statement_review'));
+  const es49Head = (es49 ?? '').split('\n')[0];
+  check('X2 E-S49 の見出しは statement_review のもの（presentation で上書きしていない）',
+    es49Head.includes('statement_review'), es49Head);
+  check('X2 E-S49 の見出しが presentation を指していない',
+    !es49Head.includes('presentation'), es49Head);
   const assemble = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
   check('X2 legacy 相当 statement_review 射影は shadow 専用 snapshot にだけ載る',
     assemble.includes('projectStatementReviewLegacyLine'));
@@ -764,7 +786,8 @@ function s8PriorStages(): void {
 
   // ── interview_record（E-S51）────────────────────────────────
   const es51 = decisionBody(dec, 'E-S51');
-  check('X3 E-S51 は interview_record の decision', (es51 ?? '').includes('interview_record'));
+  check('X3 E-S51 の見出しは interview_record のもの',
+    (es51 ?? '').split('\n')[0].includes('interview_record'), (es51 ?? '').split('\n')[0]);
   check('X3 interview_issue_line block は存在する',
     (EXAM_CONTEXT_BLOCK_IDS as readonly string[]).includes('interview_issue_line'));
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
@@ -785,7 +808,8 @@ function s8PriorStages(): void {
   // ── E-S54 が canonical に登録されている（採番衝突の解決）──────
   const es54 = decisionBody(dec, 'E-S54');
   check('X6 E-S54 が存在する', es54 !== null);
-  check('X6 E-S54 は presentation の decision', (es54 ?? '').includes('presentation'));
+  check('X6 E-S54 の見出しは presentation のもの',
+    (es54 ?? '').split('\n')[0].includes('presentation'), (es54 ?? '').split('\n')[0]);
   check('X6 E-S54 は LOCKED', (es54 ?? '').includes('`LOCKED`'));
   check('X6 E-S54 は source の E-S49 からの再採番であると記録している',
     (es54 ?? '').includes('E-S49') && (es54 ?? '').includes('再採番'));
@@ -800,6 +824,22 @@ function s8PriorStages(): void {
   const plan = getExamPurposePlan('tutor');
   eq('X5 tutor plan は render / legacyBuilder を持たない（prompt 経路ではない）',
     [plan.render, plan.legacyBuilder], [null, null]);
+
+  // ★ Stage 境界: tutor plan の block 列を完全一致で固定（negative control N13）★
+  //   「presentation を足したついでに Stage 5.10 以降の block を混ぜない」。
+  //   部分一致（含まれているか）では後続 stage の混入を検出できない。
+  eq('X5 tutor plan の block は 5.1/5.2/5.3/5.7/5.9 の 5 つ',
+    plan.blocks.map((b) => b.id),
+    ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
+      'interview_issue_line', 'presentation_result_summary']);
+
+  // 後続 stage（5.10+ = self_pr）の block は sourceKind 単位で 0 件。
+  eq('X5 sourceKind=self_pr の canonical block は作られていない（Stage 5.10 以降）',
+    blockIdsForKind('self_pr'), []);
+  eq('X5 sourceKind=presentation の block は 1 つだけ',
+    blockIdsForKind('presentation'), [BLOCK]);
+  eq('X5 sourceKind=interview_record の block は 1 つだけ',
+    blockIdsForKind('interview_record'), ['interview_issue_line']);
 }
 
 // ══════════════════════════════════════════════════════════════════
