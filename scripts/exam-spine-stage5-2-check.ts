@@ -372,8 +372,8 @@ function t7Static(): void {
   const declaredKinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T8 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds,
-    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
+  eq('T8 tutor の claim kind は 5.1-5.6 の 5 つのみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
   //   実際に組み立てても同じ集合であること（宣言と挙動の一致）。
   const builtKinds = buildTutorDeviceClaimEntries(
     { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
@@ -437,12 +437,12 @@ function t7Static(): void {
   // ── Stage 5.6 以降の feature surface が現れていない ──
   const claimTypes = readFileSync(
     join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  const spread = ['deviceStatementReviewView', 'deviceSelfPrView',
+  const spread = ['deviceSelfPrView',
     'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
     const i = claimTypes.indexOf(`export function ${fn}(`);
     return i !== -1 && claimTypes.slice(i, i + 400).includes('selectDeviceSyncWindow');
   });
-  eq('T8 device window primitive は self_analysis 以外へ広がっていない', spread, []);
+  eq('T8 device window primitive は 5.4/5.6 の 2 kind 以外へ広がっていない', spread, []);
 }
 
 async function main(): Promise<void> {

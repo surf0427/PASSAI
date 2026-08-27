@@ -618,6 +618,9 @@ export default function TutorPage() {
         loadDiagnosisResult(),
         loadActivityData(),
         loadSelfAnalysisLogs(),
+        //   Stage 5.6: statement_review も申告する（G8）。history kind なので
+        //   window 選択は canonical view が行う。
+        loadReviewHistory(),
       ),
     );
 

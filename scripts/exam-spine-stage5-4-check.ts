@@ -549,15 +549,15 @@ function t12Boundary(): void {
   const declaredKinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T12 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds,
-    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
+  eq('T12 tutor の claim kind は 5.1-5.6 の 5 つのみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
 
   // (b) window primitive は許可、Stage 5.5 feature は禁止（機械的に区別する）。
   const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
   check('T12 device sync window primitive は昇格済み（許可）',
     deviceViews.includes('selectDeviceSyncWindow'));
   //   primitive は self_analysis にだけ適用されている（他 kind へ広げるのは 5.5 以降）。
-  const otherWindowed = ['deviceStatementReviewView', 'deviceSelfPrView',
+  const otherWindowed = ['deviceSelfPrView',
     'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
     const i = deviceViews.indexOf(`export function ${fn}(`);
     return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');

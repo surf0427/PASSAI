@@ -54,6 +54,8 @@ export type TutorLegacyInput = {
    * （`tutorContext.ts` の `context.selfAnalysis`）。body 由来ではない。
    */
   readonly selfAnalysis?: unknown;
+  /** legacy tutor が prompt に出している「志望理由書の課題」行の値。 */
+  readonly statementWeaknessLine?: unknown;
   readonly statementReviewLatest?: unknown;
   /** 以下は canonical block coverage 外。存在の記録だけ行う。 */
   readonly essayReviewLatest?: unknown;
@@ -207,6 +209,8 @@ export type TutorCanonicalInput = {
   readonly wallHittingResult?: unknown;
   readonly studentProfile?: unknown;
   readonly previousOutputSummary?: unknown;
+  /** canonical rows から作った legacy 相当の行（shadow 専用 / E-S44）。 */
+  readonly statementWeaknessLine?: unknown;
 };
 
 // ── entry point ───────────────────────────────────────────────────────
@@ -279,9 +283,20 @@ export function compareTutorShadow(input: {
     // ── statement_review ─────────────────────────────────────────
     //   legacy は「直近 1 件の weaknesses」、canonical は履歴からの反復論点要約。
     //   材料が違うので値一致は期待しない。差分として正しく現れることを見る。
+    // ★ 比較は「legacy が prompt に出している表現」同士で行う（E-S44）★
+    //   canonical の `buildPreviousOutputSummary`（反復論点）は legacy の
+    //   「最新 1 件の課題」とは別 projection なので、そのまま突き合わせると
+    //   常に VALUE_MISMATCH になり「移行できない」という誤った結論になる。
+    //   ここでは canonical rows から legacy 相当の行を作って比べる。
+    //   ★ この射影は shadow 専用で prompt へは接続しない。
+    compareField({ field: 'statement_review.latestWeaknessLine', kind: 'statement_review',
+      legacy: text(input.legacy.statementWeaknessLine),
+      canonical: text(input.canonicalInput.statementWeaknessLine),
+      provenance: prov('statement_review') }),
+    // 反復論点は legacy に対応物が無い（canonical 固有の projection）。
     compareField({ field: 'statement_review.repeatedAdvice', kind: 'statement_review',
-      legacy: stringList(record(legacyStatement?.result)?.weaknesses ?? legacyStatement?.weaknesses),
-      canonical: stringList(canonicalStatement?.repeatedAdvice), provenance: prov('statement_review') }),
+      legacy: null, canonical: stringList(canonicalStatement?.repeatedAdvice),
+      provenance: prov('statement_review'), omitted: 'legacy_only_metadata' }),
     // 志望理由書の本文は canonical に載せない（E-P5）。
     compareField({ field: 'statement_review.essayBody', kind: 'statement_review',
       legacy: text(legacyStatement?.essay), canonical: null, provenance: prov('statement_review'),

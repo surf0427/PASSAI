@@ -91,6 +91,7 @@ import {
 } from './identity';
 import { evaluateContextVeto } from './veto';
 import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasicInfoSlot';
+import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
 import {
   projectActivity,
   projectBasicInfo,
@@ -288,7 +289,11 @@ export async function buildCanonicalExamContext(
   return {
     ok: true,
     context,
-    shadowResolvedInput: resolved.input,
+    shadowResolvedInput: {
+      ...resolved.input,
+      // shadow 専用 slot（E-S44）。block builder は参照しない。
+      statementWeaknessLine: resolved.statementWeaknessLine,
+    },
     tutorBasicInfoSlot: resolved.tutorBasicInfoSlot,
   };
 }
@@ -509,6 +514,8 @@ function buildSyncView(kind: ExamSyncSupportedKind, value: unknown): unknown {
 
 type ResolvedInput = {
   readonly input: ExamContextInput;
+  /** shadow comparison 専用。prompt へは渡らない（E-S44）。 */
+  readonly statementWeaknessLine: string | null;
   readonly origins: Readonly<Partial<Record<ExamSourceKind, ExamContextOrigin>>>;
   readonly bridgeFields: Readonly<Partial<Record<ExamSourceKind, readonly string[]>>>;
   /**
@@ -539,6 +546,8 @@ function resolveContextInput(args: {
 }): ResolvedInput {
   const stateOf = new Map(args.states.map((s) => [s.kind, s]));
   const origins: Partial<Record<ExamSourceKind, ExamContextOrigin>> = {};
+  // shadow 専用の副産物。ExamContextInput（＝ block の入力）には入れない。
+  let statementWeaknessLine: string | null = null;
   const bridgeFields: Partial<Record<ExamSourceKind, readonly string[]>> = {};
   const next: ExamContextInput = { ...args.bridge };
 
@@ -612,13 +621,18 @@ function resolveContextInput(args: {
     }
   }
 
-  // statement_review → previousOutputSummary
+  // statement_review → previousOutputSummary（canonical 固有の反復論点 projection）
   if (usable('statement_review')) {
-    const p = projectStatementReview(slot<readonly ExamStatementReviewServerRow[] | null>('statement_review'));
+    const rows = slot<readonly ExamStatementReviewServerRow[] | null>('statement_review');
+    const p = projectStatementReview(rows);
     if (p.value) {
       next.previousOutputSummary = p.value;
       origins.statement_review = 'server';
     }
+    // ★ legacy 相当射影は shadow 専用（E-S44）★
+    //   `ExamContextInput` には載せない。shadow 側の別 slot に載せる。
+    statementWeaknessLine = projectStatementReviewLegacyLine(rows);
+    if (statementWeaknessLine !== null) origins.statement_review = 'server';
   }
 
   // 申告の無い kind は補完しない（E-S26。暗黙的 Mixed-Origin を作らない）。
@@ -626,7 +640,7 @@ function resolveContextInput(args: {
   // durable source を持たない slot は構造的 bridge のまま（E-P3 / E-S9）。
   next.notServerCapableSlots = args.bridge.notServerCapableSlots ?? ['statementDraft'];
 
-  return { input: next, origins, bridgeFields, tutorBasicInfoSlot };
+  return { input: next, origins, bridgeFields, tutorBasicInfoSlot, statementWeaknessLine };
 }
 
 // ── provenance ────────────────────────────────────────────────────────
