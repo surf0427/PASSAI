@@ -387,12 +387,12 @@ function t7OptInScope(): void {
 
   // (e) device 側 window primitive は self_analysis 以外へ広がっていない（E-S47 の scope）。
   const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  const spread = ['deviceStatementReviewView', 'deviceSelfPrView',
+  const spread = ['deviceSelfPrView',
     'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
     const i = deviceViews.indexOf(`export function ${fn}(`);
     return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');
   });
-  eq('T7 device window primitive は self_analysis のみ', spread, []);
+  eq('T7 device window primitive は self_analysis + statement_review のみ', spread, []);
 
   // (f) tutor の claim kind は 5.1-5.4 の 4 つのまま（5.6 の claim が入っていない）。
   const claimFile = readFileSync(
@@ -401,8 +401,8 @@ function t7OptInScope(): void {
   const kinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T7 tutor の claim kind は 5.1-5.4 の 4 つのみ', kinds,
-    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
+  eq('T7 tutor の claim kind は 5.1-5.6 の 5 つのみ', kinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
 
   // (g) self_analysis の tutor-facing canonical block は依然として未追加（§11）。
   const registry = readFileSync(join(ROOT, 'lib/examSpine/blocks/registry.ts'), 'utf8');

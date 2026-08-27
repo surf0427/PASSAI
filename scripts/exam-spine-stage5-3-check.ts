@@ -464,11 +464,12 @@ function t9Boundary(): void {
   const declaredKinds = Array.from(fnBody.matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g))
     .map((m) => m[1])
     .sort();
-  eq('T9 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds, [
+  eq('T9 tutor の claim kind は 5.1-5.6 の 5 つのみ', declaredKinds, [
     'activity',
     'basic_info',
     'diagnosis',
     'self_analysis',
+    'statement_review',
   ]);
 
   // (c) 後続 stage が新設する block id が registry に無い。

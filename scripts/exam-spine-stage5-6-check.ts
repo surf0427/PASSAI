@@ -34,6 +34,7 @@ import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.serv
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import { projectStatementReviewLegacyLine } from '@/lib/examSpine/context/shadow/statementReviewProjection';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
+import { EXAM_PURPOSE_PLANS } from '@/lib/examSpine/orchestrator/plan';
 import * as Q from '@/lib/examSpine/read/queries';
 import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnapshot.server';
 import { createRecordingExecutor, USER_A, type FakeDb } from './fixtures/examSpineStage3';
@@ -329,6 +330,45 @@ async function t4Semantics(): Promise<void> {
   // privacy
   check('S diff に本文が出ない', !JSON.stringify(s3.cmp).includes(SECRET));
   check('S canonical context に本文が出ない', !JSON.stringify(s3.r.ctx).includes(SECRET));
+
+  // ★ mismatch path こそ値が漏れやすい（S5-P5 の負例 N5 で発見した失敗形）★
+  //   MATCH 経路しか見ていない guard は、VALUE_MISMATCH の `reason` に legacy /
+  //   canonical の実値を載せる変更をすり抜ける。statement_review は添削本文を
+  //   持つ kind なので、ここを塞がないと raw content が telemetry へ出る。
+  const mmItems = deviceHistory(5);
+  const mmRun = await run({ serverItems: mmItems, deviceItems: mmItems });
+  const PROBE = 'MISMATCH_PROBE_WEAKNESS';
+  const mmCmp = compareTutorShadow({
+    legacy: { statementWeaknessLine: PROBE },
+    canonicalInput: mmRun.resolved, context: mmRun.ctx });
+  const mmDiff = mmCmp.entries.find((e) => e.field === 'statement_review.latestWeaknessLine');
+  eq('S mismatch は VALUE_MISMATCH になる', mmDiff?.diff, 'VALUE_MISMATCH');
+  const mmJson = JSON.stringify(mmCmp);
+  check('S mismatch 時も添削本文が出ない', !mmJson.includes(SECRET));
+  check('S mismatch 時に legacy の実値が出ない', !mmJson.includes(PROBE));
+  check('S mismatch 時に canonical の実値が出ない',
+    !mmJson.includes(String(legacyLineOf(mmItems))));
+  const mmToken = deviceStatementReviewToken(mmItems);
+  check('S mismatch 時に claim token（fingerprint）が出ない',
+    mmToken !== null && !mmJson.includes(mmToken));
+  check('S mismatch 時に userId が出ない', !mmJson.includes(USER_A));
+  //   reason は型上 enum だが、型を広げる変更が入っても runtime で落ちるようにする。
+  const mmReasons = mmCmp.entries
+    .map((e) => e.reason as unknown)
+    .filter((r): r is string => typeof r === 'string');
+  check('S reason は既知の enum 相当のみ',
+    mmReasons.every((r) => /^[a-z_]+$/.test(r)), mmReasons.join(' | '));
+
+  // ★ false-empty verified が成立しないこと（§false empty）★
+  //   device に履歴があるのに server 側が読めない場合、"[] verified" になってはいけない。
+  const failRun = await run({
+    serverItems: mmItems, deviceItems: mmItems,
+    errors: { statement_review_history: { code: '42P01', message: 'x' } },
+  });
+  eq('S read failure は unreadable（false-empty にしない）', failRun.source?.state, 'unreadable');
+  check('S read failure では verified にならない', failRun.source?.syncStatus !== 'verified',
+    String(failRun.source?.syncStatus));
+  check('S read failure を empty と誤認しない', failRun.source?.state !== 'empty');
 }
 
 // ── 5. invariants ─────────────────────────────────────────────────────
@@ -356,11 +396,28 @@ async function t5Invariants(): Promise<void> {
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
   check('T5 legacy の body 経路が残っている', route.includes('buildTutorStudentContext'));
-  const idx = route.indexOf('buildTutorUserPrompt');
-  if (idx !== -1) {
-    const w = route.slice(Math.max(0, idx - 1500), idx + 1500);
-    check('T5 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
-    check('T5 prompt 付近に comparison が現れない', !w.includes('comparison'));
+  // ★ 修正（S5-P8 promotion）★ source 側は route.indexOf('buildTutorUserPrompt') を
+  //   anchor に ±1500 字 window を見ていた。この識別子は file 冒頭の見出しコメントにも
+  //   現れるため window が file 先頭に張られ、実際の prompt 経路を検査できていない
+  //   （S5-P4/P5/P6/P7 で 5.2/5.3/5.4/5.5 側に見つかったのと同じ defect。5 回目）。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('T5 prompt 組み立て位置を特定できる', promptIdx !== -1);
+  if (promptIdx !== -1) {
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T5 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    check('T5 prompt 以降に statementWeaknessLine が現れない',
+      !afterPrompt.includes('statementWeaknessLine'));
+    check('T5 prompt 以降に compareTutorShadow が現れない',
+      !afterPrompt.includes('compareTutorShadow'));
+    check('T5 prompt 以降に canonical block 配列が現れない',
+      !/\.context\??\.blocks/.test(afterPrompt));
+    check('T5 prompt 以降に previousOutputSummary が現れない',
+      !afterPrompt.includes('previousOutputSummary'));
   }
 
   // legacy 相当射影が canonical rows から作れること（直接呼び出し）
@@ -373,6 +430,92 @@ async function t5Invariants(): Promise<void> {
   eq('T5 rows が null なら null', projectStatementReviewLegacyLine(null), null);
 }
 
+
+// ── 6. Stage 5.6 boundary / block / tie-break parity ────────────────────
+//
+//   Stage 5.6 は statement_review の **transport**（claim + window parity）だけを
+//   昇格する packet である。source lineage には 5.7（interview_record）/ essay /
+//   presentation が続いており混入しやすい。
+//
+//   ★ transport READY と semantics READY を混同しない ★
+//     legacy は「最新 1 件の課題」、canonical は「履歴の反復論点」で、選択・集約・
+//     下限がすべて違う（E-S49 classification C）。どちらを採るかは product 判断で
+//     あり本 Stage では決めない。したがって tutor-facing canonical block は作らない。
+function t6Boundary(): void {
+  console.log('\n6. Stage 5.6 boundary');
+
+  // (a) claim kind は 5.1-5.6 の 5 つだけ（実ソースから抽出 / arity 非依存）。
+  const claimFile = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimFile.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('T6 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const kinds = Array.from(
+    claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  eq('T6 tutor の claim kind は 5.1-5.6 の 5 つのみ', kinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
+
+  // (b) device window primitive は self_analysis + statement_review のみ。
+  //     Stage 5.7 以降（self_pr / interview_record / essay）へ広げない。
+  const deviceViews = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  const windowed = ['deviceSelfAnalysisView', 'deviceStatementReviewView', 'deviceSelfPrView',
+    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
+    const i = deviceViews.indexOf(`export function ${fn}(`);
+    return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  }).sort();
+  eq('T6 window primitive は self_analysis + statement_review のみ', windowed,
+    ['deviceSelfAnalysisView', 'deviceStatementReviewView']);
+
+  // (c) ★ tutor-facing canonical block を作っていない（§Canonical block boundary）★
+  const registry = readFileSync(join(ROOT, 'lib/examSpine/blocks/registry.ts'), 'utf8');
+  for (const forbidden of ['statement_review_tutor', 'statement_review_summary',
+    'statement_review_history', 'statement_weakness_line',
+    'self_analysis_tutor', 'self_analysis_summary_line', 'interview_issue_line']) {
+    check(`T6 block \`${forbidden}\` は追加されていない`, !registry.includes(`${forbidden}:`));
+  }
+  //     tutor plan は 5.1 + 5.2 + 5.3 の 3 block のまま（5.4/5.5/5.6 は block を足さない）。
+  const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
+  eq('T6 tutor plan の block は 3 つのまま', tutorBlocks,
+    ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts']);
+
+  // (d) consumer switch が動いていない。
+  const entry = readFileSync(
+    join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STAGE5_ENTRY.md'), 'utf8');
+  check('T6 FIRST_STAGE5_CONSUMER=tutor のまま',
+    /FIRST_STAGE5_CONSUMER\s*=\s*tutor\b/.test(entry));
+  check('T6 FIRST_STAGE5_SLOT=basic_info のまま',
+    /FIRST_STAGE5_SLOT\s*=\s*basic_info\b/.test(entry));
+
+  // (e) Stage 5.5 の opt-in 契約が維持されている（truncated は無条件 readable ではない）。
+  const adapterTypes = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/types.ts'), 'utf8');
+  const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
+  const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
+  check('T6 windowed は opt-in のまま（既定 strict）', /input\.windowed === true/.test(smcBody));
+  const assembler = readFileSync(
+    join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
+  check('T6 windowed の付与は capped kind に限定されている',
+    /windowed: isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T6 実際の失敗（error / skipped）は unreadable のまま',
+    /readStatus === 'error' \|\| readStatus === 'skipped'/.test(assembler));
+
+  // (f) ★ tie-break parity（E-S50）★
+  //     server は created_at DESC → id DESC。device view は DB id を持たないが、
+  //     statement_review の item view は localReviewId（両側で共有される安定 id）を
+  //     含むため、選ばれた集合が同じなら fingerprint は必ず一致する。
+  const q = Q.statementReviewQuery('00000000-0000-4000-8000-000000000000');
+  eq('T6 server ordering は created_at DESC → id DESC',
+    q.order, [{ column: 'created_at', ascending: false }, { column: 'id', ascending: false }]);
+  eq('T6 limit は cap + 1', q.limit, EXAM_READ_CAPS.statement_review + 1);
+  check('T6 device item view は localReviewId を含む（安定 id）',
+    deviceViews.includes('deviceStatementReviewItemView'));
+  const rowSrc = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/views.ts'), 'utf8');
+  const svIdx = rowSrc.indexOf('export function statementReviewItemView');
+  check('T6 statementReviewItemView が localReviewId を持つ',
+    svIdx !== -1 && rowSrc.slice(svIdx, svIdx + 500).includes('localReviewId'));
+}
+
 async function main(): Promise<void> {
   console.log('[exam-spine-stage5.6] statement_review claim + semantic convergence');
   t1Authority();
@@ -380,6 +523,7 @@ async function main(): Promise<void> {
   t3Claim();
   await t4Semantics();
   await t5Invariants();
+  t6Boundary();
 
   if (fetchCallCount !== 0) {
     console.error(`\n[exam-spine-stage5.6] FAIL: 外部通信 ${fetchCallCount} 回`);
