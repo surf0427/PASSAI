@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `192eb921d0807ff8523f5bd0d5d86e90ab163996` |
+| Canonical HEAD at this arbitration | `__S5P7_HEAD__` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,7 +49,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `acb7fb1`（継続前進中） | **PARTIAL（Stage 5.1 + 5.2 + 5.3 + 5.4 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）canonical へ targeted cherry-pick 済み。**未昇格**は Stage 5.5 の **feature**（cap を比較 window とみなし truncated を unreadable にしない）/ 5.6（statement_review）/ interview_record で、consumer migration の前提作業として後続 packet で判断する |
+| `exam-spine-w1-convergence-v2` | `e20347c`（継続前進中） | **PARTIAL（Stage 5.1 + 5.2 + 5.3 + 5.4 + 5.5 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）canonical へ targeted cherry-pick 済み。**未昇格**は Stage 5.6（statement_review）/ interview_record / essay（Stage 5.7-5.8 相当）で、consumer migration の前提作業として後続 packet で判断する |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
@@ -128,16 +128,40 @@ Stage 5.4  self-analysis device claim        ← ★ S5-P6 で canonical へ昇�
            + guard false MATCH                                → canonical d1e79d1
   23f9221  verify self-analysis sync and shadow parity        → canonical 5b1ae25（+ prompt anchor 修正）
   d3d1704  record the self-analysis claim wiring              → canonical E-S46 / E-S47 として再採番
-      ↓（5.5 feature 以降は未昇格）
-Stage 5.5  history comparison window **feature**  ← 未昇格
-  27cf0a0  define the history comparison window semantics（branch-local E-S43）
-  9457eb4  treat the read cap as a comparison window
-           ※ assemble.server.ts の truncated 早期 return 除去
+      ↓
+Stage 5.5  history comparison window feature ← ★ S5-P7 で canonical へ昇格済み ★
+  27cf0a0  define the history comparison window semantics
+           → canonical E-S48 として再採番（branch-local E-S43）
+  9457eb4  treat the read cap as a comparison window          → canonical b873572
+           ※ assemble.server.ts の overflow 分岐
              ＋ serverMirrorCandidate の windowed opt-in
-  34a6fd0  verify the history comparison window semantics（Stage 5.4 T11 を書き換える）
+  34a6fd0  verify the history comparison window semantics     → canonical c3d2bdf
+           ※ Stage 5.4 T11 を blocker pin → 解消後の挙動 pin へ移設（削除ではない）
   bc8b6c2  mark self-analysis ready after the window semantics fix
+           → canonical では STATE の readiness 行として反映
+      ↓（5.6 以降は未昇格）
 Stage 5.6  statement_review device claim      ← 未昇格
 interview_record（5.6 の先）← 未昇格。新 block `interview_issue_line` を足す
+essay（Stage 5.7-5.8 相当）← 未昇格。branch-local E-S47 を使用（canonical E-S47 と衝突）
+```
+
+### self_analysis readiness（S5-P7 で更新）
+
+```text
+claim wiring（G7）          完了（Stage 5.4 / E-S46）
+device window parity        完了（E-S47）
+server windowed readability 完了（E-S48）
+false-empty guard           有効（E-S46）
+shadow 比較元               Supabase 層 projection（E-S46）
+
+→ self_analysis = READY
+   ⚠️ ただし consumer 移行には tutor 向け canonical block が別途必要である。
+      これは Source-Sync の blocker ではなく block coverage の課題であり、
+      G2-G5 と同じ扱いで後続 Stage に残す。
+      S5-P7 でも self_analysis の canonical block は **追加していない**。
+
+⚠️ mirror gap（E-S46 / G9）: dualWriteSelfAnalysisLog は削除を伝播しないため、
+   端末で log を消した場合はその端末で正当に mismatch になる。設計どおり。
 ```
 
 ### ★ window 用語の分類（S5-P6 で確定 / 混同注意）★
@@ -183,6 +207,11 @@ E-S41 = R5 essay sync eligibility / E-S42 = Packet J shadow contract）。S5-P6 
 Stage 5.4 の semantic decision を **E-S46** へ統合し、window prerequisite だけを
 **E-S47** として分離、branch-local `E-S41`（truncation blocker）は独立した authority では
 ないので E-S46 の blocker 節へ吸収した。
+実例 3: Stage 5.5 の branch-local `E-S43`（cap は比較 window）は canonical の
+`E-S43`（shadow の結果を consumer 経路へ渡さない）と別 Decision であり、S5-P7 で
+**E-S48** へ再採番した。さらに source branch は essay 用に branch-local `E-S47` を
+使っているが、canonical `E-S47` は device history window parity である。
+**essay を昇格する packet では必ず再採番すること。**
 昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule

@@ -1286,16 +1286,18 @@ Exam-specific differences / Rollback implications
   この guard は導入時点で Stage 5.1 の assertion を落としており
   （空同士で MATCH になっていた）、実際に機能することが確認できている。
   ```
-- **★ self_analysis は本 Stage では READY にしない ★** claim wiring（G7）は完了したが、
-  以下 2 点が残るため readiness は `DEFERRED` のままとする。
+- **★ self_analysis の readiness（S5-P7 で更新）★** claim wiring（G7）は Stage 5.4 で完了。
+  下記 ① は S5-P7（E-S48）で解消したため readiness は **`READY`** へ進んだ。
+  ② は block coverage の課題として残るが Source-Sync の blocker ではない。
   ```text
-  ① truncation blocker
-     server の行数が cap（5）を超えると Stage 3 が truncated を立て、
-     Stage 4 が unreadable に落とす（E-S8 / E-S30）。claim が一致していても
-     available にならない。self_analysis は log が貯まる kind なので実運用では
-     大半の user が該当し得る。claim wiring とは独立した migration blocker であり、
-     Stage 5.4 QA の T11 が明示的に pin している。
-     → 解消は Stage 5.5（cap を比較 window とみなす）の scope。**本 packet では未昇格**。
+  ① truncation blocker  → ★ S5-P7 の E-S48 で RESOLVED ★
+     （Stage 5.4 時点の記述）server の行数が cap（5）を超えると Stage 3 が
+     truncated を立て、Stage 4 が unreadable に落とす（E-S8 / E-S30）。claim が
+     一致していても available にならない。self_analysis は log が貯まる kind なので
+     実運用では大半の user が該当し得る。
+     → S5-P7 で Stage 5.5（E-S48「cap は比較 window」）を昇格し解消した。
+       overflow は unreadable にせず、top-cap window 同士を比較する。
+       Stage 5.4 QA の T11 は blocker の pin から **解消後の挙動の pin** へ移設済み。
   ② tutor 向けの canonical block が無い
      legacy が prompt に出している 4 行に対応する block を Stage 5.4 では追加しない
      （新 block を乱造しない方針）。block coverage の課題であり G2-G5 と同じ扱い。
@@ -1368,6 +1370,98 @@ Exam-specific differences / Rollback implications
   （Stage 5.4 QA の T12 が「self_analysis 以外へ広がっていない」ことを pin する）。
 - **Rollback implications:** primitive を外すと cap 超過 user の claim が
   永久 mismatch に戻るだけで、production prompt には影響しない。
+
+## E-S48 — canonical read cap は「比較 window」であり、overflow は unreadable ではない
+
+- **Status:** `LOCKED`（Stage 5.5 で実装 + QA 済み。**E-S46 の blocker ① を解消する**）
+- **ID 由来（S5-P7 promotion）:** source branch では branch-local `E-S43` として
+  採番されていたが、canonical の `E-S43`（shadow の結果と canonical の値を consumer
+  経路へ渡さない）は **別 Decision** である。verbatim では持ち込まず canonical の
+  次番 **E-S48** へ再採番した（内容は不変）。
+  なお source branch は別途 branch-local `E-S47`（essay の read window は device から
+  再現できない）も使用しているが、canonical `E-S47` は device history window parity で
+  あり別物。essay 側は本 packet では昇格しない。
+- **対象:** *ordered bounded history source* ＝ `EXAM_READ_CAPS` にエントリを持つ kind
+  （`self_analysis` / `statement_review` / `self_pr` / `essay` / `interview_record` /
+  `interview_ai` / `presentation`）。`basic_info` / `activity` / `diagnosis` のような
+  `maybeSingle` snapshot kind は対象外（構造的に truncate し得ない）。
+- **Decision:**
+  ```text
+  canonical read cap は「読めた範囲」ではなく **意図された比較 window** を定義する。
+
+  canonical comparison window =
+    canonical ordering（queries.ts の order）→ 先頭 EXAM_READ_CAPS[kind] 件
+  device comparison window =
+    同一の logical ordering → 先頭 EXAM_READ_CAPS[kind] 件（E-S47）
+
+  fingerprint / claim verification に参加するのは **window の中身だけ**である。
+
+  `cap + 1` 件目を受け取ったことは overflow（＝ window の外にまだ行がある）という
+  **観測**であって、canonical source が読めなかったことの証拠ではない。
+  したがって overflow は `unreadable` にしない。
+  ```
+- **★ E-S8 と矛盾しない理由（重要）★**
+  E-S8 は *「truncated を ok と同一視する」* を明示的に却下しており、本 Decision は
+  それを覆さない。E-S8 が禁じているのは
+  **「一部しか読めていない状態から source 全体の同一性を主張する」**ことである。
+  ```text
+  E-S8 が守るもの     : 「この source の内容は同じ」という主張を部分読みから導かない
+  E-S48 が定めるもの  : そもそも主張の対象を「source 全体」ではなく
+                        「決定論的に選ばれた top-N window」に限定する
+  ```
+  `readStatus` は引き続き `truncated` のまま保持し `ok` へ書き換えない
+  （overflow の事実を消さない）。freshness の権威にしない点も変わらない。
+- **★ opt-in であり、無条件 readable ではない ★**
+  ```text
+  serverMirrorCandidate({ status, observation })                 → 既定 strict
+    truncated は unreadable のまま（window 契約を宣言していない呼び出し）
+  serverMirrorCandidate({ status, observation, windowed: true }) → opt-in
+    truncated のみ readable。error / skipped は依然 unreadable
+  ```
+  assembler は `windowed: isExamCappedSourceKind(kind)` を渡す。すなわち
+  **capped kind だけ**が opt-in され、非 capped kind が `truncated` を返した場合は
+  契約違反として `unreadable` に倒す。新しい public status enum は追加しない。
+- **★ 適用範囲（誤読しやすいので明示）★**
+  opt-in の対象は capped kind **全部**であって `self_analysis` 限定ではない。
+  ただし canonical で実際に `verified` へ到達し得るのは `self_analysis` だけである
+  （他の capped kind は device claim が未配線なので `unclaimed` 止まり）。
+  この非対称性は Stage 5.5 QA の T7（opt-in scope）が機械的に固定する。
+  ```text
+  windowed 対象      : capped kind すべて（E-S48）
+  device window 適用 : self_analysis のみ（E-S47）
+  claim 配線済み     : basic_info / diagnosis / activity / self_analysis
+  → verified 到達可  : self_analysis のみ
+  ```
+- **★ 実際の失敗は引き続き unreadable ★**
+  query failure / mapping failure / `skipped` は従来どおり `unreadable` で、
+  sync 判定に進まず origin も `bridge` のまま。overflow とは別物である。
+- **★ window が違えば必ず mismatch のまま ★**
+  本 Decision は「overflow なら自動 MATCH」にする変更ではない。
+  top-N window の中身が 1 つでも違えば fingerprint が変わり mismatch になる。
+- **既知の残余（E-S47 から継続）:** server は同一 `created_at` を `id DESC` で解くが
+  device view は `id` を持たない。同一 timestamp の record が **cap 境界をまたぐ**場合だけ
+  選択がずれ得る。構造的保証ではないことを記録しておく。
+- **★ これは consumer switch ではない ★** 本 Decision は canonical source の可読性判定を
+  変えるだけで、production tutor prompt は legacy 経路のままである（E-S43）。
+  S5-P7 では promotion 前後で `buildTutorSupabaseContextSection` /
+  `buildTutorStudentContextSection` の出力を 14 fixture（0 件 / 1 件 / cap ちょうど /
+  cap+1 / cap 超過 / 同一 timestamp 境界 / device-server 一致 / device-server 不一致 /
+  truncated / 空 / full ほか）で **byte 一致**確認している。
+  self_analysis の tutor 向け canonical block も引き続き **追加しない**。
+- **Alternatives rejected:**
+  - *cap を上げる* — 転送量と prompt budget が増えるだけで、どこかに必ず境界が残る。
+  - *overflow 時に全件読む* — cap の目的（latency / memory の予測可能性 / E-S19）を壊す。
+  - *`readStatus` を `ok` に書き換える* — E-S8 が却下した「truncated を ok と同一視する」
+    そのものになり、overflow の観測が失われる。
+  - *全 kind の truncated を無条件 readable にする* — window 契約が無い呼び出しでも
+    部分読みからの同一性主張になる。opt-in を必須にした理由。
+  - *新しい status enum（`windowed` 等）を足す* — 消費側の分岐が増える。
+- **Implementation evidence:** `lib/examSpine/context/assemble.server.ts`
+  （`normalizeSourceStates` の overflow 分岐）／`lib/examSpine/sync/adapters/types.ts`
+  （`serverMirrorCandidate` の `windowed` opt-in）。
+  QA は `scripts/exam-spine-stage5-5-check.ts`、および Stage 5.4 QA の T11（解消後の挙動）。
+- **Rollback implications:** `assemble.server.ts` の state 判定 1 箇所を戻せば従来挙動。
+  consumer は未接続なので production 影響ゼロ。
 
 ---
 
