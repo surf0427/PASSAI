@@ -37,6 +37,8 @@ import { EXAM_DEVICE_CLAIM_MAX_BYTES } from '@/lib/examSpine/sync/claim/types';
 import { EXAM_READ_CAPS } from '@/lib/examSpine/read/types';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
+import { EXAM_CONTEXT_BLOCK_REGISTRY } from '@/lib/examSpine/blocks/registry';
+import { EXAM_PURPOSE_PLANS } from '@/lib/examSpine/orchestrator/plan';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import * as Q from '@/lib/examSpine/read/queries';
 import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnapshot.server';
@@ -372,6 +374,24 @@ async function t8Shadow(): Promise<void> {
   eq('T8 値違いは NOT_READY', v.readiness?.readiness, 'NOT_READY');
 
   check('T8 diff に本文が出ない', !JSON.stringify(m.cmp).includes(SECRET));
+
+  // ★ mismatch path こそ値が漏れやすい（S5-P5 の負例 N5 で発見した失敗形）★
+  //   MATCH 経路しか検査していないと、VALUE_MISMATCH の `reason` に legacy /
+  //   canonical の実値を載せる変更が guard をすり抜ける。shadow entry が持ってよいのは
+  //   field id / diff kind / origin / status / 固定 reason enum だけ（E-S13 / E-S43）。
+  const vJson = JSON.stringify(v.cmp);
+  check('T8 mismatch 時も diff に自己分析本文が出ない', !vJson.includes(SECRET));
+  check('T8 mismatch 時に legacy の実値が出ない', !vJson.includes('違う要約'));
+  check('T8 mismatch 時に claim token（fingerprint）が出ない',
+    token !== null && !vJson.includes(token));
+  check('T8 mismatch 時に canonical の実値が出ない',
+    !vJson.includes(String(legacyFromSupabase.summary)));
+  //   reason は型上 enum だが、型を広げる変更が入っても runtime で落ちるようにする。
+  const reasons = v.cmp.entries
+    .map((e) => e.reason as unknown)
+    .filter((r): r is string => typeof r === 'string');
+  check('T8 reason は既知の enum 相当のみ',
+    reasons.every((r) => /^[a-z_]+$/.test(r)), reasons.join(' | '));
 }
 
 // ── 9. schema / mirror / consumer ─────────────────────────────────────
@@ -385,12 +405,33 @@ function t9Static(): void {
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
   check('T9 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
-  const idx = route.indexOf('buildTutorUserPrompt');
-  if (idx !== -1) {
-    const w = route.slice(Math.max(0, idx - 1500), idx + 1500);
-    check('T9 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
-    check('T9 prompt 付近に comparison が現れない', !w.includes('comparison'));
+  // ★ 修正（S5-P6 promotion）★ source 側は route.indexOf('buildTutorUserPrompt') を
+  //   anchor に ±1500 字 window を見ていた。この識別子は file 冒頭の見出しコメントにも
+  //   現れるため window が file 先頭に張られ、実際の prompt 経路を検査できていない
+  //   （S5-P4 / S5-P5 で 5.2 / 5.3 側に見つかったのと同じ defect）。
+  //   コメント行を除いた実コード上で **呼び出し形**に anchor し、
+  //   固定 window ではなく prompt 組み立て「以降すべて」を検査する。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('T9 prompt 組み立て位置を特定できる', promptIdx !== -1);
+  if (promptIdx !== -1) {
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T9 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    check('T9 prompt 以降に self_analysis canonical 経路が現れない',
+      !afterPrompt.includes('selfAnalysisLogs') && !afterPrompt.includes('deviceSelfAnalysis'));
+    // optional chaining（`.context?.blocks`）でも抜けないよう正規表現で見る。
+    check('T9 prompt 以降に canonical block 配列が現れない',
+      !/\.context\??\.blocks/.test(afterPrompt));
+    check('T9 prompt 以降に compareTutorShadow が現れない',
+      !afterPrompt.includes('compareTutorShadow'));
   }
+  const legacyCtx = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
+  check('T9 legacy が canonical block を import しない', !legacyCtx.includes('examSpine/blocks'));
+  check('T9 legacy が canonical context を import しない', !legacyCtx.includes('examSpine/context'));
   const claimSrc = stripComments(readFileSync(join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8'));
   check('T9 claim 層に mutation が無い', !/\.(insert|upsert|update|delete|rpc)\s*\(/.test(claimSrc));
   const page = readFileSync(join(ROOT, 'app/tutor/page.tsx'), 'utf8');
@@ -430,6 +471,85 @@ async function t11TruncationBlocker(): Promise<void> {
   //   claim wiring とは別の migration blocker として報告する。
 }
 
+
+// ── 12. Stage 5.4 の境界（5.5 feature 以降を巻き込んでいないこと）─────────
+//
+//   Stage 5.4 は self_analysis の device claim 配線と shadow 比較元の訂正だけを
+//   昇格する packet である。source lineage には 5.5（cap を比較 window とみなす）/
+//   5.6（statement_review）/ interview_record が続いており混入しやすい。
+//
+//   ★ window primitive と Stage 5.5 feature を取り違えない ★
+//     device sync window primitive（`selectDeviceSyncWindow` / deviceViews.ts）は
+//     device 側が server と同じ「上位 cap 件」を選ぶだけの選択規則であり、
+//     Stage 5.4 の claim parity が成立するための **前提**（E-S47）。
+//     canonical source の可読性判定は一切変えないので ALLOWED。
+//
+//     Stage 5.5 の feature は別物で、「cap を比較 window とみなし truncated を
+//     unreadable にしない」という **可読性 semantics の変更**である
+//     （assemble.server.ts の早期 return 除去 ＋ serverMirrorCandidate の
+//     `windowed` opt-in）。これは未昇格なので FORBIDDEN。
+function t12Boundary(): void {
+  console.log('\n12. Stage 5.4 boundary');
+
+  // (a) claim kind — 実ソースから抽出（arity 非依存）。
+  const claimFile = readFileSync(join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimFile.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('T12 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const declaredKinds = Array.from(
+    claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  eq('T12 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
+
+  // (b) window primitive は許可、Stage 5.5 feature は禁止（機械的に区別する）。
+  const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  check('T12 device sync window primitive は昇格済み（許可）',
+    deviceViews.includes('selectDeviceSyncWindow'));
+  //   primitive は self_analysis にだけ適用されている（他 kind へ広げるのは 5.5 以降）。
+  const otherWindowed = ['deviceStatementReviewView', 'deviceSelfPrView',
+    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
+    const i = deviceViews.indexOf(`export function ${fn}(`);
+    return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  });
+  eq('T12 window primitive は self_analysis 以外へ広がっていない', otherWindowed, []);
+
+  const adapterTypes = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/types.ts'), 'utf8');
+  const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
+  check('T12 serverMirrorCandidate を特定できる', smcIdx !== -1);
+  const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
+  check('T12 Stage 5.5 feature（windowed opt-in）が混入していない', !/\bwindowed\b/.test(smcBody));
+  check('T12 serverMirrorCandidate は strict のまま（ok 以外は unreadable）',
+    /status\s*!==\s*'ok'/.test(smcBody));
+
+  const assembler = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
+  check('T12 assembler は truncated を unreadable のままにしている',
+    /readStatus === 'truncated'/.test(assembler));
+
+  // (c) Stage 5.6 / interview_record の block が混入していない。
+  const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
+  for (const later of ['interview_issue_line']) {
+    check(`T12 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  }
+  //   tutor plan は 5.1 + 5.2 + 5.3 のまま（5.4 は block を足さない / 下記 (e) 参照）。
+  const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
+  eq('T12 tutor plan の block は 5.1 + 5.2 + 5.3 の 3 つのまま', tutorBlocks, [
+    'tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
+  ]);
+
+  // (d) consumer switch が動いていない。
+  const entry = readFileSync(join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STAGE5_ENTRY.md'), 'utf8');
+  check('T12 FIRST_STAGE5_CONSUMER=tutor のまま', /FIRST_STAGE5_CONSUMER\s*=\s*tutor\b/.test(entry));
+  check('T12 FIRST_STAGE5_SLOT=basic_info のまま（self_analysis へ切り替えない）',
+    /FIRST_STAGE5_SLOT\s*=\s*basic_info\b/.test(entry));
+
+  // (e) ★ Stage 5.4 は canonical block を追加しない ★
+  //     legacy が prompt に出している 4 行に対応する tutor 向け block は
+  //     Stage 5.4 の locked intent では **意図的に未実装**（新 block を乱造しない）。
+  //     ここを緩めて block を足すと source の intent を変えることになる。
+  check('T12 self_analysis の tutor 向け canonical block は未追加のまま',
+    !blockIds.includes('self_analysis_tutor') && !blockIds.includes('self_analysis_summary_line'));
+}
+
 async function main(): Promise<void> {
   console.log('[exam-spine-stage5.4] Self analysis device claim wiring');
   t1Authority();
@@ -443,6 +563,7 @@ async function main(): Promise<void> {
   t9Static();
   await t10Isolation();
   await t11TruncationBlocker();
+  t12Boundary();
 
   if (fetchCallCount !== 0) {
     console.error(`\n[exam-spine-stage5.4] FAIL: 外部通信 ${fetchCallCount} 回`);

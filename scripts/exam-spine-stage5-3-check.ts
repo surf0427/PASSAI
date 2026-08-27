@@ -464,10 +464,11 @@ function t9Boundary(): void {
   const declaredKinds = Array.from(fnBody.matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g))
     .map((m) => m[1])
     .sort();
-  eq('T9 tutor の claim kind は basic_info + diagnosis + activity のみ', declaredKinds, [
+  eq('T9 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds, [
     'activity',
     'basic_info',
     'diagnosis',
+    'self_analysis',
   ]);
 
   // (c) 後続 stage が新設する block id が registry に無い。
@@ -484,11 +485,21 @@ function t9Boundary(): void {
   check('T9 FIRST_STAGE5_SLOT=basic_info のまま（activity へ切り替えない）',
     /FIRST_STAGE5_SLOT\s*=\s*basic_info\b/.test(entry));
 
-  // (e) 5.5（history comparison window）を巻き込んでいない。
-  //     selectDeviceSyncWindow は 5.5 で device list view に入る cap 適用である。
-  const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  check('T9 Stage 5.5 の read-cap window が混入していない',
-    !deviceViews.includes('selectDeviceSyncWindow'));
+  // (e) Stage 5.5 の **feature** を巻き込んでいない。
+  //
+  //     ★ S5-P5 の分類を S5-P6 で訂正した ★
+  //       `selectDeviceSyncWindow` を「5.5 の read-cap window」として禁止していたが
+  //       誤分類だった。これは Stage 5.4 の claim parity の前提となる device 側の
+  //       選択規則（E-S47）であり、canonical source の可読性は変えない。
+  //       Stage 5.5 の feature は assemble.server.ts / adapters/types.ts 側にある
+  //       「truncated を unreadable にしない」semantics のほうである。
+  const adapterTypes = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/types.ts'), 'utf8');
+  const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
+  const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
+  check('T9 Stage 5.5 feature（windowed opt-in）が混入していない', !/\bwindowed\b/.test(smcBody));
+  const assembler = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
+  check('T9 assembler は truncated を unreadable のままにしている',
+    /readStatus === 'truncated'/.test(assembler));
 }
 
 async function main(): Promise<void> {

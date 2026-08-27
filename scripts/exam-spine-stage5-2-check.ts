@@ -290,9 +290,12 @@ function t7Static(): void {
   //   固定していた。S5-P5 で Stage 5.3（activity）を canonical へ昇格したため、
   //   境界を **1 段前へ進める**（削除して弱くするのではない）。
   //
-  //     ALLOWED   basic_info（5.1）/ diagnosis（5.2）/ activity（5.3）
-  //     FORBIDDEN self_analysis（5.4）/ history window（5.5）/
-  //               statement_review（5.6）/ interview_record（その先）
+  //   S5-P6 で Stage 5.4（self_analysis）を昇格したため、境界をさらに 1 段進める。
+  //
+  //     ALLOWED   basic_info（5.1）/ diagnosis（5.2）/ activity（5.3）/
+  //               self_analysis（5.4）/ device sync window primitive（5.4 の前提）
+  //     FORBIDDEN Stage 5.5 **feature** semantics / statement_review（5.6）/
+  //               interview_record（その先）/ consumer switch
   //
   //   ★ registry の membership だけでは足りない ★
   //     5.4 / 5.6 は **既存 block を再利用**して claim kind だけを足すため、
@@ -320,8 +323,8 @@ function t7Static(): void {
   const declaredKinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T8 tutor の claim kind は basic_info + diagnosis + activity のみ', declaredKinds,
-    ['activity', 'basic_info', 'diagnosis']);
+  eq('T8 tutor の claim kind は 5.1-5.4 の 4 つのみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
   //   実際に組み立てても同じ集合であること（宣言と挙動の一致）。
   const builtKinds = buildTutorDeviceClaimEntries(
     { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
@@ -333,11 +336,47 @@ function t7Static(): void {
   ).map((e) => e.kind).sort();
   eq('T8 activity を渡さなければ claim も出ない（申告のみ / 生成しない）', builtKinds,
     ['basic_info', 'diagnosis']);
-  //   Stage 5.5（history comparison window）を巻き込んでいない。
+  // ── window primitive（許可）と Stage 5.5 feature（禁止）を機械的に分ける ──
+  //
+  //   ★ S5-P5 の guard は両者を取り違えていた ★
+  //     `selectDeviceSyncWindow` を「Stage 5.5 の read-cap window」として一律禁止して
+  //     いたが、これは誤分類である。実際には:
+  //
+  //       device sync window primitive（c9736b5 / deviceViews.ts）
+  //         = device 側が server と同じ「上位 cap 件」を選ぶだけの選択規則。
+  //           Stage 5.4 の claim parity が成立するための **前提**であり、
+  //           Stage 5.4 QA は本 primitive を import しないとそもそも type check が通らない。
+  //           overflow の可読性は一切変えない。→ ALLOWED（E-S47）
+  //
+  //       Stage 5.5 feature（9457eb4 / assemble.server.ts + adapters/types.ts）
+  //         = 「cap を比較 window とみなし、truncated を unreadable にしない」。
+  //           canonical source の可読性判定そのものを変える consumer 向け semantics。
+  //           → FORBIDDEN（未昇格）
+  //
+  //   したがって guard は「primitive の存在」ではなく
+  //   **feature の surface が現れていないこと**を見る。
   const deviceViews = readFileSync(
     join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  check('T8 Stage 5.5 の read-cap window が混入していない',
-    !deviceViews.includes('selectDeviceSyncWindow'));
+  check('T8 device sync window primitive は昇格済み（許可 / Stage 5.4 の前提）',
+    deviceViews.includes('selectDeviceSyncWindow'));
+
+  //   feature surface 1: serverMirrorCandidate の `windowed` opt-in。
+  const adapterTypes = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/types.ts'), 'utf8');
+  const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
+  check('T8 serverMirrorCandidate を特定できる', smcIdx !== -1);
+  const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
+  check('T8 Stage 5.5 feature（windowed opt-in）が混入していない',
+    !/\bwindowed\b/.test(smcBody));
+  check('T8 serverMirrorCandidate は strict のまま（ok 以外は unreadable）',
+    /status\s*!==\s*'ok'/.test(smcBody));
+
+  //   feature surface 2: assembler が truncated を unreadable に倒し続けている。
+  const assembler = readFileSync(
+    join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
+  check('T8 assembler は truncated を unreadable のままにしている',
+    /readStatus === 'truncated'/.test(assembler)
+      && /state: 'unreadable', readStatus, syncStatus: null, rowCount, truncated: true/.test(assembler));
 }
 
 async function main(): Promise<void> {
