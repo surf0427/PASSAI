@@ -57,9 +57,24 @@ function trimmed(value: string | null | undefined): string {
  * legacy `projectBasicInfo`（lib/contextBuilders/tutorContext.ts）と同じ規則:
  *   grade / track   … trim して 40 字で切る
  *   examType        … examTypes を 3 件まで採り「・」で連結
- *   targetSchools   … preferences を 3 件まで見て、university が空でないものだけ
+ *   targetSchools   … preferences の **生配列の先頭 3 slot** を見て、
+ *                     その中の record の university が空でないものだけ
  *   targetFields    … 同上（faculty）
  *   どれも空なら **null**（＝ section に basic_info 行を 1 行も出さない）
+ *
+ * ★ 生 slot を数える（E-S50）★
+ *   legacy は `preferences.slice(0, 3)` を **生配列**に対して行い、そのあとで
+ *   非 record を捨てる。したがって「先頭 3 slot のうち何個が非 record に消費されたか」
+ *   が採用件数に効く。正規化列（`row.preferences`）は非 record を詰めてしまうので
+ *   この規則を再現できない。`row.rawPreferences` は生 index を保持しているので
+ *   再現できる。ここでやっているのは **legacy の規則をそのまま書き写すこと**だけで、
+ *   mapper 後の値から「不正値があったはず」と推測してはいない。
+ *
+ * ★ university が string でない行も見る ★
+ *   legacy は `asRecord` を通った行の `university` / `faculty` を
+ *   それぞれ独立に `toTrimmedString` する。`university: 123` の行でも
+ *   `faculty` は採られる。`rawPreferences` は正規化列と違いその行を落とさないので、
+ *   同じ結果になる。
  *
  * ★ overallGpa / subjectGrades / name は載せない ★
  *   legacy が読まない（評定・PII / E-P5・E-P8）。canonical row は持っているが使わない。
@@ -79,7 +94,9 @@ export function projectTutorBasicInfoSlot(
 
   const targetSchools: string[] = [];
   const targetFields: string[] = [];
-  for (const pref of row.preferences.slice(0, TUTOR_BASIC_INFO_MAX_TARGETS)) {
+  for (const pref of row.rawPreferences) {
+    // `rawPreferences` は sourceIndex 昇順なので、境界に達したら以降も全部境界外。
+    if (pref.sourceIndex >= TUTOR_BASIC_INFO_MAX_TARGETS) break;
     const uni = truncate(trimmed(pref.university), TUTOR_BASIC_INFO_MAX_ITEM_LENGTH);
     const fac = truncate(trimmed(pref.faculty), TUTOR_BASIC_INFO_MAX_ITEM_LENGTH);
     if (uni !== '') targetSchools.push(uni);
@@ -132,17 +149,26 @@ export type TutorBasicInfoSlotFallbackReason =
  *   legacy と **完全一致** するときだけ。一致しなければ legacy を維持する。
  *
  *   これは「一致するまで canonical を使わない」という弱い妥協ではなく、
- *   制約そのものの機械的な強制である。実際、両者には再現不能な構造差が 1 つある:
+ *   制約そのものの機械的な強制である。veto は **恒久的な安全網として残す**。
+ *
+ * ★ projection 差は解消済み（E-S49 → E-S50）★
+ *   Packet 3 の時点では次の構造差が残っていた:
  *
  *     legacy      : preferences を **生のまま 3 件に切ってから** 非 record を捨てる
  *     canonical   : read mapper が **非 record を捨てながら 10 件へ詰める**
  *
- *   壊れた entry が 3 件境界より前にあると採用件数がずれる。ずれの原因である
- *   「どの生 slot が壊れた entry に消費されたか」は mapper 通過後の row には残らないため、
- *   row だけから legacy を再現することは**原理的にできない**。
- *   read layer（Stage 3 / 全 consumer 共有）を Packet 3 で変えるのは scope 外なので、
- *   ここでは fail-closed に倒し、ずれを `divergent_projection` として観測可能にする。
- *   （壊れた entry は writer の型上は発生せず、localStorage 破損時のみ現れる。）
+ *   壊れた entry が 3 件境界より前にあると採用件数がずれ、ずれの原因である
+ *   「どの生 slot が壊れた entry に消費されたか」は当時の row には残っていなかった。
+ *   S5-P7 で read layer が `rawPreferences`（生 index つきの事実列）を報告するように
+ *   なったため、`projectTutorBasicInfoSlot` が legacy の規則をそのまま再現できる。
+ *   `divergent_projection` は **設計上の既知差としては 0 件**である。
+ *
+ * ★ それでも veto を外さない ★
+ *   残る不一致要因は read cap（E-S19 / shortText=200）だけであり、これは
+ *   「canonical が値を見ていない」ことを意味するので legacy 維持が正しい:
+ *     先頭 200 字がすべて空白の文字列は canonical 側で空になり、legacy では
+ *     trim 後の内容が残る → `would_reduce_context` / `canonical_absent`。
+ *   将来 mapper や legacy を触ったときに黙って出力が変わらないための安全網でもある。
  */
 export function decideTutorBasicInfoSlot(input: {
   /** Source-Sync + canary が canonical の使用を許したか。 */

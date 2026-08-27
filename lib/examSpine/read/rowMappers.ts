@@ -16,7 +16,7 @@ import {
   asFiniteNumber,
   asRecord,
   asString,
-  toRecordArray,
+  toIndexedRecordArray,
   toStringArray,
   truncateString,
   unwrapEmbedded,
@@ -59,8 +59,43 @@ export type ExamBasicInfoServerRow = {
   overallGpa: string | null;
   examTypes: string[];
   preferences: { university: string; faculty: string | null; department: string | null }[];
+  /**
+   * ★ 生 `preferences` 配列を **正規化せずに** 報告したもの（E-S50）★
+   *
+   *   `preferences` は「record でない要素を捨て、`university` が string でない行も捨てて
+   *   詰めた」正規化列である。一方、legacy tutor consumer は同じ配列を
+   *   「**生配列の先頭 N slot** を見て、その中の record だけを使う」規則で読む。
+   *   詰めたあとの列からは「どの生 slot が捨てられた要素に消費されたか」も
+   *   「捨てた行が持っていた faculty」も復元できないため、両者は原理的に一致しない。
+   *
+   *   ここでは record だった要素を **落とさず**、`sourceIndex`（生配列の index）を
+   *   添えて報告する。これは payload に対する事実であって feature の方針ではないので
+   *   read layer の責務に収まる（E-S20 / mapper は policy を持たない）。
+   *   どの slot を採るか・`university` が無い行を使うかは consumer が決める。
+   *
+   *   ⚠️ AI-visible ではない。prompt / section / sync fingerprint のいずれにも入らない
+   *     （`basicInfoSyncView` は `preferences` だけを見る `Pick` で受ける）。
+   *   ⚠️ `preferences` と同じ走査・同じ cap（`limits.recordItems`）で作る。
+   *     別 cap を持たせると 2 つ目の切り方が生まれる。
+   */
+  rawPreferences: readonly ExamBasicInfoRawPreference[];
   subjectGrades: Record<string, string> | null;
   schemaVersion: string | null;
+};
+
+/**
+ * 生 `preferences` 配列の 1 slot（record だったものだけ）。
+ *
+ * `university` / `faculty` / `department` は **string でなければ `null`**。
+ * `preferences` と違い、`university` が string でない行もここには残る
+ * （その行が持つ `faculty` を legacy consumer が使っているため）。
+ */
+export type ExamBasicInfoRawPreference = {
+  /** 生配列における index（詰めたあとの位置ではない）。 */
+  readonly sourceIndex: number;
+  readonly university: string | null;
+  readonly faculty: string | null;
+  readonly department: string | null;
 };
 
 export function mapBasicInfoRow(
@@ -71,20 +106,28 @@ export function mapBasicInfoRow(
   if (!rec) return null;
   const payload = asRecord(rec.payload);
 
+  // ★ 走査は 1 回だけ ★ `preferences`（正規化列）と `rawPreferences`（事実列）は
+  //   同じ record 集合・同じ cap から作る。別々に走査すると 2 つの切り方が生まれる。
   const preferences: ExamBasicInfoServerRow['preferences'] = [];
-  for (const pref of toRecordArray(payload?.preferences, limits.recordItems)) {
+  const rawPreferences: ExamBasicInfoRawPreference[] = [];
+  for (const { sourceIndex, record: pref } of toIndexedRecordArray(
+    payload?.preferences,
+    limits.recordItems,
+  )) {
     const university = truncateString(pref.university, limits.shortText);
-    // ★ ここで落とすのは「university が **string ですらない**」型不整合の行だけ。
+    const faculty = truncateString(pref.faculty, limits.shortText);
+    const department = truncateString(pref.department, limits.shortText);
+    // ★ 事実列は 1 行も落とさない（E-S50）★
+    //   `university` が string でない行も、その行が持つ `faculty` を legacy consumer が
+    //   使っている。落とすとその事実が消え、consumer 側で復元できない。
+    rawPreferences.push({ sourceIndex, university, faculty, department });
+    // ★ 正規化列で落とすのは「university が **string ですらない**」型不整合の行だけ。
     //   空文字（`university: ''`）は落とさない。「識別子が空の志望校を使うか」は
     //   consumer 側の判断であり、mapper が握ると policy が read layer に入り込む
     //   （legacy の prompt builder は空を落とすが、それは prompt 側の都合であって
     //    server row の事実ではない）。Stage 3 は事実をそのまま報告する。
     if (university === null) continue;
-    preferences.push({
-      university,
-      faculty: truncateString(pref.faculty, limits.shortText),
-      department: truncateString(pref.department, limits.shortText),
-    });
+    preferences.push({ university, faculty, department });
   }
 
   let subjectGrades: Record<string, string> | null = null;
@@ -105,6 +148,7 @@ export function mapBasicInfoRow(
     overallGpa: truncateString(payload?.overallGpa, limits.shortText),
     examTypes: toStringArray(payload?.examTypes, limits.arrayItems, limits.arrayItemLength),
     preferences,
+    rawPreferences,
     subjectGrades,
     schemaVersion: asString(rec.schema_version),
   };

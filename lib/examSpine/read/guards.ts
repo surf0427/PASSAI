@@ -79,12 +79,36 @@ export function toStringArray(
 
 /** object 配列として安全に読む。`max` は required。 */
 export function toRecordArray(value: unknown, max: number): Record<string, unknown>[] {
+  return toIndexedRecordArray(value, max).map((e) => e.record);
+}
+
+/** `toIndexedRecordArray` の 1 要素。`sourceIndex` は **生配列** の index。 */
+export type IndexedRecord = {
+  readonly sourceIndex: number;
+  readonly record: Record<string, unknown>;
+};
+
+/**
+ * `toRecordArray` と同じ走査で、**生配列の何番目だったか**を併せて返す。
+ *
+ * ★ なぜ index が要るか（E-S50）★
+ *   `toRecordArray` は「record でない要素を捨てながら詰める」正規化である。
+ *   一方、同じ配列を見ている legacy consumer には「生配列の先頭 N slot だけを見る」
+ *   ものがあり（tutor の `preferences`）、詰めたあとの列からは
+ *   「どの生 slot が非 record に消費されたか」が復元できない。
+ *   index は payload に対する **事実** であって feature の方針ではないので、
+ *   read layer が報告してよい（E-S20）。捨てるか使うかは consumer の判断のまま。
+ *
+ * `max` は **採用する record 件数**の上限（生配列の走査長ではない）。
+ * 返る配列は `sourceIndex` の昇順（生配列の順序そのもの）。
+ */
+export function toIndexedRecordArray(value: unknown, max: number): IndexedRecord[] {
   if (!Array.isArray(value)) return [];
-  const out: Record<string, unknown>[] = [];
-  for (const item of value) {
-    const rec = asRecord(item);
+  const out: IndexedRecord[] = [];
+  for (let i = 0; i < value.length; i += 1) {
+    const rec = asRecord(value[i]);
     if (!rec) continue;
-    out.push(rec);
+    out.push({ sourceIndex: i, record: rec });
     if (out.length >= max) break;
   }
   return out;
