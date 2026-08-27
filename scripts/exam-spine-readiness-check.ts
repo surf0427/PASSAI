@@ -32,6 +32,8 @@ import {
 } from '@/lib/examSpine/purpose';
 import { EXAM_SOURCE_KINDS, EXAM_SOURCE_TABLES } from '@/lib/examSpine/sourceData/types';
 import * as Q from '@/lib/examSpine/read/queries';
+import { EXAM_CONTEXT_BLOCK_REGISTRY } from '@/lib/examSpine/blocks/registry';
+import { EXAM_PURPOSE_PLANS } from '@/lib/examSpine/orchestrator/plan';
 
 const ROOT = process.cwd();
 let passed = 0;
@@ -334,6 +336,125 @@ function r1Register(): void {
     existsSync(join(ROOT, 'lib/contextBuilders/tutorPresentationSection.ts')));
   check('R1 E-S54 は presentation のまま（controlled lineage が奪っていない）',
     /^## E-S54 — `presentation`/m.test(text));
+
+  // ── R1b: STATE の readiness 宣言が code の実装と矛盾しない（N10）────────
+  //
+  // ★ 負例で見つかった穴 ★ STATE の statement_review semantics を DEFERRED から
+  //   READY へ **文書だけ**書き換える mutation が、どの suite でも検出されなかった。
+  //   readiness の enum は code 側（sync/verdict.ts / registry の blocker）が pin して
+  //   いたが、**STATE 文書の宣言**は誰も見ていなかった。
+  //   product 判断待ちの kind を文書上だけ READY にすると、後続 packet が
+  //   「もう繋いでよい」と誤読する。宣言と実装のどちらか一方だけが動くのを止める。
+  //
+  //   ★ 文字列の存在確認で終わらせない ★
+  //     needle を置いただけでは「READY と書いた行を別に足す」逃げ道が残る。
+  //     したがって (1) DEFERRED 宣言が在ること (2) 同じ subject を READY と
+  //     宣言する行が **無い**こと (3) code 側の実体が一致すること の 3 点で閉じる。
+  const READINESS_PINS: ReadonlyArray<{
+    readonly label: string;
+    readonly section: string;
+    readonly required: readonly string[];
+    readonly forbidden: readonly RegExp[];
+  }> = [
+    {
+      label: 'statement_review',
+      section: '### statement_review readiness',
+      required: [
+        'semantics  DEFERRED（E-S49 classification C）',
+        'overall    DEFERRED',
+      ],
+      // 同 section 内で semantics / overall を READY と宣言し直していないこと。
+      forbidden: [/^\s*semantics\s+READY\b/m, /^\s*overall\s+READY\b/m],
+    },
+    {
+      label: 'essay',
+      section: '### essay readiness',
+      required: ['runtime enable  BLOCKED  EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay'],
+      forbidden: [/^\s*runtime enable\s+READY\b/m],
+    },
+  ];
+  for (const pin of READINESS_PINS) {
+    const at = stateSrc.indexOf(pin.section);
+    check(`R1b STATE: ${pin.label} の readiness 節がある`, at !== -1, pin.section);
+    if (at === -1) continue;
+    // 次の '### ' 見出しまでを当該 section とする（他 kind の行を巻き込まない）。
+    const nextAt = stateSrc.indexOf('\n### ', at + pin.section.length);
+    const section = stateSrc.slice(at, nextAt === -1 ? stateSrc.length : nextAt);
+    for (const needle of pin.required) {
+      check(`R1b STATE: ${pin.label} の宣言「${needle.slice(0, 40)}」が保たれている`,
+        section.includes(needle), needle);
+    }
+    for (const re of pin.forbidden) {
+      check(`R1b STATE: ${pin.label} の節が ${String(re)} を宣言していない`,
+        !re.test(section));
+    }
+  }
+  // ★ 宣言の相手側（実装）も同時に見る ★
+  //   E-S49 が禁じているのは **tutor-facing な** canonical block であって、
+  //   statement_review kind の block 一般ではない（`previous_output_summary` は
+  //   divergence 探索 context 用で、tutor plan には載っていない）。
+  //   したがって「tutor plan に statement_review 由来の block が無い」で閉じる。
+  const blockRegistry = EXAM_CONTEXT_BLOCK_REGISTRY as unknown as
+    Record<string, { sourceKind?: string }>;
+  const tutorPlanBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
+  check('R1b tutor plan に statement_review 由来の block は無い（E-S49 semantics DEFERRED）',
+    tutorPlanBlocks.every((id) => blockRegistry[id]?.sourceKind !== 'statement_review'),
+    tutorPlanBlocks.join(','));
+  check('R1b 対照: statement_review kind の block 自体は存在する（空回り検査でない）',
+    Object.values(blockRegistry).some((b) => b.sourceKind === 'statement_review'));
+  //   essay の runtime blocker は宣言だけでなく registry 実体も要る（両側で閉じる）。
+  const registrySrc = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/registry.ts'), 'utf8');
+  check('R1b essay の runtime blocker が registry に実在する',
+    /EXAM_SYNC_RUNTIME_ENABLE_BLOCKED[\s\S]{0,400}?\n  essay:/.test(registrySrc));
+
+  // ── R1c: module が「意味的に正しい」decision ID を引いている（N13）──────
+  //
+  // ★ 負例で見つかった穴 ★ 上の staleInCode 検査は **未定義 ID** しか見ない。
+  //   promotion lineage の decision は canonical の未使用 ID へ 3 度再採番されており、
+  //   旧 ID はすべて **実在する別の decision** になった。したがって
+  //   `E-S49` を `E-S54` のような実在 ID へ差し替えても未定義参照検査は通ってしまう。
+  //   そこで「どの module / どの subject が、どの ID を根拠にするか」の対応を pin する。
+  //
+  //   (1) module → 自分の主題の decision ID
+  for (const [rel, id] of [
+    ['lib/examSpine/context/tutorBasicInfoSlot.ts', 'E-S56'],
+    ['lib/examSpine/context/tutorActivitySlot.ts', 'E-S58'],
+    ['lib/examSpine/read/rowMappers.ts', 'E-S57'],
+    ['lib/examSpine/read/guards.ts', 'E-S57'],
+  ] as const) {
+    const src = readFileSync(join(ROOT, rel), 'utf8');
+    check(`R1c ${rel} は ${id} を引いている`, src.includes(id), rel);
+  }
+  //   (2) ID → 見出しの主題（ID が別 decision を指すようになっていない）
+  for (const [id, needle] of [
+    ['E-S49', 'statement_review'],
+    ['E-S50', 'device history window'],
+    ['E-S52', '`essay` の read window'],
+    ['E-S54', '`presentation`'],
+    ['E-S55', '`edc1`'],
+    ['E-S56', 'tutor `basic_info` の consumer 切替'],
+    ['E-S57', '生 `preferences` slot'],
+    ['E-S58', 'tutor `activity` を 2 番目の controlled consumer 切替'],
+  ] as const) {
+    const head = text.split('\n').find((l) => l.startsWith(`## ${id} `)) ?? '';
+    check(`R1c ${id} の見出しが期待の主題`, head.includes(needle), head.slice(0, 110));
+  }
+  //   (3) subject → ID（STATE / 実装が引く根拠の向きを固定する）
+  //       readiness 宣言が「実在するが別主題の ID」へ張り替えられても落ちる。
+  const SEMANTIC_REFS: ReadonlyArray<readonly [string, string, string]> = [
+    // [label, その主張が書かれている文脈, 期待する decision ID]
+    ['statement_review semantics DEFERRED', 'semantics  DEFERRED（', 'E-S49'],
+    ['essay semantics DEFERRED', 'semantics       DEFERRED ★ ', 'E-S53'],
+    ['essay transport BLOCKED', 'transport       BLOCKED  ★ ', 'E-S52'],
+  ];
+  for (const [label, ctx, id] of SEMANTIC_REFS) {
+    const at = stateSrc.indexOf(ctx);
+    check(`R1c STATE: ${label} の文脈がある`, at !== -1, ctx);
+    if (at === -1) continue;
+    const line = stateSrc.slice(at, stateSrc.indexOf('\n', at));
+    check(`R1c STATE: ${label} の根拠は ${id}`, line.includes(id), line.slice(0, 110));
+  }
 
   // Wave 2 で登録した decision が実在すること。
   for (const id of ['E-S23', 'E-S24', 'E-S25', 'E-S26', 'E-S27', 'E-S28', 'E-P9']) {

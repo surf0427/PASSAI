@@ -601,6 +601,39 @@ function staticChecks(): void {
         return routeCode.slice(routeCode.lastIndexOf('\n', at) + 1, routeCode.indexOf('\n', at)).trim();
       }), []);
   }
+  // ── AI call が 1 request 1 本のまま（S5-P12 negative control N6）──
+  //
+  // ★ S5-P12 の負例で見つかった穴 ★ route に 2 本目の `anthropic.messages.create` を
+  //   足す mutation が **どの suite でも検出されなかった**。canonical read の本数は
+  //   packet3 が固定していたが、**AI call の本数**はどこも見ていなかった。
+  //   slot 切替も shadow 比較も観測であり、model への往復を増やしてはいけない
+  //   （増やせば同一 request 内で prompt が 2 度評価され、AI-visible 同値の前提が崩れる）。
+  //
+  //   ★ route だけでなく **route が呼ぶ側**も塞ぐ ★
+  //     route 本体で 1 本に見えても、slot / shadow / compose の module が独自に
+  //     model を呼べば実質 2 本になる。呼び出し先を allowlist で列挙して 0 本を固定する。
+  eq('tutor route の AI call は 1 本だけ',
+    (routeCode.match(/anthropic\.messages\.create\s*\(/g) ?? []).length, 1);
+  eq('tutor route に AI stream 呼び出しが無い',
+    (routeCode.match(/anthropic\.messages\.stream\s*\(/g) ?? []).length, 0);
+  //   別名 import で create を隠せないこと（`import { anthropic } from '@/lib/ai'` 以外を禁止）。
+  //   （`@/lib/aiTimeout` 等の別 module を巻き込まないよう完全一致で拾う）
+  const aiImports = [...route.matchAll(/^\s*import\s+[^;]*?from\s+'(@anthropic-ai\/[^']+|@\/lib\/ai)';/gm)]
+    .map((m) => m[1]);
+  eq('tutor route の AI client import は @/lib/ai の 1 本だけ', aiImports, ['@/lib/ai']);
+  //   ★ slot 切替 / shadow / compose の module が独自に model を呼んでいない ★
+  for (const rel of [
+    'lib/examSpine/context/shadow/compareTutor.ts',
+    'lib/examSpine/context/tutorActivitySlot.ts',
+    'lib/examSpine/context/tutorBasicInfoSlot.ts',
+    'lib/examSpine/context/assemble.server.ts',
+    'lib/tutor/composeTutorPrompt.ts',
+  ]) {
+    const src = readFileSync(join(ROOT, rel), 'utf8');
+    check(`${rel} に AI SDK 呼び出しが無い`,
+      !/@anthropic-ai|messages\.create\s*\(|messages\.stream\s*\(/.test(src), rel);
+  }
+
   // prompt 合成の実引数に shadow 由来の識別子が無い（別名経由も塞ぐ）
   const composeArgs = /composeTutorPrompt\(\{([\s\S]*?)\n  \}\);/.exec(routeCode);
   check('composeTutorPrompt の実引数が読める', composeArgs !== null);
