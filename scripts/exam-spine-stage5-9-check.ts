@@ -11,7 +11,7 @@
 // ★ 本 Stage で成立してはいけないこと ★
 //   canonical block が production の tutor prompt へ到達すること。§7 で検査する。
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 let fetchCallCount = 0;
@@ -97,6 +97,55 @@ function blockIdsForKind(kind: string): string[] {
   return (EXAM_CONTEXT_BLOCK_IDS as readonly string[]).filter(
     (id) => REG[id]?.sourceKind === kind,
   );
+}
+
+/** コメント行を除いた実コードだけを返す（識別子が見出しコメントに一致する誤検出を避ける）。 */
+function stripComments(src: string): string {
+  return src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+}
+
+/** `buildTutorUserPrompt` を **実際に呼んでいる** module を探索する（宣言元と再export は除く）。 */
+function tutorPromptCallSites(): string[] {
+  const found: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(join(ROOT, rel), { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const child = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(child);
+      else if (/\.tsx?$/.test(e.name)) {
+        const code = stripComments(readFileSync(join(ROOT, child), 'utf8'));
+        if (code.includes('buildTutorUserPrompt({')) found.push(child);
+      }
+    }
+  };
+  walk('lib');
+  walk('app');
+  return found.sort();
+}
+
+/**
+ * tutor prompt 経路で `presentation_results` を読んでいる module を探索する。
+ *
+ * ★ path を決め打ちしない ★
+ *   read 層は lineage によって tutorContext.ts 内だったり
+ *   `lib/contextBuilders/tutor/serverRead/` へ移設されていたりする。
+ *   `app/**` の画面側 read（結果画面 / 履歴 / マイページ）は prompt 経路ではないので除く。
+ */
+function tutorPresentationReadOwners(): string[] {
+  const roots = ['lib/contextBuilders'];
+  const found: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(join(ROOT, rel), { withFileTypes: true })) {
+      const child = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(child);
+      else if (e.name.endsWith('.ts')
+        && readFileSync(join(ROOT, child), 'utf8').includes(".from('presentation_results')")) {
+        found.push(child);
+      }
+    }
+  };
+  for (const r of roots) walk(r);
+  return found.sort();
 }
 
 const CAP = EXAM_READ_CAPS.presentation;
@@ -343,13 +392,28 @@ function s2Query(): void {
     && sess.columns.includes('theme'));
 
   // legacy 側の read も同じ table / 同じ順序であることを実ソースから pin する。
-  const legacy = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
-  check('Q3 legacy も presentation_results を読む', legacy.includes(".from('presentation_results')"));
-  check('Q3 legacy も created_at DESC', legacy.includes("order('created_at', { ascending: false })"));
-  check('Q3 legacy は最新 1 件', /\.limit\(1\); \/\/ 最新 1 件/.test(legacy));
+  //
+  // ★ read 層の **場所を決め打ちしない**（S5-P12）★
+  //   controlled consumer lineage は L1 server read を tutorContext.ts から
+  //   `lib/contextBuilders/tutor/serverRead/` へ移設した。path を hardcode すると
+  //   「移設したら検査が落ちる／移設先を検査しない」のどちらかになる。
+  //   tutor の read 層を **探索して 1 つに特定**してから中身を検査する。
+  const readOwners = tutorPresentationReadOwners();
+  check('Q3 legacy の presentation read 層は 1 箇所だけ',
+    readOwners.length === 1, readOwners.join(','));
+  const legacyRead = readOwners.length === 1
+    ? readFileSync(join(ROOT, readOwners[0]), 'utf8') : '';
+  check('Q3 legacy も presentation_results を読む',
+    legacyRead.includes(".from('presentation_results')"));
+  check('Q3 legacy も created_at DESC',
+    legacyRead.includes("order('created_at', { ascending: false })"));
+  check('Q3 legacy は最新 1 件', /\.limit\(1\); \/\/ 最新 1 件/.test(legacyRead));
   check('Q3 legacy の enrichment も attempts → sessions',
-    legacy.includes(".from('presentation_attempts')")
-    && legacy.includes('presentation_sessions(university_name, faculty_name, theme)'));
+    legacyRead.includes(".from('presentation_attempts')")
+    && legacyRead.includes('presentation_sessions(university_name, faculty_name, theme)'));
+  check('Q3 legacy read は本文列を SELECT しない',
+    !legacyRead.includes('transcript') && !legacyRead.includes('storage_path')
+    && !legacyRead.includes('material_path'));
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -680,16 +744,21 @@ function s7Consumer(): void {
   //   Stage 5.2〜5.8 で 6 回踏んだ defect: `route.indexOf('buildTutorUserPrompt')` は
   //   file 冒頭の見出しコメントにも一致するため、window が file 先頭に張られて
   //   実際の prompt 経路を 1 行も検査できていなかった。
-  //   コメント行を除いた実コード上で **呼び出し形**に anchor し、
-  //   固定長ではなく prompt 組み立て「以降すべて」を検査する。
-  const routeCode = route
-    .split('\n')
-    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-    .join('\n');
-  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  //
+  // ★ prompt 合成の **場所も決め打ちしない**（S5-P12）★
+  //   controlled consumer lineage は prompt 合成を route から
+  //   `lib/tutor/composeTutorPrompt.ts` へ純関数として抽出した。route を決め打ちすると
+  //   「seam が移ったら検査が落ちる／移った先を検査しない」のどちらかになる。
+  //   実際の呼び出し元を探索して 1 つに特定してから検査する。
+  const promptOwners = tutorPromptCallSites();
+  eq('C4 buildTutorUserPrompt の呼び出し元は 1 箇所', promptOwners.length, 1);
+  const promptFile = promptOwners.length === 1 ? promptOwners[0] : '';
+  const promptSrc = promptFile ? readFileSync(join(ROOT, promptFile), 'utf8') : '';
+  const promptCode = stripComments(promptSrc);
+  const promptIdx = promptCode.indexOf('buildTutorUserPrompt({');
   check('C4 prompt 組み立て位置を特定できる（コメントではなく呼び出し形）', promptIdx !== -1);
   if (promptIdx !== -1) {
-    const afterPrompt = routeCode.slice(promptIdx);
+    const afterPrompt = promptCode.slice(promptIdx);
     for (const forbidden of [
       'presentationResultSummary', 'presentation_result_summary',
       'renderTutorPresentationLines', 'projectPresentationResultSummary',
@@ -704,28 +773,30 @@ function s7Consumer(): void {
   // ★ prompt の入力そのものを固定する（S5-P11 negative control N14）★
   //   「禁止語が現れない」検査は形を変えた注入をすり抜ける
   //   （`blocks.map(b=>b.content).join()` を contextString の位置へ渡す等）。
-  //   consumer 切替の本質は **prompt の第 1 引数が legacy の contextString か**なので、
-  //   呼び出し形を丸ごと固定する。legacy 経路を変えるとここが必ず落ちる。
-  const callForm = /=\s*buildTutorUserPrompt\(\{\s*contextString\s*,\s*userMessage:\s*message\s*\}\)/;
-  check('C6 prompt は legacy の contextString をそのまま受け取る（加工・置換なし）',
-    callForm.test(routeCode),
-    routeCode.slice(Math.max(0, promptIdx - 20), promptIdx + 120).replace(/\n/g, ' '));
-  // contextString の生成元も legacy の Supabase 層のままであること。
-  check('C6 contextString は legacy の section builder から作られる',
-    /contextString\s*=/.test(routeCode)
-    && route.includes('buildTutorSupabaseContextSection'));
-  eq('C6 buildTutorUserPrompt の呼び出しは 1 箇所',
-    (routeCode.match(/buildTutorUserPrompt\(/g) ?? []).length, 1);
+  //   呼び出し形を丸ごと固定する。
+  const callForm = /buildTutorUserPrompt\(\{\s*contextString\s*,\s*userMessage\s*(?::\s*\w+\s*)?\}\)/;
+  check('C6 prompt は contextString をそのまま受け取る（加工・置換なし）',
+    callForm.test(promptCode),
+    promptCode.slice(Math.max(0, promptIdx - 30), promptIdx + 120).replace(/\n/g, ' '));
+  check('C6 presentation block は prompt 合成 module に現れない',
+    !promptSrc.includes(BLOCK) && !promptSrc.includes('presentationResultSummary'));
 
-  // ★ shadow 経路の内側に閉じている ★
-  //   presentation の legacy 値を作る行は isExamSpineShadowEnabled gate の内側にあり、
-  //   prompt 組み立てより前で閉じていること（位置関係で固定する）。
+  // ★ presentation の legacy 値は shadow gate の内側に閉じている ★
+  //   prompt 合成は別 module なので、route 内で「shadow gate より後ろ」であることと、
+  //   prompt 合成呼び出しより前であることを位置関係で固定する。
+  const routeCode = stripComments(route);
   const iShadowGate = routeCode.indexOf('isExamSpineShadowEnabled(');
   const iPresLine = routeCode.indexOf('presentationResultSummary');
+  const iCompose = routeCode.indexOf('composeTutorPrompt({') !== -1
+    ? routeCode.indexOf('composeTutorPrompt({')
+    : routeCode.indexOf('buildTutorUserPrompt({');
   check('C5 presentation の legacy 値は shadow gate より後ろで作られる',
     iShadowGate !== -1 && iPresLine > iShadowGate);
-  check('C5 presentation の legacy 値は prompt 組み立てより前で閉じている',
-    promptIdx !== -1 && iPresLine < promptIdx);
+  check('C5 prompt 合成の呼び出し位置を特定できる', iCompose !== -1);
+  check('C5 presentation の legacy 値は prompt 合成より前で閉じている',
+    iCompose !== -1 && iPresLine < iCompose);
+  check('C5 route は presentation block を prompt 合成へ渡さない',
+    !routeCode.slice(iCompose === -1 ? 0 : iCompose).includes(BLOCK));
 }
 
 // ══════════════════════════════════════════════════════════════════
