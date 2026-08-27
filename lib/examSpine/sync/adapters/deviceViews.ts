@@ -400,7 +400,19 @@ export function deviceSelfPrView(prs: readonly SelfPR[]): ExamDeviceViewResult {
 export function deviceInterviewRecordView(
   records: readonly StoredInterviewRecord[],
 ): ExamDeviceViewResult {
-  return deviceListView(records, deviceInterviewRecordItemView);
+  // server が読むのと同じ上位 N 件だけを見る（cap parity / E-S40 / E-S46）。
+  //
+  // ★ device の localStorage は newest-first で保存される ★
+  //   `addInterviewRecord` が `[newRecord, ...current]` を書くため、格納順が既に
+  //   created_at DESC と一致する。それでも `selectDeviceSyncWindow` を通すのは、
+  //   「保存順が信頼できる」ことに依存せず **created_at で選ぶ**ためである
+  //   （手編集や旧版データで順序が崩れていても server と同じ N 件を選ぶ）。
+  const windowed = selectDeviceSyncWindow(
+    records,
+    EXAM_READ_CAPS.interview_record,
+    (record) => record.createdAt,
+  );
+  return deviceListView(windowed, deviceInterviewRecordItemView);
 }
 
 export function deviceEssayView(workspaces: readonly EssayWorkspace[]): ExamDeviceViewResult {

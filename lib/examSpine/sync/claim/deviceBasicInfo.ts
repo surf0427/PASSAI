@@ -21,6 +21,7 @@ import type { DiagnosisResult } from '@/lib/diagnosisStorage';
 import type { ActivityData } from '@/types/activity';
 import type { SelfAnalysisLog } from '@/types/selfAnalysisLog';
 import type { ReviewHistoryItem } from '@/lib/statement/review/statementStorage';
+import type { StoredInterviewRecord } from '@/lib/interviewRecordStorage';
 
 import { buildDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaim } from '../adapters/deviceSources';
@@ -154,13 +155,39 @@ export function deviceStatementReviewToken(
 }
 
 /**
+ * device canonical の面接練習記録 → token（canonical projection へ委譲）。
+ *
+ * ★ cap window は projection 側が掛ける ★
+ *   `deviceInterviewRecordView` が `EXAM_READ_CAPS.interview_record` で
+ *   created_at DESC 上位 N 件を選ぶ。ここで件数を触ると二重 cap になる。
+ *
+ * ⚠️ 既知の residual（E-S45）: device view は `id: null` を置くが
+ *   `local_record_id` は載るため、同じ集合が選ばれれば fingerprint は一致する。
+ *   ずれ得るのは同一 `created_at` が cap 境界を跨ぐ場合だけ。
+ *
+ * ⚠️ `feedbackJson` が壊れている record は projection が fail-closed になり、
+ *   token は `null`（= unclaimed）になる。壊れた値で verified を作らない。
+ */
+export function deviceInterviewRecordToken(
+  records: readonly StoredInterviewRecord[] | null | undefined,
+): string | null {
+  const claim = buildDeviceClaim(
+    'interview_record',
+    records && records.length > 0 ? { state: 'present', value: records } : { state: 'absent' },
+  );
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
+}
+
+/**
  * pilot（tutor）の claim entry を組み立てる。
  *
  * ★ 載せる kind は purpose の移行状況で決める ★
  *   `deviceViews.ts` は 8 kind ぶんの projection を持つが、transport に載せるのは
  *   「その kind の canonical block が存在し、移行対象になっている」ものだけ。
- *   現在は basic_info（Stage 5.0）と diagnosis（Stage 5.2 / G1）の 2 kind。
- *   activity / self_analysis / statement_review は block も claim も未着手（G6-G8）。
+ *   現在は basic_info（Stage 5.0）/ diagnosis（5.2 / G1）/ activity（5.3 / G6）/
+ *   self_analysis（5.4 / G7）/ statement_review（5.6 / G8）/
+ *   interview_record（5.7 / G5）の 6 kind。
+ *   essay（G2）/ interview_ai（G3）/ presentation（G4）/ self_pr（G9）は未着手。
  */
 export function buildTutorDeviceClaimEntries(
   basicInfo: BasicInfo | null | undefined,
@@ -168,6 +195,7 @@ export function buildTutorDeviceClaimEntries(
   activity?: ActivityData | null,
   selfAnalysisLogs?: readonly SelfAnalysisLog[] | null,
   statementReviews?: readonly ReviewHistoryItem[] | null,
+  interviewRecords?: readonly StoredInterviewRecord[] | null,
 ): readonly ExamDeviceClaimEntry[] {
   // ★ 宣言順を固定する ★
   //   偶然の object 順序に依存させない。kind ごとに独立した token なので
@@ -183,5 +211,7 @@ export function buildTutorDeviceClaimEntries(
   if (selfAnalysisToken) entries.push({ kind: 'self_analysis', token: selfAnalysisToken });
   const statementReviewToken = deviceStatementReviewToken(statementReviews);
   if (statementReviewToken) entries.push({ kind: 'statement_review', token: statementReviewToken });
+  const interviewRecordToken = deviceInterviewRecordToken(interviewRecords);
+  if (interviewRecordToken) entries.push({ kind: 'interview_record', token: interviewRecordToken });
   return entries;
 }
