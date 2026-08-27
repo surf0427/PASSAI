@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `__S5P10_HEAD__` |
+| Canonical HEAD at this arbitration | `bde6293e1fcc0aaddaa650f8ce734979f4dc0999` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
