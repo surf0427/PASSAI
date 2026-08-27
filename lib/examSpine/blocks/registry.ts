@@ -203,6 +203,24 @@ export const EXAM_CONTEXT_BLOCK_REGISTRY: Readonly<
     legacySource: 'lib/interview/buildInterviewQuestionPrompt.ts:buildSelfAnalysisSection（module-private）',
   },
 
+  // ── 診断 ──────────────────────────────────────────────────────────
+  diagnosis_type_hint: {
+    sourceKind: 'diagnosis',
+    // ★ resultType の言い換えであって AI 生成物ではない ★
+    //   app 製の固定 hint 表（lib/examDiagnosis/tutorHints.ts）を引くだけなので
+    //   system_metadata。診断の回答（answers）は user_authored だが block に入らない。
+    provenance: 'system_metadata',
+    derivation: 'deterministic',
+    // heading を持たない素の 1 文。legacy 側の「・保存情報からは、…。」という
+    // 行装飾は tutor section の書式であって情報そのものではないため block に含めない。
+    headingOwner: 'none',
+    meaning:
+      '診断タイプから導いた会話補助 hint 1 文。タイプ名 / catchphrase / score / answers / 推薦大学は含まない',
+    legacySource:
+      'lib/contextBuilders/tutorContext.ts:loadDiagnosisContext（diagnosis.typeHint）＋ ' +
+      'buildTutorSupabaseContextSection の「・保存情報からは、{hint}。」1 行',
+  },
+
   // ── divergence（探索 context）─────────────────────────────────────
   previous_output_summary: {
     sourceKind: 'statement_review',

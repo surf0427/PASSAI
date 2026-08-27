@@ -110,7 +110,7 @@ function r1Register(): void {
     headerBound.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     headerBound.join(', '),
   );
-  // ★ E-S44（human ruling / E-S39 を一部 supersede）★
+  // ★ E-S45（human ruling / E-S39 を一部 supersede）★
   //   「header に束縛されていない」だけでは足りない。header を持たない **wire codec** が
   //   もう 1 本あるだけで、旧 client の hex を新 schema として誤解釈する経路が開く。
   //   したがって「active な device-claim wire codec は sync/claim/** だけ」を検査する。
@@ -125,7 +125,7 @@ function r1Register(): void {
     .map((f) => relative(ROOT, f))
     .sort();
   check(
-    'active な device-claim wire codec は sync/claim/** だけ（E-S44）',
+    'active な device-claim wire codec は sync/claim/** だけ（E-S45）',
     wireCodecs.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     wireCodecs.join(', '),
   );
@@ -149,7 +149,7 @@ function r1Register(): void {
     /EXAM_DEVICE_CLAIM_TOKEN_PATTERN\s*=\s*\/\^efp1:\[0-9a-f\]\{64\}\$\//.test(claimTypes),
   );
 
-  // ★ 退役した wire format が active code に残っていないこと（E-S44）★
+  // ★ 退役した wire format が active code に残っていないこと（E-S45）★
   //   docs の歴史記述は許す。active code に残ることは許さない。
   const retiredWire: string[] = [];
   for (const dir of ['app', 'lib']) {
@@ -166,7 +166,7 @@ function r1Register(): void {
     })(base);
   }
   check(
-    'active code に退役 wire format（esy1）が 0 箇所（E-S44）',
+    'active code に退役 wire format（esy1）が 0 箇所（E-S45）',
     retiredWire.length === 0,
     retiredWire.join(', '),
   );

@@ -49,8 +49,7 @@
 //   - app/api/tutor/route.ts (consumer / 接続位置は維持)
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { isExamType } from '@/types/examDiagnosis';
-import { EXAM_DIAGNOSIS_TYPE_HINTS } from '@/lib/examDiagnosis/tutorHints';
+import { resolveDiagnosisTypeHint } from '@/lib/examDiagnosis/tutorHints';
 // AI 面接モードのラベル（純データモジュール。server-only 依存なし）。
 import {
   INTERVIEW_TYPE_LABELS,
@@ -232,12 +231,9 @@ const PRESENTATION_LEVEL_LABELS: Record<string, string> = {
 
 // 受験タイプ診断 resultType(legacy 1-4) → 会話補助 hint（ラベル名そのものは出さない）。
 // app/diagnosis/page.tsx:RESULT_TYPES の 4 タイプの趣旨を、断定しない支援方針へ言い換える。
-const DIAGNOSIS_TYPE_HINTS: Record<number, string> = {
-  1: '何から手をつけるかを一緒に整理していくと進みやすそうです',
-  2: '経験を言語化する支援が役立ちそうです',
-  3: '書類の完成度を一段上げる方向で整理すると進みやすそうです',
-  4: '一般受験と並行しやすいよう、優先順位をつけて整理すると進みやすそうです',
-};
+// ★ 言い換えの正本は lib/examDiagnosis/tutorHints.ts へ移した（Stage 5.2）★
+//   Canonical Exam Context の diagnosis block が同じ hint を使うため、
+//   2 箇所に置くと同じ診断結果から違う prompt が出る。値は変えていない。
 
 // 受験タイプ診断 9タイプ（ExamType）の hint は lib/examDiagnosis/tutorHints.ts に集約
 // （Tutor へ渡してよい傾向 hint のみ。タイプ名 / score / 推薦大学 / NG生文は渡さない）。
@@ -357,20 +353,14 @@ function projectBasicInfo(
 
 // resultType を会話補助 hint へ言い換える。2 系統を typeof で判別:
 //   - number（legacy 1-4）→ DIAGNOSIS_TYPE_HINTS。
-//   - string（ExamType 9種）→ EXAM_DIAGNOSIS_TYPE_HINTS（isExamType でガード）。
+//   - string（ExamType 9種）→ resolveDiagnosisTypeHint（lib/examDiagnosis/tutorHints.ts が単一の正本）。
 // どちらの系統でも、固定タイプ名 / catchphrase / score / answers / 推薦大学 / NG生文は渡さない。
 function projectDiagnosis(
   payload: Record<string, unknown> | null,
 ): Partial<TutorStudentContext> {
   if (!payload) return {};
 
-  const resultType = payload.resultType;
-  let hint: string | undefined;
-  if (typeof resultType === 'number') {
-    hint = DIAGNOSIS_TYPE_HINTS[resultType];
-  } else if (isExamType(resultType)) {
-    hint = EXAM_DIAGNOSIS_TYPE_HINTS[resultType];
-  }
+  const hint = resolveDiagnosisTypeHint(payload.resultType);
   if (!hint) return {};
 
   return { diagnosis: { typeHint: truncate(hint, MAX_SUMMARY_LENGTH) } };

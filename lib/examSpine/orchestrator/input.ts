@@ -91,6 +91,16 @@ export type ExamContextInput = {
   /** 面接向け受験方式ガイダンス（route が組み立てて渡している文字列）。 */
   interviewExamTypeGuidance?: string | null;
 
+  /**
+   * 診断タイプから導いた会話補助 hint（`resolveDiagnosisTypeHint` の出力）。
+   *
+   * ★ payload そのものを渡さない ★
+   *   `diagnosis_logs.payload` には resultTitle / resultDescription / answers /
+   *   createdAt が入るが、Tutor が prompt に出しているのは hint 1 文だけである。
+   *   raw payload を Layer 2 へ持ち込むと不要な情報が block へ流れる（Canon §55 / E-P5）。
+   */
+  diagnosisTypeHint?: string | null;
+
   activityText?: string | null;
   activityData?: ActivityData | null;
   activitySummary?: string | null;

@@ -45,6 +45,9 @@ import { EXAM_CONTEXT_BLOCK_IDS, createExamContextBlock } from './types';
 import type { ExamContextBlock, ExamContextBlockId } from './types';
 import { EXAM_CONTEXT_BLOCK_REGISTRY } from './registry';
 
+/** legacy `lib/contextBuilders/tutorContext.ts:MAX_SUMMARY_LENGTH` と同値。 */
+const DIAGNOSIS_TYPE_HINT_MAX_CHARS = 120;
+
 // ── Layer 2 entry ─────────────────────────────────────────────────────
 
 /**
@@ -197,6 +200,13 @@ function buildBlockContents(
         : buildStructureAnalysisSection(input.structureAnalysis ?? undefined),
 
     // ── 横断要約 ────────────────────────────────────────────────
+    // 診断: hint 1 文をそのまま content にする。
+    // legacy と同じ 120 字 cap を掛ける（tutorContext の MAX_SUMMARY_LENGTH と同値。
+    // 現行の hint はすべて 120 字未満なので実質 no-op だが、parity のために残す）。
+    diagnosis_type_hint: input.diagnosisTypeHint
+      ? input.diagnosisTypeHint.slice(0, DIAGNOSIS_TYPE_HINT_MAX_CHARS)
+      : null,
+
     tutor_student_context: input.tutorSources
       ? buildTutorStudentContextSection(buildTutorStudentContext(input.tutorSources))
       : null,

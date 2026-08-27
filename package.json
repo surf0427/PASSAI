@@ -26,6 +26,7 @@
     "qa:examSpine:stage4": "npx tsx scripts/exam-spine-stage4-check.ts",
     "qa:examSpine:stage5": "npx tsx scripts/exam-spine-stage5-check.ts",
     "qa:examSpine:stage5_1": "npx tsx scripts/exam-spine-stage5-1-check.ts",
+    "qa:examSpine:stage5_2": "npx tsx scripts/exam-spine-stage5-2-check.ts",
     "qa:examSpine:syncCore": "npx tsx scripts/exam-spine-sync-core-check.ts",
     "qa:examSpine:syncAdapters": "npx tsx scripts/exam-spine-sync-adapters-check.ts",
     "qa:examSpine:syncDevice": "npx tsx scripts/exam-spine-sync-device-check.ts",

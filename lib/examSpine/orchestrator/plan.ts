@@ -388,7 +388,12 @@ export const EXAM_PURPOSE_PLANS: Readonly<
       'Spine 由来は themeFrequency と unusedExperience の 2 section のみ。下書き本文は client の buildSelfPRDraftSeed 出力をユーザーが編集した feature 入力として届く。',
   },
   tutor: {
-    blocks: [{ id: 'tutor_student_context' }],
+    // ★ Stage 5.2: diagnosis_type_hint を追加 ★
+    //   legacy の buildTutorSupabaseContextSection が prompt に出している
+    //   diagnosis.typeHint に対応する canonical block（G1）。
+    //   ★ consumer は切り替えない ★ 本 plan は shadow comparison から使われるだけで、
+    //     production の tutor prompt は従来どおり legacy 3 層から組み立てる。
+    blocks: [{ id: 'tutor_student_context' }, { id: 'diagnosis_type_hint' }],
     render: null,
     legacyBuilder: null,
     notYetModeled: [

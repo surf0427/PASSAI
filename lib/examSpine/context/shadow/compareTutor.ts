@@ -114,6 +114,17 @@ function activityCounts(value: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * canonical 側の値は **block content** から取る。
+ * ★ 比較器は source logic を再実装しない ★
+ *   diagnosis の言い換えは assembler / block builder が済ませており、
+ *   ここでやり直すと 3 つ目の実装になる（E-S35 と同じ失敗）。
+ */
+function blockContent(context: CanonicalExamContext, id: string): string {
+  const block = context.blocks.find((b) => b.id === id);
+  return block && block.presence === 'present' ? block.content : '';
+}
+
 function fingerprintOf(value: unknown): ExamFingerprint | null {
   return present(value) ? examFingerprint(value) : null;
 }
@@ -262,9 +273,14 @@ export function compareTutorShadow(input: {
     //     canonical 側には対応する Stage 2 block がまだ無いため、
     //     Tutor を canonical へ移すとこれらが prompt から落ちる。
     //     = consumer migration の実 blocker であることを明示的に記録する。
+    // ★ Stage 5.2 で canonical block ができたので実比較へ昇格（G1）★
+    //   legacy 側は tutorContext の diagnosis.typeHint、canonical 側は
+    //   diagnosis_type_hint block の content。どちらも同じ言い換え表を通るため、
+    //   同じ resultType なら文字列まで一致する。
     compareField({ field: 'diagnosis.typeHint', kind: 'diagnosis',
-      legacy: input.legacy.diagnosisTypeHint, canonical: null, provenance: prov('diagnosis'),
-      omitted: 'no_canonical_block' }),
+      legacy: text(input.legacy.diagnosisTypeHint),
+      canonical: blockContent(input.context, 'diagnosis_type_hint'),
+      provenance: prov('diagnosis') }),
     compareField({ field: 'presentation.latest', kind: 'presentation',
       legacy: input.legacy.presentationLatest, canonical: null, provenance: prov('presentation'),
       omitted: 'no_canonical_block' }),
@@ -294,11 +310,18 @@ export function compareTutorShadow(input: {
 
 // ── 集計 / readiness ──────────────────────────────────────────────────
 
+/**
+ * Stage 2 block を持ち、readiness を判定できる kind。
+ * ★ block を追加したらここにも足す ★ 足し忘れると「block はあるのに
+ *   readiness に現れない」状態になり、migration の可否が表に出ない。
+ */
 const COVERED_KINDS: readonly ExamSourceKind[] = [
   'basic_info',
   'activity',
   'self_analysis',
   'statement_review',
+  // Stage 5.2（G1）で diagnosis_type_hint block を追加した。
+  'diagnosis',
 ];
 
 function summarize(
