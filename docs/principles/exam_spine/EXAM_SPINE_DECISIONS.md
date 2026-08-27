@@ -1463,6 +1463,130 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** `assemble.server.ts` の state 判定 1 箇所を戻せば従来挙動。
   consumer は未接続なので production 影響ゼロ。
 
+## E-S49 — statement_review は同一 source の別 projection であり、legacy 相当射影は shadow 専用とする
+
+- **Status:** `LOCKED`（Stage 5.6 で分類 + 実装 + QA 済み。Tutor migration gap G8）
+- **ID 由来（S5-P8 promotion）:** source branch では branch-local `E-S44` として
+  採番されていたが、canonical の `E-S44`（diagnosis の canonical 表現は hint 1 文で
+  あり言い換え表は 1 箇所に置く）は **別 Decision** である。verbatim では持ち込まず
+  canonical の次番 **E-S49** へ再採番した（内容は不変）。
+- **semantic classification:** **C — DIFFERENT_PROJECTION_SAME_SOURCE**
+  ```text
+  legacy（tutor）
+    source     localStorage 'statementReviewHistory' の **最新 1 件**
+    fields     weaknesses のみ
+    normalize  先頭 2 件 / 各 60 字 / ' / ' 連結
+    threshold  1 件でも出る
+    empty      行ごと省略（代替文言なし）
+
+  canonical（buildPreviousOutputSummary）
+    source     履歴 N 件（Stage 3 の top-cap window）
+    fields     weaknesses ＋ actions → repeatedAdvice / strengths → repeatedThemes
+    normalize  頻度順 ＋ 総量 cap
+    threshold  **2 件未満は空**（反復は 2 件以上でしか定義できない）
+  ```
+  同じ table を読むが、**選択・集約・下限**がすべて異なる。したがって A / B ではなく C。
+- **★ canonical 側の集約を legacy に合わせない ★**
+  `buildPreviousOutputSummary` は「反復して指摘され続けている論点」を出す projection で
+  あり、「直近の課題」とは目的が違う。consumer migration の都合で canonical の意味を
+  legacy へ寄せると canonical 側の設計意図が失われる（E-S25）。
+- **Decision:** legacy 相当の射影（最新 1 件の weaknesses）は
+  **shadow comparison 専用の projection** として実装してよい。ただし:
+  ```text
+  許可  canonical rows → legacy と同じ selection / fields / normalization を通す
+        （normalization は legacy の buildStatementWeaknessLine を再利用する。
+          定数を複製すると legacy と canonical で表現がずれ比較が意味を失う）
+  禁止  prompt / block / ExamContextInput へ接続すること
+        canonical の正式 consumer contract として宣言すること
+  ```
+  実装上は `ExamContextInputSnapshot`（shadow 専用の型）にだけ slot を足し、
+  `ExamContextInput`（block builder の入力）には載せない。
+  QA が「block builder / ExamContextInput に漏れていない」ことを機械検証する。
+- **★ transport READY と semantics READY を混同しない ★**
+  ```text
+  transport  READY   claim 配線 / window parity（E-S47 の primitive を statement_review へ適用）/
+                     cap 超過でも検証可 / header は履歴件数に比例しない / raw 非混入
+  semantics  DEFERRED 上記 classification C のため
+  overall    DEFERRED
+  ```
+  claim / fingerprint / window parity は semantic 分類とは無関係に検証できる。
+  両者の verdict を混同しない。
+- **consumer migration blocker（未解決 / 記録）:**
+  ```text
+  Tutor を canonical へ移す際、statement_review の表現として
+    (a) 最新 1 件の課題（legacy 相当）
+    (b) 反復論点（canonical の既存 projection）
+    (c) 両方
+  のどれを採るかは **product 判断**であり、本 Stage では決めない。
+  この判断が済むまで statement_review の consumer semantics は DEFERRED。
+  ```
+  したがって S5-P8 でも tutor-facing canonical block は **追加しない**
+  （`STATEMENT_REVIEW_CANONICAL_BLOCK=NO`）。
+- **★ これは consumer switch ではない ★** production tutor prompt は legacy 経路の
+  ままである（E-S43）。S5-P8 では promotion 前後で `buildTutorSupabaseContextSection` /
+  `buildTutorStudentContextSection` / **`buildTutorUserPrompt`** の出力を 13 fixture
+  （0 件 / 1 件 / cap / cap+1 / cap 超過 / tie 境界 / device-server 一致 / 不一致 /
+  空 result / read failure / full ほか）で **byte 一致**確認している。
+  `buildStatementWeaknessLine` の `export` 化は可視性のみの変更で、出力は不変。
+- **Implementation evidence:** `lib/examSpine/context/shadow/statementReviewProjection.ts` ／
+  `lib/examSpine/context/types.ts`（`ExamContextInputSnapshot` の shadow slot）／
+  `lib/examSpine/context/assemble.server.ts`（`resolveContextInput` の副産物）／
+  `lib/examSpine/context/shadow/compareTutor.ts`（legacy 相当同士の比較）／
+  `lib/examSpine/sync/claim/deviceBasicInfo.ts`（`deviceStatementReviewToken`）。
+  QA は `scripts/exam-spine-stage5-6-check.ts`。
+- **mirror gap（既知 / 本 Stage では直さない）:** 削除と 10 件 cap の eviction が
+  server へ伝播しない（`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G3 / G4）。
+  device が消した添削も server に残るため、その端末では正当に mismatch になる。
+  Source-Sync が stale を使わせない設計どおりの挙動であり握り潰さない。
+- **Alternatives rejected:**
+  - *canonical の aggregation を legacy 仕様に置き換える* — canonical の設計意図を壊す。
+  - *legacy 相当射影を正式 block にする* — product 判断を実装都合で先取りする。
+  - *空同士の一致で semantic MATCH と見なす* — E-S46 の false-empty guard に反する。
+- **Rollback implications:** shadow projection は comparator からしか呼ばれない。
+  削除しても consumer に影響しない。claim も送らなくなれば `unclaimed` に戻るだけ。
+
+## E-S50 — device history window の tie-break は kind ごとに保証度が異なる
+
+- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で canonical へ昇格）
+- **ID 由来（S5-P8 promotion）:** source branch では branch-local `E-S45` として
+  採番されていたが、canonical の `E-S45`（activity の canonical 表現はカテゴリ別件数）は
+  **別 Decision** である。**E-S50** へ再採番した。
+- **背景:** E-S47 / E-S48 の window parity は「device と server が同じ top-N を選ぶ」ことに
+  依存する。ordering は `created_at DESC` だが、**同一 timestamp の tie を何で解くか**が
+  kind によって違う。
+- **監査結果:**
+  ```text
+  self_analysis     server: created_at DESC, id DESC（DB uuid）
+                    device: createdAt DESC + 挿入順（安定ソート）
+                    device view は id を持たない（deviceSelfAnalysisRow が id: null）
+                    → cap 境界で同一 createdAt が跨ぐ場合のみ選択がずれ得る（残余リスク）
+
+  statement_review  server: created_at DESC, id DESC（DB uuid）
+                    device: createdAt DESC + 挿入順（安定ソート）
+                    ★ item view は localReviewId を含む（両側で共有される安定 id）
+                    → **選ばれた集合が同じなら fingerprint は必ず一致する**
+                      （sortSyncItems が localReviewId 込みの fingerprint 順で正規化）
+                    → 残余リスクは「どの N 件を選ぶか」だけに限定される
+  ```
+- **Decision:** tie-break の保証度を kind ごとに記録し、**一律の保証を主張しない**。
+  device 側が server の DB `id` を知り得ない以上、「同一 `created_at` が cap 境界を
+  跨ぐ」ケースでの選択一致は構造的に保証できない。
+  ```text
+  実運用での発生条件: 同一ミリ秒に 2 件以上が作られ、かつその境界が cap にかかる
+  statement_review  saveReviewHistory は 1 添削 = 1 件で、人手操作が挟まる
+  self_analysis     persistSelfAnalysisLog は summaryInputHash で dedup する
+  → いずれも実運用では考えにくいが、構造的保証ではない
+  ```
+- **今回は解消しない理由:** 解消には device 側が server の row id を知る必要があり、
+  claim に server 由来の識別子を持ち込むか、ordering を content 由来へ変えるかになる。
+  前者は claim を policy input へ近づけ（E-S33 に反する）、後者は「最新 N 件」という
+  window の意味を変える。いずれも Stage 5.6 の scope を超える。
+- **★ 新 kind へ window を広げる packet はこの表を更新すること ★**
+  `self_pr` / `interview_record` / `essay` / `presentation` の device view は
+  現時点で window 未適用であり、claim も未配線。claim を配線する Stage で
+  「その kind の tie-break 保証度」を本表へ追記してから window を適用する。
+- **Rollback implications:** なし（監査記録）。
+
 ---
 
 # 5. Policy / persistence decisions
