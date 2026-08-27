@@ -422,6 +422,10 @@ function r1Register(): void {
     ['lib/examSpine/context/tutorActivitySlot.ts', 'E-S58'],
     ['lib/examSpine/read/rowMappers.ts', 'E-S57'],
     ['lib/examSpine/read/guards.ts', 'E-S57'],
+    // Stage 5.11 で加わった seam（N13 の被覆を codebase に追随させる）。
+    ['lib/examSpine/sync/adapters/registry.ts', 'E-S59'],
+    ['lib/examSpine/context/tutorDiagnosisSlot.ts', 'E-S60'],
+    ['lib/examSpine/context/slotSwitchGate.server.ts', 'E-S60'],
   ] as const) {
     const src = readFileSync(join(ROOT, rel), 'utf8');
     check(`R1c ${rel} は ${id} を引いている`, src.includes(id), rel);
@@ -436,6 +440,8 @@ function r1Register(): void {
     ['E-S56', 'tutor `basic_info` の consumer 切替'],
     ['E-S57', '生 `preferences` slot'],
     ['E-S58', 'tutor `activity` を 2 番目の controlled consumer 切替'],
+    ['E-S59', '`schema_version` は writer contract の版'],
+    ['E-S60', 'tutor `diagnosis` を 3 番目の controlled consumer 切替'],
   ] as const) {
     const head = text.split('\n').find((l) => l.startsWith(`## ${id} `)) ?? '';
     check(`R1c ${id} の見出しが期待の主題`, head.includes(needle), head.slice(0, 110));
@@ -453,6 +459,8 @@ function r1Register(): void {
       '### essay readiness', 'semantics       DEFERRED ★ ', 'E-S53'],
     ['essay transport BLOCKED',
       '### essay readiness', 'transport       BLOCKED  ★ ', 'E-S52'],
+    ['diagnosis schema_version の意味',
+      '### diagnosis readiness', 'schema_version の意味   ', 'E-S59'],
     ['self_pr transport BLOCKED',
       '### self_pr readiness', 'transport       BLOCKED  ★ ', 'E-S50'],
   ];
