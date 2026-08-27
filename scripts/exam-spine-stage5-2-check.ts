@@ -257,11 +257,27 @@ function t7Static(): void {
   // legacy diagnosis path が残っている
   check('T7 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
   // canonical block が prompt へ入っていない
-  const promptIdx = route.indexOf('buildTutorUserPrompt');
+  //
+  // ★ 修正（S5-P4）★ 旧実装は route.indexOf('buildTutorUserPrompt') を使っていたが、
+  //   この識別子は file 冒頭の見出しコメントにも現れるため、±1500 字の window が
+  //   file の先頭に張られ、実際の prompt 組み立て位置を検査できていなかった
+  //   （負例 N3「prompt が diagnosis_type_hint を読む」が素通りした）。
+  //   コメント行を除いた実コード上で **呼び出し形**に anchor し、
+  //   window ではなく prompt 組み立て「以降すべて」を検査する（範囲を広げる方向の修正）。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('T7 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
-    const w = route.slice(Math.max(0, promptIdx - 1500), promptIdx + 1500);
-    check('T7 prompt 付近に diagnosis_type_hint が現れない', !w.includes('diagnosis_type_hint'));
-    check('T7 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T7 prompt 以降に diagnosis_type_hint が現れない',
+      !afterPrompt.includes('diagnosis_type_hint'));
+    check('T7 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    check('T7 prompt 以降に canonical block 配列が現れない',
+      !afterPrompt.includes('.context.blocks'));
   }
   const legacy = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
   check('T7 legacy が canonical block を import しない', !legacy.includes('examSpine/blocks'));
