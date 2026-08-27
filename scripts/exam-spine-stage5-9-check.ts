@@ -412,15 +412,22 @@ function s3Projection(): void {
     feedback: feedback({ goodPoints: [long, 'b', 'c', 'd'], improvements: ['1', '2', '3', '4'], nextPractice: ['1', '2', '3'] }),
     createdAt: '2026-05-01T03:00:00.000Z',
   });
-  eq('P5 goodPoints は 3 件', capped?.goodPoints?.length, TUTOR_PRESENTATION_LIMITS.good);
-  eq('P5 improvements は 3 件', capped?.improvements?.length, TUTOR_PRESENTATION_LIMITS.improve);
-  eq('P5 nextPractice は 2 件', capped?.nextPractice?.length, TUTOR_PRESENTATION_LIMITS.next);
-  eq('P5 1 要素は itemLength で切る',
-    capped?.goodPoints?.[0].length, TUTOR_PRESENTATION_LIMITS.itemLength);
+  // ★ 定数と自分自身を比べない（S5-P11 negative control N5c）★
+  //   `length === TUTOR_PRESENTATION_LIMITS.good` は good を 2 に書き換えても
+  //   両辺が同時に動くため **必ず通る**（実測で検出できなかった）。
+  //   件数・字数は legacy の値である **リテラル**に対して固定する。
+  eq('P5 goodPoints は 3 件（legacy MAX_PRESENTATION_GOOD）', capped?.goodPoints?.length, 3);
+  eq('P5 improvements は 3 件（legacy MAX_PRESENTATION_IMPROVE）', capped?.improvements?.length, 3);
+  eq('P5 nextPractice は 2 件（legacy MAX_PRESENTATION_NEXT）', capped?.nextPractice?.length, 2);
+  eq('P5 1 要素は 40 字で切る（legacy MAX_ITEM_LENGTH）', capped?.goodPoints?.[0].length, 40);
+  // 定数表そのものも legacy の値で固定する。
+  eq('P5 LIMITS の件数は 3/3/2 のまま',
+    [TUTOR_PRESENTATION_LIMITS.good, TUTOR_PRESENTATION_LIMITS.improve, TUTOR_PRESENTATION_LIMITS.next],
+    [3, 3, 2]);
   const longOverall = projectTutorPresentationContext({
     feedback: feedback({ overallComment: 'い'.repeat(500) }), createdAt: '2026-05-01T03:00:00.000Z' });
-  eq('P5 総合評価は summaryLength で切る',
-    longOverall?.overall?.length, TUTOR_PRESENTATION_LIMITS.summaryLength);
+  eq('P5 総合評価は 120 字で切る（legacy MAX_SUMMARY_LENGTH）',
+    longOverall?.overall?.length, 120);
 
   // 二重 truncate が起きない（canonical mapper は shortText=200 で先に切る）
   const uni = 'う'.repeat(300);
@@ -613,12 +620,26 @@ async function s6Privacy(): Promise<void> {
   eq('V2 1 件のときも 3 本（件数に比例しない）', presentationTraces(one.rec), 3);
 
   // shadow の出力は enum と件数のみ
+  // ★ 実際の値で走らせる（S5-P11 negative control N7）★
+  //   legacy 側にダミー（'x'）を渡していたため、entry に legacy 値を丸ごと
+  //   載せる欠陥を注入しても「本文が入らない」検査が通ってしまった。
+  //   legacy にも canonical にも **本物の要約行**を渡して漏洩を検出する。
+  const realLegacy = one.block?.content ?? '';
+  check('V3 前提: legacy 値は非空で識別可能な語を含む',
+    realLegacy.includes('サンプル大学') && realLegacy.includes('構成は明確'));
   const cmp = compareTutorShadow({
-    legacy: { presentationResultSummary: 'x' }, canonicalInput: one.resolved, context: one.ctx });
+    legacy: { presentationResultSummary: realLegacy + SECRET },
+    canonicalInput: one.resolved, context: one.ctx });
   const entry = cmp.entries.find((e) => e.field === 'presentation.resultSummary');
   const eDump = JSON.stringify(entry);
-  check('V3 comparison entry に値本文が入らない',
-    !eDump.includes('サンプル大学') && !eDump.includes('構成は明確'), eDump.slice(0, 160));
+  for (const leak of ['サンプル大学', '構成は明確', '発表テーマ', SECRET, '良かった点']) {
+    check(`V3 comparison entry に \`${leak}\` が入らない`, !eDump.includes(leak), eDump.slice(0, 200));
+  }
+  // entry が持ってよいのは enum / hash / 件数だけ。値そのものを持つ key を作らない。
+  eq('V3 entry の key 集合は固定（値 field を増やしていない）',
+    Object.keys(entry ?? {}).sort(),
+    ['canonicalChars', 'canonicalFingerprint', 'canonicalOrigin', 'canonicalState',
+      'diff', 'field', 'kind', 'legacyChars', 'legacyFingerprint', 'reason', 'syncStatus']);
   check('V3 diff は enum', typeof entry?.diff === 'string');
 }
 
@@ -850,6 +871,26 @@ function s9GoldenBytes(): void {
   for (const [label, src, want] of golden) {
     eq(label, renderTutorPresentationLines(projectTutorPresentationContext(src as never)), want);
   }
+
+  // ★ 件数上限を跨ぐ golden（N5c 対策）★
+  //   G1〜G6 の fixture は goodPoints が 2 件しかないため、3→2 の cap 変更で
+  //   出力が変わらず検出できなかった。上限を **超える** 入力を必ず 1 件持つ。
+  eq('G9 件数上限 3/3/2 が bytes で固定されている',
+    renderTutorPresentationLines(projectTutorPresentationContext({
+      feedback: {
+        overallComment: '総合',
+        goodPoints: ['g1', 'g2', 'g3', 'g4'],
+        improvements: ['i1', 'i2', 'i3', 'i4'],
+        nextPractice: ['n1', 'n2', 'n3'],
+        categories: {},
+      },
+      createdAt: at,
+    } as never)),
+    ['・直近のプレゼン練習（2026/05/01実施）の結果が保存されています。',
+      '  - 総合評価: 総合',
+      '  - 良かった点: 「g1」「g2」「g3」',
+      '  - 改善点: 「i1」「i2」「i3」',
+      '  - 次に練習すると良い点: 「n1」「n2」']);
 
   // 空 input は 1 行も出さない（空文字列や代替文言を作らない）。
   eq('G7 値が無ければ空配列', renderTutorPresentationLines(null), []);
