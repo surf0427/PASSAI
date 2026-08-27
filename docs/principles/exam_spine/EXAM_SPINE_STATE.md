@@ -59,7 +59,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `de30cae`（tip / Stage 5.9 まで） | **PARTIAL（Stage 5.1〜5.9 昇格済み。5.8 は blocker 確定まで）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）、Stage 5.8（essay の **blocker 確定のみ**。claim / window / block は意図的に作らない）は S5-P10 で（`f3fa929`〜`985ba0f`／decision → **E-S52 / E-S53**、E-S50 に essay 行を追記）Stage 5.9（presentation の canonical block ＋ shadow 実比較。class 2 なので Source-Sync は増やさない）は S5-P11 で（`91e9ca6`〜`7792ebc`／decision → **E-S54**、E-S50 に presentation の **N/A** 行を追記）canonical へ targeted promotion 済み。**source branch の tip はここまで**（Stage 5.10 相当は source にも未実装）。**未昇格**は statement_review の **consumer semantics**（product 判断待ち / E-S49）、essay の **transport**（E-S52 の read window blocker）、および全 kind の **AI-visible consumer activation** である |
+| `exam-spine-w1-convergence-v2` | `de30cae`（tip / Stage 5.9 まで） | **PARTIAL（Stage 5.1〜5.9 昇格済み。5.8 は blocker 確定まで）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）、Stage 5.8（essay の **blocker 確定のみ**。claim / window / block は意図的に作らない）は S5-P10 で（`f3fa929`〜`985ba0f`／decision → **E-S52 / E-S53**、E-S50 に essay 行を追記）Stage 5.9（presentation の canonical block ＋ shadow 実比較。class 2 なので Source-Sync は増やさない）は S5-P11 で（`91e9ca6`〜`7792ebc`／decision → **E-S54**、E-S50 に presentation の **N/A** 行を追記）canonical へ targeted promotion 済み。**source branch の tip はここまで**（Stage 5.10 相当は source にも未実装）。**未昇格**は statement_review の **consumer semantics**（product 判断待ち / E-S49）、essay の **transport**（E-S52 の read window blocker）、および **一部 kind の** AI-visible consumer activation である（Run 1〜3 で basic_info / activity / diagnosis の 3 kind は切替済み。残りの閉じ方は E-S61 の 4 分類を参照） |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `fb32d50` | **SUPERSEDED（内容は S5-P8 で canonical に到達済み）** | transport 収束（`ac1ef85` / signal.ts 撤去 + verdict の transport 非依存化）は s5p2 lineage 側で `299549e` として再実装されており、S5-P8 で s5p3 経由 merge されたときに canonical へ入った。`verdict.ts` / `signal.ts` は s5p1 と s5p3 で file 単位で同一、`E-H7` 節も byte 一致であることを実測したため **duplicate promotion しない**。decision は **E-S49**（人間裁定 / E-H7 = OPTION C。`E-S39` Decision 2 を supersede）。**branch は削除しない** |
@@ -380,8 +380,14 @@ Stage 5.10 self_pr        ← ★ Run 1 で canonical へ直接収束（Level C 
              最新構造へ再実装した。canonical 側で drift していた 4 suite
              （stage5_8 / stage5_9 / syncDevice / syncSignal）は seam に合わせて追随。
              新 Decision ID は採番せず既存 E-S50 + runtime blocker authority へ載せた。
-      ↓（diagnosis 以降は未着手）
-diagnosis / schema_version convergence / consumer switch  ← **未実装**
+      ↓
+Stage 5.11 diagnosis      ← ★ Run 2 で canonical へ収束（schema authority + consumer 切替）★
+  schema_version authority を E-S59 として確定（writer contract の版 / 旧版は
+  comparison ineligible）。consumer を E-S60 で 3 番目の controlled slot へ切替。
+      ↓
+Run 3 — 全 source kind の最終棚卸し（E-S61）
+  残り 3 kind（statement_review / self_analysis / interview_record）は
+  **理由付きで DEFERRED**。新しい Stage は開始しない。
 ```
 
 ## Run 1 — canonical stabilization + Stage 5.10 収束（完了）
@@ -692,9 +698,17 @@ semantics  READY   classification B — EQUIVALENT_AFTER_NORMALIZATION
 block      READY   interview_issue_line が registry ＋ tutor plan に登録済み
                    決定論的 / 空なら行を出さない / 整形上限は legacy と共有
 
-consumer   DEFERRED  ★ AI-visible activation は別 Stage ★
-                     plan に載っていても production は plan を読まない
-                     （EXAM_PURPOSE_PLANS の import が production に 0 件、
+consumer   DEFERRED  ★ 理由は staging ではなく **実在する射影差**（E-S61 / Run 3 で実測）★
+                     legacy（tutorContext:projectInterviewPractice）は feedback_json が
+                     string なら JSON.parse するが、canonical（mapInterviewRecordRow）は
+                     asRecord で null にする。string 行では legacy が優先順位 1
+                     （AI フィードバック）、canonical が優先順位 2（自己記録）を出す。
+                     mapper を合わせるには `feedback` を変える必要があるが、これは
+                     interviewRecordItemView の content field ＝ **fingerprint 材料**であり、
+                     変更すると全 interview_record row の comparison が一斉に mismatch へ倒れる。
+                     → 解除条件は「feedback_json 解釈の contract Decision ＋ fingerprint 影響の evidence」
+                     ⚠️ 射影差は runtime に現れない（plan は prompt 経路ではない。
+                       EXAM_PURPOSE_PLANS の import が production に 0 件 /
                        tutor plan は render: null / legacyBuilder: null）
 ```
 
@@ -856,6 +870,100 @@ exam-spine-w1-convergence-v2          82fb782   ⊆ canonical
 shipping lineage 側の packet であり、本 implementation lineage には含まれない（含む必要も無い）。
 
 ---
+
+# Exam Spine 内部設計 Final Closure（Run 3）
+
+```text
+EXAM_SPINE_INTERNAL_DESIGN_COMPLETE = YES
+TECHNICAL_COMPLETION_BLOCKERS = 0
+TECHNICAL_WORK_REMAINING = 0
+NEXT_PHASE = PRODUCTION_INTEGRATION
+```
+
+## 閉じ方は 4 種類ある（E-S61）
+
+```text
+SWITCHED   controlled consumer 切替済み。AI-visible 同値を実測済み
+DEFERRED   技術的には到達可能だが、解除に product 判断 or 追加 Decision が要る
+BLOCKED    runtime 有効化を構造的に禁止している（fail-closed）
+N/A        その軸が概念的に適用されない（class 2 = server_authoritative / E-S3）
+```
+
+★ **「READY でない」＝「未完成」ではない** ★
+理由付きで閉じていれば design closure として成立する。
+4 分類のいずれにも入らない kind が 1 つでもあれば、そのときが未完成である。
+
+## 最終 source-kind matrix（10 kind / 全件分類済み）
+
+| kind | class | Source-Sync | runtime | claim | consumer | 解除に必要な authority |
+|---|---|---|---|---|---|---|
+| `basic_info` | 1 | 適用 | 許可 | ○ | **SWITCHED** | —（E-S56） |
+| `activity` | 1 | 適用 | 許可 | ○ | **SWITCHED** | —（E-S58） |
+| `diagnosis` | 1 | 適用 | 許可 | ○ | **SWITCHED** | —（E-S59 / E-S60） |
+| `statement_review` | 1 | 適用 | 許可 | ○ | **DEFERRED** | E-S49 product semantics |
+| `self_analysis` | 1 | 適用 | 許可 | ○ | **DEFERRED** | tutor canonical block 未作成（block coverage / E-S25） |
+| `interview_record` | 1 | 適用 | 許可 | ○ | **DEFERRED** | E-S61 `feedback_json` 解釈の contract Decision（fingerprint 影響） |
+| `self_pr` | 1 | 適用 | **BLOCKED** | ✗ | **BLOCKED** | E-S50 Level C + HD-1〜HD-6 product semantics |
+| `essay` | 1 | 適用 | **BLOCKED** | ✗ | **BLOCKED** | E-S52 read window + E-S53 product semantics |
+| `interview_ai` | 2 | **N/A** | — | ✗ | **N/A** | E-S3（device canonical が存在しない） |
+| `presentation` | 2 | **N/A** | — | ✗ | **N/A** | E-S3 / E-S54 |
+
+```text
+SWITCHED 3 / DEFERRED 3 / BLOCKED 2 / N/A 2  = 10（未分類 0）
+```
+
+## Runtime architecture（実測）
+
+```text
+switchable slots      ['tutor.basic_info', 'tutor.activity', 'tutor.diagnosis']
+canonical assembly    route に 1 箇所。production で import するのは tutor route だけ
+canonical read        3 slot × shadow の 16 通りで 0 か 1（2 にならない）
+                      gate は anySlotSwitchEnabled || shadowEnabled の 1 段
+duplicate query       0（tutor 1 request で 9 kind / 9 table を各 1 本）
+purpose 拒否          self_pr は query 0 本 / self_prs table read 0
+AI call               1 request 1 本。Spine / slot / shadow / compose に SDK 呼び出し 0
+claim kinds           6（activity / basic_info / diagnosis / interview_record /
+                        self_analysis / statement_review）
+runtime blocked       2（self_pr / essay）
+prompt                characterization 全 fixture が byte-identical
+```
+
+## 残件の 3 分類
+
+### A. Exam Spine completion blocker — **0 件**
+
+### B. Deferred product / contract work（completion を妨げない）
+
+```text
+self_pr           HD-1〜HD-6（「現在の自己PR」の定義 / recency / cap / overflow /
+                  delete / Tutor 露出）。すべて OPEN
+statement_review  E-S49 semantics（legacy 相当射影と canonical 射影のどちらを正とするか）
+essay             E-S53 semantics（legacy は別 store。server が legacy の材料を読めない）
+interview_record  E-S61 feedback_json 解釈の contract（fingerprint 影響の evidence が要る）
+self_analysis     tutor canonical block の新設と同値実測
+```
+
+### C. Post-closure cleanup / improvement（completion を妨げない）
+
+```text
+diagnosis 旧版 row の母集団規模の実測（read-only 集計。coverage/observability であって
+  correctness ではない）
+diagnosis 旧版 row の任意 backfill（AI-visible 出力は legacy fallback で維持される）
+TutorStudentContext['diagnosis'].summary（宣言のみで read/write 0 件の dead field）
+block 2 / block 3 の三重投入解消（TUTOR_SPINE_CONTEXT_ENABLED の kill-switch が既にある。
+  Spine が導入した二重 authority ではなく、Spine が解消しようとしている既存状態）
+PresentationRecordClient.tsx:511 の既存 lint error（Exam Spine と無関係）
+branch cleanup / remote push / deploy
+```
+
+## この closure が意味しないこと
+
+```text
+× product 判断が済んだ            B の項目はすべて未決のまま
+× 本番に出た                       PRODUCTION_INTEGRATION は別 phase
+× 全 kind が canonical 経路に乗った  3 kind が SWITCHED。残りは理由付きで閉じている
+× 新しい Stage を始めてよい         E-S61 の解除条件を満たす Decision が先に要る
+```
 
 # 2. Stage
 

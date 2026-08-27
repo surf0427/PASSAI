@@ -2508,6 +2508,127 @@ safety ruling を作る。
   slot module を削除しても AI-visible 出力は不変（legacy 経路が土台のまま）。
   DB / wire / deploy への影響なし。
 
+## E-S61 — Exam Spine 内部設計の最終 closure：閉じ方は 4 種類あり、「READY でない」は「未完成」ではない
+
+- **Status:** `LOCKED`（Run 3 / 全 source kind・consumer・runtime path の再棚卸し）
+- **背景:** Stage 5.x を kind ごとに進めた結果、「switch されていない kind が残っている」
+  という見え方が生じた。しかし switch されていない理由は kind ごとに **質が違う**。
+  区別せずに「未完成」と読むと、正しく閉じた kind に対して不要な migration を始める。
+
+## 1. 閉じ方は 4 種類ある
+
+```text
+SWITCHED   controlled consumer 切替済み。AI-visible 同値を実測済み
+           → basic_info（E-S56）/ activity（E-S58）/ diagnosis（E-S60）
+
+DEFERRED   技術的には到達可能だが、解除に product 判断 or 追加 Decision が要る
+           → statement_review / self_analysis / interview_record
+
+BLOCKED    runtime 有効化を構造的に禁止している（fail-closed）
+           → self_pr（E-S50 Level C）/ essay（E-S52）
+
+N/A        その軸が概念的に適用されない（class 2 = server_authoritative / E-S3）
+           → presentation（E-S54）/ interview_ai
+```
+
+★ **「READY でない」＝「内部設計が未完成」ではない** ★
+理由付きで閉じていれば design closure として成立する。上の 4 分類のいずれにも
+当てはまらない kind が 1 つでもあれば、そのときが未完成である。
+
+## 2. DEFERRED 3 kind の解除条件（それぞれ質が違う）
+
+```text
+statement_review   E-S49 の product 判断待ち
+                   legacy（最新 1 件 / 先頭 2 件 / 60 字）と canonical（履歴 N 件の
+                   反復論点 / 頻度順）は選択・集約・下限がすべて違う。
+                   どちらを正とするかは product 判断であり実装都合で先取りしない。
+                   transport は READY（claim 配線済み / Level B）。
+
+self_analysis      block coverage 待ち（E-S25）
+                   transport READY / claim 配線済みだが、tutor 向け canonical block が
+                   **存在しない**。legacy は強み / 課題 / 将来の方向性 / 要約の 4 行を
+                   独自の cap（3 / 2 / 2 件）で出しており、canonical block を新設して
+                   同値を実測する作業が要る。Source-Sync の blocker ではない。
+
+interview_record   ★ Run 3 で判明した技術理由（E-S51 の「別 Stage」を置き換える）★
+                   E-S51 は transport / semantics / block をすべて READY と判定し、
+                   consumer 切替を「別 Stage」として先送りしていた。Run 3 の実測で、
+                   先送りの理由が staging ではなく **実在する射影差**だと判明した。
+```
+
+## 3. `interview_record` の射影差（実測）
+
+```text
+legacy   tutorContext.ts:projectInterviewPractice
+         feedback_json が **string なら JSON.parse する**
+         （「文字列で入っている旧データも考慮して両方を受ける」と明示されている）
+
+canonical lib/examSpine/read/rowMappers.ts:mapInterviewRecordRow
+         feedback: asRecord(rec.feedback_json)
+         → string は record ではないので **null** になる
+
+実測（feedback_json = '{"improvements":["AI改善点1","AI改善点2"]}' の string）:
+  legacy    → "AI改善点1 / AI改善点2"   （優先順位 1 = AI フィードバック）
+  canonical → "自己記録の課題"           （優先順位 2 へ落ちる）
+  → **DIVERGENT**
+```
+
+★ mapper を legacy に合わせれば直る、とは言えない ★
+
+`feedback` は `interviewRecordItemView` の content field、すなわち
+**Source-Sync の fingerprint 材料**である。`mapInterviewRecordRow` の
+`feedback` 解釈を変えると、既存の全 interview_record row の fingerprint が動き、
+**全ユーザーの comparison が一斉に mismatch へ倒れる**。
+これは diagnosis の `schema_version` と同じ種類の変更であり、
+E-S59 と同様に **独立した Decision と evidence** を要求する。
+
+加えて「string で入った `feedback_json` は正当なデータか」という判断が要る。
+現行 writer（`interviewPracticeRecords.ts:parseFeedbackJson`）は parse 済み object を
+書くため、string 行は legacy 由来である。どちらを正とするかは
+`schema_version` の legacy 版と同じ **contract の問題**であって、
+consumer 切替のついでに決めてよいものではない。
+
+- **Decision:** `interview_record` の consumer 切替は **DEFERRED** とし、解除条件を
+  「`feedback_json` 解釈の contract を定める Decision と、その fingerprint 影響の evidence」
+  とする。E-S51 の「別 Stage（E-S40 の first-consumer pin を維持）」という理由は
+  **本 Decision が置き換える**（pin は E-S56 / E-S58 / E-S60 で 3 度動いており、
+  staging を理由として維持できない）。
+- **★ これは欠陥ではない ★** 現在 canonical block は prompt 経路へ接続されていない
+  （`EXAM_PURPOSE_PLANS` は production から import されず `render: null`）。
+  したがって射影差は **runtime に現れない**。切替を急がないことが正しい対処である。
+
+## 4. Exam Spine 内部設計の completion 条件
+
+```text
+technical completion blocker = 0
+全 source kind が 4 分類のいずれかに入っている
+active consumer がすべて安全（AI-visible 同値 / fail-open / canonical read <= 1 / AI call = 1）
+非 active consumer が理由付きで DEFERRED / BLOCKED / N/A
+Decision graph valid / STATE が実装と一致
+```
+
+★ product 判断待ちは completion を妨げない ★
+`self_pr` HD-1〜HD-6 / `statement_review` semantics / `essay` semantics は
+いずれも runtime safety が確保された状態で deferred であり、
+Exam Spine の **architecture completion** の条件ではない。
+
+★ deployment も completion 条件ではない ★
+remote push / merge / production deploy / live DB backfill / 本番トラフィックは
+`PRODUCTION_INTEGRATION` という別 phase に属する。
+
+- **Implementation evidence:** `scripts/exam-spine-final-closure-check.ts`
+  （final matrix / consumer / architecture / containment / invariants / docs の 6 節）。
+- **Alternatives rejected:**
+  - *残り 3 kind の consumer を全部切り替えて「完成」にする* — statement_review は
+    product 判断、self_analysis は block 新設、interview_record は fingerprint に
+    影響する contract 変更を要する。いずれも機械的な作業ではなく、
+    「完成に見せるため」に semantics を先取りすることになる。
+  - *DEFERRED をすべて BLOCKED と書く* — 解除条件の質（product 判断 / block coverage /
+    contract Decision）が消え、次の担当者が何をすべきか分からなくなる。
+  - *interview_record の mapper だけ legacy に合わせる* — fingerprint が動いて
+    全ユーザーが mismatch になる。E-S59 と同じ轍。
+- **Rollback implications:** 宣言と QA のみ。runtime 挙動は 1 つも変えていない。
+
 ## E-P1 — 3 層のみ採用する（Layer 3/4/5 を持ち込まない）
 
 - **Status:** `LOCKED`
