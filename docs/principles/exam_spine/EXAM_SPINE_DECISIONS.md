@@ -1560,7 +1560,7 @@ Exam-specific differences / Rollback implications
 
 ## E-S50 — device history window の tie-break は kind ごとに保証度が異なる
 
-- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で canonical へ昇格）
+- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で canonical へ昇格。**S5-P9 で interview_record を追加**）
 - **ID 由来（S5-P8 promotion）:** source branch では branch-local `E-S45` として
   採番されていたが、canonical の `E-S45`（activity の canonical 表現はカテゴリ別件数）は
   **別 Decision** である。**E-S50** へ再採番した。
@@ -1580,7 +1580,38 @@ Exam-specific differences / Rollback implications
                     → **選ばれた集合が同じなら fingerprint は必ず一致する**
                       （sortSyncItems が localReviewId 込みの fingerprint 順で正規化）
                     → 残余リスクは「どの N 件を選ぶか」だけに限定される
+                    → **Level B**
+
+  interview_record  server: created_at DESC, id DESC（DB uuid）      ★ S5-P9 で追加
+                    device: createdAt DESC + 挿入順（安定ソート）
+                    ★ item view は localRecordId を含む（両側で共有される安定 id）
+                    ★ device row は `id: null` を置き DB id を持たない
+                    → statement_review と同じ保証度。選ばれた集合が同じなら
+                      fingerprint は必ず一致し、残余は cap 境界の同一 created_at のみ
+                    → **Level B**
   ```
+
+## Level 分類（S5-P9 で明文化）
+
+```text
+Level A  structural parity
+         device / server が共有された stable id を持ち、境界の順序決定まで一致する。
+         → 現時点で該当する kind は **無い**（device は DB id を知り得ないため）。
+
+Level B  selected-set parity only
+         選ばれた集合が同じなら fingerprint parity は保証される。
+         同一 created_at が cap 境界を跨ぐ場合だけ選択がずれ得る。
+         → self_analysis / statement_review / interview_record
+
+Level C  no structural guarantee
+         共有 stable id が無く、同一 timestamp 境界での一致保証が無い。
+         → window 未適用 kind（self_pr / essay / presentation）は
+           claim 配線時にここから評価を始めること。
+```
+
+★ 「実運用ではほぼ起きない」を理由に Level A へ格上げしない ★
+発生確率と構造的保証は別物である。確率の議論は「今回は解消しない理由」に書き、
+保証度そのものは device が持つ情報だけで判定する。
 - **Decision:** tie-break の保証度を kind ごとに記録し、**一律の保証を主張しない**。
   device 側が server の DB `id` を知り得ない以上、「同一 `created_at` が cap 境界を
   跨ぐ」ケースでの選択一致は構造的に保証できない。
@@ -1595,23 +1626,113 @@ Exam-specific differences / Rollback implications
   前者は claim を policy input へ近づけ（E-S33 に反する）、後者は「最新 N 件」という
   window の意味を変える。いずれも Stage 5.6 の scope を超える。
 - **★ 新 kind へ window を広げる packet はこの表を更新すること ★**
-  `self_pr` / `interview_record` / `essay` / `presentation` の device view は
-  現時点で window 未適用であり、claim も未配線。claim を配線する Stage で
-  「その kind の tie-break 保証度」を本表へ追記してから window を適用する。
+  `self_pr` / `essay` / `presentation` の device view は現時点で window 未適用であり、
+  claim も未配線。claim を配線する Stage で「その kind の tie-break 保証度」を
+  本表へ追記し、Level を判定してから window を適用する。
+  （`interview_record` は S5-P9 でこの手順どおり追記 → Level B 判定 → window 適用した。）
 - **Rollback implications:** なし（監査記録）。
+
+## E-S51 — interview_record の Tutor 表現は canonical から再現でき、専用 block を持つ（ただし接続はしない）
+
+- **Status:** `LOCKED`（Stage 5.7 で実装 + QA 済み。Tutor migration gap G5）
+- **ID 由来（S5-P9 promotion）:** source branch では branch-local `E-S46` として
+  採番されていたが、canonical の `E-S46`（self_analysis の canonical 比較元は
+  Supabase 層 projection であり readiness は実データを要求する）は **別 Decision**
+  である。verbatim では持ち込まず canonical の次番 **E-S51** へ再採番した。
+- **semantic classification:** **B — EQUIVALENT_AFTER_NORMALIZATION**
+  （`statement_review` の C とは異なり、canonical 側に競合する projection が無い）
+- **★ 前提の訂正（重要）★**
+  legacy の「面接の課題」行（`buildInterviewLine`）は 2 つの入力を取るため、
+  一見 `interview_ai`（AI 面接）と `interview_record`（対人練習）の 2 kind に
+  またがるように見える。**実際は両方とも同じ 1 レコード由来である。**
+  ```text
+  app/tutor/page.tsx  const interviewRecord = getInterviewRecords()[0]
+    interviewRecordLatest   = { improvementSummary, whatWentWrong }   ← その record
+    interviewFeedbackLatest = JSON.parse(record.feedbackJson).improvements ← 同じ record の列
+  ```
+  すなわち `interviewFeedbackLatest` は `interview_ai` ではなく
+  `interview_practice_records.feedback_json` である。したがって Tutor の面接行は
+  **`interview_record` 単独で再現できる**（`interview_ai` を待つ必要がない）。
+  従来の gap 表は「interview_ai が prompt に出ている」という誤った記述だった。
+- **legacy の選択・整形規則（正確に写す対象）:**
+  ```text
+  selection  getInterviewRecords()[0]（= 最新 1 件。localStorage は newest-first）
+  priority   1. feedbackJson を isInterviewFeedback で guard → improvements
+             2. improvementSummary → whatWentWrong（空でないものを順に）
+             3. どちらも無ければ行を出さない（代替文言なし）
+  normalize  先頭 3 件 / 各 80 字 / ' / ' 連結 / 全体 500 字
+  ```
+- **Decision:** canonical `interview_record` から legacy 同等の「面接の課題」1 行を
+  生成する専用 Stage 2 block を持つ（block id `interview_issue_line`）。
+  正規化は legacy の `buildInterviewLine` を **再実装せず共有**する
+  （定数を複製すると legacy と canonical が静かにずれ、比較が意味を失う / E-P6）。
+- **★ block がある ≠ consumer が使う（本 packet の最重要境界）★**
+  ```text
+  A. projection が存在する            YES（interviewRecordProjection.ts）
+  B. canonical block が登録されている  YES（registry / EXAM_CONTEXT_BLOCK_IDS）
+  C. tutor plan に載っている           YES（shadow から build させるため）
+  D. prompt builder が plan を読む     NO  ★ここで止まる★
+  E. AI-visible prompt が変わる        NO
+  ```
+  `EXAM_PURPOSE_PLANS` は production code から一切 import されておらず、
+  tutor plan は `render: null` / `legacyBuilder: null` である。すなわち plan は
+  **shadow / QA 専用の宣言**であって prompt 経路ではない。したがって
+  「plan に載る」ことは activation ではない。この非同値性は Stage 5.7 QA の
+  T6 が機械検証する（production file の import 走査 ＋ render/legacyBuilder 検査）。
+  ```text
+  plan に tutor_student_context と interview_issue_line が併存するのは重複ではなく、
+  移行時に前者（bridge 由来の横断要約）を後者（interview_record を source kind に
+  持つ server 由来の同等表現）へ置き換えるための対応関係の明示である。
+  ```
+  Tutor consumer の切替は別 Stage（E-S40 の first-consumer pin を維持）。
+- **window / tie-break:** history kind として cap window を適用する（E-S48）。
+  device view は `local_record_id`（device の `record.id`）を持ち、server の SELECT にも
+  `local_record_id` があるため **Level B**（E-S50 に追記済み）。
+  device 側の `selectDeviceSyncWindow` は `createdAt` で選ぶ。localStorage は
+  `addInterviewRecord` が newest-first で書くため格納順は既に一致するが、
+  「保存順が信頼できる」ことに依存しないため明示的に created_at で選ぶ。
+- **privacy:** server SELECT は `questions_asked` / `my_answers`（逐語）を読まない。
+  block content は整形後の 1 行のみで、逐語・質問文・feedback 本文は block にも
+  `ExamContextInput` にも telemetry にも現れない。mismatch path も含めて QA が固定する。
+- **lossy field の確認:** canonical mapper は `improvement_summary` / `what_went_wrong` を
+  `longText`(4000) で先に truncate するが、legacy の整形は 80 字 / 500 字なので
+  **4000 字を超える値でも先頭 80 字は一致する**。実用上の欠落は無い。
+- **★ readiness を 4 つに分解する ★**
+  ```text
+  transport  READY     claim 配線 / window parity / cap 超過でも検証可 /
+                       header は履歴件数に比例しない（5/200/1000 いずれも 228 bytes）
+  semantics  READY     classification B。legacy と同じ normalizer を共有し
+                       同一入力から同一行を得る（QA が MATCH を実証）
+  block      READY     registry contract 固定 / 決定論的 / 空なら行を出さない /
+                       整形上限は legacy と共有 / plan 位置の authority も確定
+  consumer   DEFERRED  AI-visible activation は別 Stage（本 Decision の D/E）
+  overall    READY（Source-Sync として）／consumer 移行は未
+  ```
+  `statement_review`（E-S49）が semantics DEFERRED なのは canonical に競合 projection が
+  あり product 判断が要るからで、`interview_record` にはそれが無い。両者を同一視しない。
+- **Alternatives rejected:**
+  - *`interview_ai` の wiring を待つ* — 前提の誤り。legacy の面接行は interview_record 単独で足りる。
+  - *shadow 専用射影に留める* — 競合する canonical projection が無いので block にしてよい。
+    留めると Tutor 移行時に必ず block 追加が再燃する。
+  - *canonical 側で整形を書き直す* — 定数が 2 箇所になり legacy と乖離する。
+  - *plan に載せずに block だけ作る* — shadow comparison が block を build できず、
+    「canonical が legacy を再現できるか」を測れなくなる。
+- **Rollback implications:** block は plan から外せば消える。claim も送らなければ
+  `unclaimed` に戻るだけで legacy 挙動は不変。production prompt は本 Decision の
+  前後で **byte 一致**（S5-P9 で 14 fixture 実測）。
 
 ---
 
 # 5. Policy / persistence decisions
 
-## E-S51 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+## E-S52 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
 
 - **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S45` → `E-S46` として採番していたが、canonical はその後 `E-S46` を Stage 5.4
   （self_analysis 比較元）へ割り当てた（S5-P6）。canonical の番号は動かさず、
   後発である本 Decision を再採番した。canonical はその後さらに `E-S48` を
-  Stage 5.5 read-window contract に割り当てたため、S5-P9 で **E-S51** へ再々採番した
+  Stage 5.5 read-window contract に割り当てたため、S5-P10 で **E-S52** へ再々採番した
   （E-S38-3 の手順。canonical の番号は 1 つも動かしていない）。内容は無変更。
 - **HUMAN RULING（本 decision の権威）:**
   ```text
@@ -1662,14 +1783,14 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** `verdict.ts` の入力型を戻せば復帰できるが、`esy1` codec を復活させる
   意味は無い（production importer 0 のまま廃止された）。
 
-## E-S52 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
+## E-S53 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
 
 - **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet 3。`E-S40` が開けた最初の consumer 切替の実装判断）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S47` として採番していたが、canonical はその後 `E-S47` を Stage 5.5 の
-  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S52** へ
+  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S53** へ
   再採番した（E-S38-3 の手順）。内容は無変更。参照していた `E-S48`（transport）は
-  再採番後の `E-S51` を指す。
+  再採番後の `E-S52` を指す。
 - **決定:**
   ```text
   切替対象   tutor purpose の basic_info slot のみ（E-S40）
@@ -1704,7 +1825,7 @@ Exam-specific differences / Rollback implications
 - **query 本数:** slot 切替と shadow は同じ canonical context を 1 回だけ組み立てて共用する。
   どちらも OFF の user では canonical assembly を 1 本も発行しない。
 
-## E-S53 — read layer は生 `preferences` slot を事実として報告し、consumer 互換 projection をそこから作る
+## E-S54 — read layer は生 `preferences` slot を事実として報告し、consumer 互換 projection をそこから作る
 
 - **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P8。`E-S50` が bounded fallback として
   残した projection 差の解消。`E-S50` の採用条件（AI-visible 同値）自体は変更しない）
@@ -1792,6 +1913,93 @@ Exam-specific differences / Rollback implications
   negative control 20 件を mutation で実測しすべて検出。
 - **Rollback implications:** `rawPreferences` を読まなくすれば Packet 3 時点の
   fail-closed 挙動へ戻るだけで、AI-visible 出力は不変。DB / wire / deploy への影響なし。
+
+## E-S55 — tutor `activity` を 2 番目の controlled consumer 切替とし、集計正本の共有だけでは同値証明にしない
+
+- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P10。`E-S40` が定めた「最初は basic_info 単独」の次段）
+- **決定:**
+  ```text
+  切替対象   tutor purpose の activity slot のみ
+  採用条件   Source-Sync verified ＋ canary 許可 ＋ canonical slot が legacy と完全一致
+  不一致時   legacy を維持し、理由を enum（divergent_projection / would_reduce_context /
+             canonical_absent / not_usable）として観測へ残す
+  承認 slot  EXAM_SPINE_SWITCHABLE_SLOTS = ['tutor.basic_info', 'tutor.activity'] の 2 件
+  ```
+- **★ なぜ activity が次なのか（実測。branch の新しさではなく `E-S40` の 4 条件で選んだ）★**
+  ```text
+  E-S40 が「最初に tutor を選んだ理由」として挙げた 4 条件を現在値で再測した:
+                       server read   device claim   canary gate   canonical block
+    activity              ○             ○（E-S45）      ○            ○ activity_category_counts
+    diagnosis             ○             ○（E-S44）      ○            ○ diagnosis_type_hint
+    self_analysis         ○             ○（E-S46）      ○            ✗ tutor 向け block が無い
+    statement_review      ○             ○（E-S49）      ○            ✗ block を作らないと決定済み
+    interview_record      ○             ○（E-S51）      ○            ○（ただし接続しないと決定済み）
+
+  4 条件を満たすのは activity と diagnosis。activity を先に採る根拠:
+    schema_version drift  activity は writer / DDL default / device 宣言がすべて '1' で一致し、
+                          既存行の永久 mismatch リスクが無い（E-S45 で実測済み）。
+                          diagnosis は writer '3' / DDL default '1' で、bump 前に書かれた行を
+                          持つ user が永久 mismatch になる既知の制約がある（E-S38）。
+    集計正本              activity は legacy / canonical が既に同一関数を共有している（E-S45）。
+    → 「切替の risk が最も小さい slot」を次に選ぶ。順序は decision で固定する。
+  ```
+- **★ 集計正本の共有は同値証明ではない（本 packet の最重要知見）★**
+  legacy（`tutorContext.ts:projectActivity`）も canonical（`projectTutorActivitySlot`）も
+  `lib/activityCategories.ts:summarizeActivityCategories()` を通る（`E-S45`）。
+  そのため両者の byte 比較は **共有 oracle の比較**であり、
+  **共有関数そのものが変わると両側が同じように壊れて素通りする**。
+  ```text
+  実測（負例）: summarizeActivityCategories の `arr.length > 0` を `>= 0` に変えると
+               0 件カテゴリが prompt に出るようになるが、legacy / canonical の
+               44 payload 全件が一致したまま通過した。
+  ```
+  したがって本 packet は **section 行そのものを golden として凍結**した
+  （`ACTIVITY_LINE_GOLDEN`）。凍結対象は宣言順・ラベル・区切り「・」・
+  「が保存されています（計N件）。」の定型・0 件時の行ごと省略・非配列の除外。
+  **期待値をコードから再生成して更新してはいけない。** 更新は prompt 文言を
+  意図的に変えるという別の決定である。
+- **legacy `activity` semantics（byte-level で固定した内容）:**
+  ```text
+  source     activity_logs.payload（auth-scoped / maybeSingle / user_id scope）
+  走査順     ACTIVITY_CATEGORY_LABELS の **宣言順**（payload の key 順ではない）
+  採用条件   Array.isArray(v) && v.length > 0
+  未知 key   集計しない（prompt に出ない）
+  0 件       カテゴリごと出さない。合計 0 なら **行ごと省略**（代替文言を作らない）
+  要素       **中身を一切見ない**。長さだけ。narrative / timestamp / 重複は無関係
+  cap        件数 cap も文字 cap も無い（section 全体 1200 字の行単位 fit のみ）
+  行         `・活動整理には、{label}{n}件・… が保存されています（計{total}件）。`
+  ```
+- **★ `ExamActivityServerRow.categoryCounts` を consumer が使わないこと ★**
+  あれは「payload 内で配列だった **生 key** → 長さ」であり、未知カテゴリと 0 件を
+  含み、ラベルではなく key のままである。**別の表現**なので tutor slot が読むと
+  prompt が変わる。slot は `row.payload` だけを読む（QA が `row.*` の参照先を
+  `payload` のみに pin し、`row.categoryCounts` が実際に別物であることも実測で示す）。
+- **query 本数:** slot 切替（basic_info / activity）と shadow は同じ canonical context を
+  **1 回だけ**組み立てて共用する。gate は `anySlotSwitchEnabled || shadowEnabled` の 1 段で、
+  2 slot × shadow の 8 通りすべてで canonical read は 0 か 1（2 にならない）。
+- **slot 独立:** gate / usability / veto は slot ごとに独立に評価する。
+  `tutor.basic_info` を許可しても `tutor.activity` は ON にならない（E-S11 の連言を slot 単位で維持）。
+- **保持したもの:** legacy serverRead は削除しない（同値検査の相手であり fallback）/
+  transport は `edc1` 1 本のまま（`E-S52`）/ shadow は observer のまま（`E-S42` / `E-S43`）/
+  canary は default deny の連言（`E-S11`）/ basic_info の `rawPreferences` 互換 projection（`E-S54`）は不変 /
+  narrative は canonical block にも slot にも載せない（`E-S45`）。
+- **★ shadow observation は prompt 経路へ流さない ★**
+  `shadowOverall` / `shadowMismatchCount` は宣言 / shadow block 内の代入 / telemetry 以外に
+  現れてはいけない。これも負例で穴が見つかったため QA を追加した
+  （比較結果で context を分岐させる変異が、従来の禁止識別子リストを素通りしていた）。
+- **Alternatives rejected:**
+  - *diagnosis を先に切り替える* — schema_version drift による永久 mismatch を抱えたまま
+    consumer authority を移すことになる。risk の小さい方から進める。
+  - *legacy / canonical が同じ関数を通ることを以て同値とする* — 共有 oracle の盲点。
+    上記のとおり負例で実際に素通りした。
+  - *`row.categoryCounts` をそのまま slot にする* — 未知カテゴリと 0 件が prompt に出る。
+  - *golden を廃して byte 比較だけにする* — AI-visible の凍結点が無くなる。
+- **QA:** `scripts/exam-spine-packet4-check.ts`（44 payload byte 比較 / golden 6 件 /
+  narrative・PII containment / slot 独立 gate / 4+8 gate combination の read 本数 /
+  route wiring / essay_chat 非漏洩）。negative control 24 件を mutation で実測しすべて検出。
+- **Rollback implications:** env から `tutor.activity` を外せば legacy へ戻る。
+  slot module を削除しても AI-visible 出力は不変（legacy 経路が土台のまま）。
+  DB / wire / deploy への影響なし。
 
 ## E-P1 — 3 層のみ採用する（Layer 3/4/5 を持ち込まない）
 

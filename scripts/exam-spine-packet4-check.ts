@@ -1,6 +1,6 @@
-// Exam Spine — Stage 5 Packet S5-P9 / tutor `activity` slot 単独切替の検証。
+// Exam Spine — Stage 5 Packet S5-P10 / tutor `activity` slot 単独切替の検証。
 //
-// E-S54: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
+// E-S55: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
 //
 // ★ 本 packet が証明したいこと ★
 //   「activity を legacy serverRead から canonical（Source-Sync verified）へ切り替えても
@@ -506,7 +506,7 @@ function staticChecks(): void {
   const routeCode = route.split('\n').filter((l) => !/^\s*import /.test(l)).join('\n');
 
   // ★ route が activity slot を実際に配線している ★
-  //   S5-P9 で追加: route の wiring を丸ごと戻しても本 suite が緑のままだった（実測）。
+  //   S5-P10 で追加: route の wiring を丸ごと戻しても本 suite が緑のままだった（実測）。
   //   equivalence harness は module を直接呼ぶので、route の配線漏れを検出できない。
   check('route が decideTutorActivitySlot を呼んでいる',
     /decideTutorActivitySlot\s*\(/.test(routeCode));
@@ -554,7 +554,7 @@ function staticChecks(): void {
   }
   // ── shadow observation が prompt 経路へ漏れていない（Phase 11）──
   //
-  // ★ S5-P9 で追加 ★ 負例（`shadowOverall === 'MATCH'` で spineContext を分岐させる）が
+  // ★ S5-P10 で追加 ★ 負例（`shadowOverall === 'MATCH'` で spineContext を分岐させる）が
   //   どの suite でも検出されなかったため塞いだ。既存の禁止識別子リストは
   //   comparison / shadowResolvedInput / context.blocks を見ていたが、
   //   **比較結果の enum 自体**（shadowOverall / shadowMismatchCount）は入っていなかった。
@@ -604,7 +604,7 @@ function staticChecks(): void {
 
 // ── run ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  console.log('[exam-spine-packet4] Stage 5 Packet S5-P9 — tutor activity slot switch');
+  console.log('[exam-spine-packet4] Stage 5 Packet S5-P10 — tutor activity slot switch');
   tutorContext = (await import('@/lib/contextBuilders/tutorContext')) as TutorContextModule;
 
   await equivalenceMatrix();

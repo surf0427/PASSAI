@@ -198,7 +198,12 @@ function buildActivityLine(data: unknown): string | null {
 //   2. interviewRecordLatest の自己記録（improvementSummary → whatWentWrong）
 //   3. どちらも無ければ null（未出力）
 // 面接本文（Q&A）・betterAnswer・スコア・日付は一切載せず、課題の圧縮要約のみ。
-function buildInterviewLine(
+//
+// ★ export している理由（E-S46）★
+//   canonical Exam Spine が interview_record の rows から **同じ表現**を作るため、
+//   この関数を共有する。canonical 側で整形を書き直すと 3 件 / 80 字 / 500 字という
+//   定数が 2 箇所に存在し、legacy と canonical の出力が静かにずれる（E-P6）。
+export function buildInterviewLine(
   feedbackLatest: unknown,
   recordLatest: unknown,
 ): string | null {

@@ -210,6 +210,12 @@ function buildBlockContents(
       ? input.diagnosisTypeHint.slice(0, DIAGNOSIS_TYPE_HINT_MAX_CHARS)
       : null,
 
+    // 面接: 課題 1 行をそのまま content にする。
+    // ★ ここで truncate / join / slice を足さない ★
+    //   3 件 / 80 字 / 500 字の整形は `buildInterviewLine`（legacy の正本）が
+    //   済ませている。ここで再度掛けると二重整形になり legacy と byte がずれる。
+    interview_issue_line: input.interviewIssueLine ?? null,
+
     tutor_student_context: input.tutorSources
       ? buildTutorStudentContextSection(buildTutorStudentContext(input.tutorSources))
       : null,

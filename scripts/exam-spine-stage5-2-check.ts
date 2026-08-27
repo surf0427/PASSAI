@@ -33,6 +33,14 @@ import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnaps
 import { createRecordingExecutor, USER_A, type FakeDb } from './fixtures/examSpineStage3';
 
 const ROOT = process.cwd();
+
+/** `export function <name>(` から次の `export function` 直前までを切り出す。 */
+function fnBody(src: string, name: string): string {
+  const i = src.indexOf(`export function ${name}(`);
+  if (i === -1) return '';
+  const next = src.indexOf('\nexport function ', i + 1);
+  return next === -1 ? src.slice(i) : src.slice(i, next);
+}
 let passed = 0;
 const failures: string[] = [];
 function check(label: string, ok: boolean, detail = ''): void {
@@ -355,7 +363,10 @@ function t7Static(): void {
   check('T8 Stage 5.3 の activity_category_counts は昇格済み（許可）',
     blockIds.includes('activity_category_counts'));
   //   後続 stage が **新設**する block id。interview_record は interview_issue_line を足す。
-  for (const later of ['interview_issue_line']) {
+  check('T8 Stage 5.7 の interview_issue_line は昇格済み（許可）',
+    blockIds.includes('interview_issue_line'));
+  //   Stage 5.8 以降（essay / presentation）が新設する block はまだ無い。
+  for (const later of ['essay_issue_line', 'presentation_issue_line']) {
     check(`T8 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
   }
   //   tutor が申告する device claim kind は Stage 5.3 時点で basic_info + diagnosis +
@@ -372,8 +383,8 @@ function t7Static(): void {
   const declaredKinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T8 tutor の claim kind は 5.1-5.6 の 5 つのみ', declaredKinds,
-    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
+  eq('T8 tutor の claim kind は 5.1-5.7 の 6 つのみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis', 'interview_record', 'self_analysis', 'statement_review']);
   //   実際に組み立てても同じ集合であること（宣言と挙動の一致）。
   const builtKinds = buildTutorDeviceClaimEntries(
     { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
@@ -437,12 +448,10 @@ function t7Static(): void {
   // ── Stage 5.6 以降の feature surface が現れていない ──
   const claimTypes = readFileSync(
     join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  const spread = ['deviceSelfPrView',
-    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
-    const i = claimTypes.indexOf(`export function ${fn}(`);
-    return i !== -1 && claimTypes.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  const spread = ['deviceSelfPrView', 'deviceEssayView'].filter((fn) => {
+        return fnBody(claimTypes, fn).includes('selectDeviceSyncWindow');
   });
-  eq('T8 device window primitive は 5.4/5.6 の 2 kind 以外へ広がっていない', spread, []);
+  eq('T8 device window primitive は 5.4/5.6/5.7 の 3 kind 以外へ広がっていない', spread, []);
 }
 
 async function main(): Promise<void> {

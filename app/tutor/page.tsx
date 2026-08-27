@@ -621,6 +621,14 @@ export default function TutorPage() {
         //   Stage 5.6: statement_review も申告する（G8）。history kind なので
         //   window 選択は canonical view が行う。
         loadReviewHistory(),
+        //   Stage 5.7: interview_record も申告する（G5）。
+        //   ★ prompt 材料と同じ source を申告する ★
+        //     この route が prompt に出している「面接練習の課題」行は
+        //     すぐ上の `getInterviewRecords()[0]` 由来である（同 file 423 行）。
+        //     したがって申告するのも同じ list でなければならない。
+        //     ここで別 source（interviewFeedbackLatest 等）を渡すと、
+        //     server は「照合したはずの source と違うもの」を verified にしてしまう。
+        safeSource(() => getInterviewRecords()) ?? [],
       ),
     );
 

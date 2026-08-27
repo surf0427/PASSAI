@@ -199,7 +199,7 @@ const PAYLOADS: Array<[string, unknown]> = [
   ['payload が配列', []],
   ['payload が文字列', 'x'],
 
-  // ── S5-P9: projection semantics の全数行列（E-S53）─────────────────
+  // ── S5-P10: projection semantics の全数行列（E-S54）─────────────────
   //   legacy は **生配列の先頭 3 slot** を見て、その中の record だけを使う。
   //   canonical は `rawPreferences`（生 index つきの事実列）から同じ規則を再現する。
   //   不正値の **位置** と **型** を総当たりし、両者が byte 一致することを示す。
@@ -310,11 +310,11 @@ async function equivalenceMatrix(): Promise<void> {
     eq('生 slot 0..2 が全部不正なら canonical slot は null', projectTutorBasicInfoSlot(r), null);
   }
 
-  // ★ S5-P9（E-S53）★ projection の構造差は解消済み。
+  // ★ S5-P10（E-S54）★ projection の構造差は解消済み。
   //   Packet 3 では「生 slot が不正値に消費されたか」が row に残らず
   //   `divergent_projection` へ倒すしかなかった。read layer が `rawPreferences` を
   //   報告するようになったため、legacy の規則を再現できる。
-  eq('★ divergent_projection は 0 件（E-S53）', reasons.divergent_projection ?? 0, 0);
+  eq('★ divergent_projection は 0 件（E-S54）', reasons.divergent_projection ?? 0, 0);
   eq('★ would_reduce_context は projection 由来では 0 件', reasons.would_reduce_context ?? 0, capResidual);
   // ★ 「veto を外して数字を合わせた」のではないことを示す ★
   //   実際に食い違う組を渡したら今も legacy に倒れること（別途 slotDecision でも検査）。
@@ -377,7 +377,7 @@ async function equivalenceMatrix(): Promise<void> {
   check('評定が section に出ない', !piiSection.includes('4.2') && !piiSection.includes('国語'));
 }
 
-// ── raw metadata の封じ込め（E-S53）─────────────────────────────────
+// ── raw metadata の封じ込め（E-S54）─────────────────────────────────
 //
 // `rawPreferences` / `sourceIndex` は **consumer compatibility のための事実**であって
 // AI-visible でも wire でもない。次のどれにも出てはいけない:
@@ -537,7 +537,7 @@ function gateChecks(): void {
   set(saveSlots, saveUsers);
 
   // ★ Rule 10: 次の slot へ勝手に進まない ★
-  // ★ S5-P9: 承認済み slot は 2 つ ★ 勝手に 3 つ目が増えていないことを固定する。
+  // ★ S5-P10: 承認済み slot は 2 つ ★ 勝手に 3 つ目が増えていないことを固定する。
   //   （順序も含めて pin する。allowlist は「今どこまで切替を実測したか」の記録なので、
   //     packet を経ずに token を足すと gate が意味を失う。）
   eq('切替可能 slot は承認済みの 2 つだけ',
@@ -584,7 +584,7 @@ function staticChecks(): void {
 
   // Rule 1: 承認済み slot **以外**を差し替えていない
   //
-  // ★ S5-P9 retarget ★ slot が 2 つになり、差し替えが条件付き spread
+  // ★ S5-P10 retarget ★ slot が 2 つになり、差し替えが条件付き spread
   //   （`...(cond ? { key: … } : {})`）になった。不変条件は「差し替えられる
   //   top-level key の集合」なので、literal の形ではなくその集合を見る。
   //   ネストした object（slot の値そのもの）を拾わないよう depth を数える。
@@ -613,7 +613,7 @@ function staticChecks(): void {
 
   // ── query semantics: canonical assembly は 1 request 1 回だけ（E-S5 / Phase H）──
   //
-  // ★ S5-P9 で追加 ★ 負例（route に 2 本目の buildCanonicalExamContext を足す）が
+  // ★ S5-P10 で追加 ★ 負例（route に 2 本目の buildCanonicalExamContext を足す）が
   //   どの suite でも検出されなかったため塞いだ。slot 切替と shadow は同じ context を
   //   共用する契約であり、2 本目を足すと同一 request 内で canonical read が二重化する。
   const routeBody = route.split('\n').filter((l) => !/^\s*import /.test(l)).join('\n');
@@ -645,7 +645,7 @@ function staticChecks(): void {
   check('canonical assembly の gate 条件を取り出せる', gateCond !== null);
   if (gateCond) {
     const cond = gateCond[1].trim();
-    // ★ S5-P9: slot が 2 つになったので条件は 2 段になった ★
+    // ★ S5-P10: slot が 2 つになったので条件は 2 段になった ★
     //   `anySlotSwitchEnabled` の定義まで遡って評価し、read 本数表を導く。
     eq('gate 条件は anySlot OR shadow', cond, 'anySlotSwitchEnabled || shadowEnabled');
     const anyDecl = /const anySlotSwitchEnabled = ([^;]+);/.exec(routeBody);
@@ -681,7 +681,7 @@ function staticChecks(): void {
 
   // ── shadow の legacy 側 input が死んでいない（Phase G / activity coverage）──
   //
-  // ★ S5-P9 で追加 ★ 負例（`activityCategoryCounts: false && …` で値を殺す）が
+  // ★ S5-P10 で追加 ★ 負例（`activityCategoryCounts: false && …` で値を殺す）が
   //   key 集合検査を素通りしたため塞いだ。key があるだけでは coverage の証明にならない。
   //   ここでは「各 field の値式が live な source を参照し、定数で短絡されていない」ことを見る。
   //   （式の評価まではしない。定数短絡と source 参照の欠落までを検出する。）

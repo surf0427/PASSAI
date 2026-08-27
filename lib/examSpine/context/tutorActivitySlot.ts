@@ -1,8 +1,8 @@
-// PASSAI 受験版 Exam Spine — Stage 5 Packet S5-P9 / tutor の `activity` slot 単独切替（純関数）。
+// PASSAI 受験版 Exam Spine — Stage 5 Packet S5-P10 / tutor の `activity` slot 単独切替（純関数）。
 //
-// E-S54: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
+// E-S55: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
 //   同じ request の他 slot（self_analysis / diagnosis / statement_review / …）は legacy のまま。
-//   `basic_info`（E-S52）は既に切替済みで、その authority には触れない。
+//   `basic_info`（E-S53）は既に切替済みで、その authority には触れない。
 //
 // ★ 本 module が変えるのは「どこから来た値か」だけであり、「AI が見る文字列」ではない ★
 //   legacy の `buildTutorSupabaseContextSection` が出す activity 由来 1 行は、
@@ -94,7 +94,7 @@ export type TutorActivitySlotFallbackReason =
  * ★ 採用側を決めるのは Source-Sync の verdict であって本関数ではない ★
  *   `usable` は呼び出し側が `examSyncUsability`（E-S2 / E-S11 / E-S36）で評価した結果を渡す。
  *
- * ★ output-equivalence veto（E-S52 と同じ採用条件）★
+ * ★ output-equivalence veto（E-S53 と同じ採用条件）★
  *   canonical を採用してよいのは、canonical から作った slot が legacy と
  *   **完全一致** するときだけ。一致しなければ legacy を維持する。
  *   行が増えるのも減るのも AI-visible の変化なので、同値を採用条件に据える。

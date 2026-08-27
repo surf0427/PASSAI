@@ -49,6 +49,7 @@ import type {
   ExamActivityServerRow,
   ExamBasicInfoServerRow,
   ExamDiagnosisServerRow,
+  ExamInterviewRecordServerRow,
   ExamSelfAnalysisServerRow,
   ExamStatementReviewServerRow,
 } from '../read/rowMappers';
@@ -93,6 +94,7 @@ import { evaluateContextVeto } from './veto';
 import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasicInfoSlot';
 import { projectTutorActivitySlot, type TutorActivitySlot } from './tutorActivitySlot';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
+import { projectInterviewIssueLine } from './interviewRecordProjection';
 import {
   projectActivity,
   projectBasicInfo,
@@ -597,7 +599,7 @@ function resolveContextInput(args: {
       next.activityCategoryCounts = formatActivityCategoryCounts(summary);
       origins.activity = 'server';
     }
-    // ★ E-S54: tutor の activity slot を別途 project する ★
+    // ★ E-S55: tutor の activity slot を別途 project する ★
     //   block（activityCategoryCounts）が持つのは行の「値」部分だけで、legacy の
     //   section 行は `計N件` も要る。slot は totalCount + categoryCounts の pair を返す。
     //   同じ row / 同じ集計関数を使うので追加 query は 1 本も出ない。
@@ -642,6 +644,25 @@ function resolveContextInput(args: {
     //   `ExamContextInput` には載せない。shadow 側の別 slot に載せる。
     statementWeaknessLine = projectStatementReviewLegacyLine(rows);
     if (statementWeaknessLine !== null) origins.statement_review = 'server';
+  }
+
+  // interview_record → interviewIssueLine（Stage 5.7 / G5 / E-S46）
+  //
+  // ★ shadow 専用ではない ★
+  //   statement_review の legacy 相当射影と違い、canonical 側に競合する
+  //   projection が無いため `ExamContextInput` に載せて block を作る。
+  //   （block を持つことと consumer が使うことは別。prompt へは接続しない。）
+  //
+  // ★ 本文を持ち込まない ★
+  //   ここで取り出すのは課題 1 行だけで、mainQuestion / feedbackReceived /
+  //   selfNoted / practiceDate / 大学名は projection に現れない（E-P5）。
+  if (usable('interview_record')) {
+    const rows = slot<readonly ExamInterviewRecordServerRow[] | null>('interview_record');
+    const line = projectInterviewIssueLine(rows);
+    if (line) {
+      next.interviewIssueLine = line;
+      origins.interview_record = 'server';
+    }
   }
 
   // 申告の無い kind は補完しない（E-S26。暗黙的 Mixed-Origin を作らない）。

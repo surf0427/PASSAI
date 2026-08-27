@@ -65,8 +65,16 @@ export type TutorLegacyInput = {
    */
   readonly diagnosisTypeHint?: unknown;
   readonly presentationLatest?: unknown;
+  /**
+   * ★ この 2 つは同じ 1 レコード由来である（E-S46）★
+   *   `app/tutor/page.tsx:423` の `getInterviewRecords()[0]` から両方が作られる。
+   *   `interviewFeedbackLatest` は `interview_ai` ではなく、その record の
+   *   `feedbackJson` を parse したものである。
+   */
   readonly interviewRecordLatest?: unknown;
   readonly interviewFeedbackLatest?: unknown;
+  /** legacy tutor が prompt に出している「面接練習の課題」行の値。 */
+  readonly interviewIssueLine?: unknown;
   readonly mypageSummary?: unknown;
   readonly statementDraft?: unknown;
 };
@@ -325,11 +333,37 @@ export function compareTutorShadow(input: {
     compareField({ field: 'essay.reviewLatest', kind: 'essay',
       legacy: input.legacy.essayReviewLatest, canonical: null, provenance: prov('essay'),
       omitted: 'no_canonical_block' }),
-    compareField({ field: 'interview_record.latest', kind: 'interview_record',
-      legacy: input.legacy.interviewRecordLatest, canonical: null, provenance: prov('interview_record'),
-      omitted: 'no_canonical_block' }),
+    // ── interview_record ─────────────────────────────────────────
+    //
+    // ★ Stage 5.7 で canonical block ができたので実比較へ昇格（G5 / E-S46）★
+    //   ★ 比較対象は「Tutor が prompt に出している表現」＝課題 1 行 ★
+    //     legacy の `interviewRecordLatest` は `{ improvementSummary, whatWentWrong }`
+    //     という 2 field の record で、canonical 側の block content は整形後の 1 行。
+    //     shape が違うものを突き合わせると常に VALUE_MISMATCH になり
+    //     「移行できない」という誤った結論になる（statement_review と同じ罠）。
+    //     どちらも `buildInterviewLine` を通した値で比べる。
+    compareField({ field: 'interview_record.issueLine', kind: 'interview_record',
+      legacy: text(input.legacy.interviewIssueLine),
+      canonical: blockContent(input.context, 'interview_issue_line'),
+      provenance: prov('interview_record') }),
+    // 面接本文 / Q&A / betterAnswer / スコアは canonical に載せない（E-P5）。
+    // legacy も prompt に出していないが、canonical query が verbatim 列を
+    // SELECT していないことを表に残す。
+    compareField({ field: 'interview_record.verbatim', kind: 'interview_record',
+      legacy: null, canonical: null, provenance: prov('interview_record'),
+      omitted: 'raw_body_excluded' }),
+
+    // ── interview_ai ─────────────────────────────────────────────
+    //
+    // ★ `interviewFeedbackLatest` は interview_ai ではない（E-S46）★
+    //   名前に反して、この値は `interview_practice_records.feedback_json` である
+    //   （app/tutor/page.tsx:423-436）。したがって interview_ai kind の
+    //   legacy 対応物は **存在しない**。ここに legacy 値を置くと
+    //   「interview_ai が prompt に出ている」という誤った記録になる。
+    //   interview_ai（G3）は依然 canonical block 未実装であり、
+    //   legacy tutor prompt にも現れない。
     compareField({ field: 'interview_ai.feedbackLatest', kind: 'interview_ai',
-      legacy: input.legacy.interviewFeedbackLatest, canonical: null, provenance: prov('interview_ai'),
+      legacy: null, canonical: null, provenance: prov('interview_ai'),
       omitted: 'no_canonical_block' }),
 
     // ── legacy 専用（canonical source を持たない）────────────────
@@ -358,6 +392,8 @@ const COVERED_KINDS: readonly ExamSourceKind[] = [
   'statement_review',
   // Stage 5.2（G1）で diagnosis_type_hint block を追加した。
   'diagnosis',
+  // Stage 5.7（G5）で interview_issue_line block を追加した。
+  'interview_record',
 ];
 
 function summarize(
