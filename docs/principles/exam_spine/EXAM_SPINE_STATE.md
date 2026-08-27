@@ -27,7 +27,17 @@
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
 | Canonical HEAD at this arbitration | `40b76a85a2ab86874316d7c3808fcef57b7580a1` |
+| Canonical HEAD at Run 1 start | `bf8236a3b2718a33e5dfdc4df2d4c041e2f73cc2`（S5-P12 昇格後） |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
+
+⚠️ hash 欄は **その収束時点の記録**であって固定値ではない。
+Run 1 は `bf8236a` の上に 3 commit を積んで完了した（末尾が現 HEAD）:
+
+```text
+test(exam-spine): close residual convergence guard gaps        ← N6 / N10 / N13
+feat(exam-spine): converge self_pr as runtime-blocked Level C  ← Stage 5.10
+docs(exam-spine): record Stage 5.10 canonical closure          ← 本 commit
+```
 
 ## 解決手順（毎回これを実行する）
 
@@ -363,8 +373,47 @@ Stage 5.9  presentation      ← ★ S5-P11 で canonical へ昇格 ★
   de30cae  register E-S49 …
            → canonical 1d9c0a9（**E-S54** へ再採番。E-H7（採番衝突の PENDING_HUMAN）は
              canonical では E-S37 / E-S38 が lineage 帰属を LOCKED 済みのため持ち込まない）
-      ↓（5.10 以降は未昇格 / source branch にもまだ存在しない）
-self_pr（Stage 5.10 相当）← source branch の tip が de30cae のため **未実装**
+      ↓
+Stage 5.10 self_pr        ← ★ Run 1 で canonical へ直接収束（Level C / runtime blocked）★
+  0df9a93  block self_pr runtime sync as Level C（base 2a8abce / canonical より古い）
+           → merge も cherry-pick もせず **semantic delta のみ**を canonical の
+             最新構造へ再実装した。canonical 側で drift していた 4 suite
+             （stage5_8 / stage5_9 / syncDevice / syncSignal）は seam に合わせて追随。
+             新 Decision ID は採番せず既存 E-S50 + runtime blocker authority へ載せた。
+      ↓（diagnosis 以降は未着手）
+diagnosis / schema_version convergence / consumer switch  ← **未実装**
+```
+
+## Run 1 — canonical stabilization + Stage 5.10 収束（完了）
+
+```text
+開始 canonical HEAD   bf8236a（clean / 他 worktree の in-flight 変更なし）
+authority             bf8236a をそのまま採用（drift なし = Case A）
+writer                ONE CANONICAL / ONE WRITER。新しい並列 lineage は作っていない
+
+★ 1. 残存 QA guard の回収（source: bcddc92 / evidence only）★
+  N6   tutor route の AI call 本数が **どこにも pin されていなかった**。
+       route の create / stream 本数 + AI client import + 呼び出し先 module の
+       SDK 不在を packet4 で固定した。
+  N10  STATE の readiness 宣言を docs だけ書き換える負例が落ちなかった。
+       readiness 節を切り出し、DEFERRED 宣言の存在 / 同節に READY 宣言が無いこと /
+       実装側（tutor plan の block・registry の blocker）の 3 点を readiness R1b で閉じた。
+  N13  未定義参照検査は「実在するが意味的に誤った E-S ID」への retarget を通す。
+       module → 主題 ID / ID → 見出し主題 / STATE の主張 → 根拠 ID の 3 方向を
+       readiness R1c で固定した（節スコープで検索する）。
+
+★ 2. Stage 5.10 self_pr の収束 ★
+  Level C / runtime blocked / transport lane は「進めない」ことが確定。
+  consumer 作業は BLOCKED。詳細は下の self_pr readiness 節。
+
+不変（実測）:
+  switchable slots     ['tutor.basic_info', 'tutor.activity'] のみ（増やしていない）
+  canonical assembly   1 request 最大 1 本 / AI double call なし / shadow output mutation なし
+  presentation         class 2 / Source-Sync N/A / E-S54 のまま
+  statement_review     transport READY / semantics DEFERRED（E-S49）
+  essay                runtime blocked（E-S52）/ READY = NO
+  prompt               byte-identical（characterization 6 / tutorLoader 9 /
+                       tutorComposition 6 fixture すべて緑）
 ```
 
 ### presentation readiness（S5-P11 / class 2 なので Source-Sync 軸を使わない）
@@ -422,6 +471,77 @@ S5-P11 の negative control は実際にこれを踏んだ（delimiter / 件数 
   絶対 bytes（golden 9 件。値は「抽出前の legacy 出力」から採る）
   legacy 由来のリテラル（3 / 3 / 2 / 40 / 120。定数と自分自身を比べない）
 を併置する。
+```
+
+### self_pr readiness（Stage 5.10 / ruling = Level C）
+
+```text
+ruling        SELF_PR_LEVEL = C / RUNTIME_SYNC = BLOCKED / CLAIM_WIRING = DO_NOT_ENABLE
+              TUTOR_EXPOSURE = NO_CHANGE / EXAM_READ_CAPS.self_pr = KEEP_CURRENT
+              DELETE_PROPAGATION = KEEP_DISABLED
+
+projection      READY    device ↔ mirror の pure parity は cap 以下で成立している
+                         （qa:examSpine:syncDevice / qa:examSpine:stage5_10）。
+                         adapter capability は `possible` のまま（contract は確定済み）
+
+transport       BLOCKED  ★ E-S50 Level C ★
+                         (a) server は updated_at DESC / created_at DESC / id DESC の
+                             上位 5 件を読むが、`deviceSelfPrView` は window 未適用で
+                             **全件**を hash する → 6 件以上で永久 mismatch
+                         (b) `selectDeviceSyncWindow` は created_at でしか選べないが
+                             server の第 1 キーは updated_at。DO UPDATE 経路では
+                             trigger `self_prs_set_updated_at` が now() で上書きする
+                         (c) `dualWriteSelfPRsDelta` は propagateDelete=false 固定で、
+                             device で削除した PR が mirror に残り top-5 を占め得る
+                         (d) device row は `id: null` を置き server の id tie-break を再現できない
+                         → claim を配線しない
+
+★ essay（E-S52）と同じ Level C だが根拠は別である ★
+                         essay の「backfill による updated_at 完全反転」は self_pr では
+                         **起きない**。`prToRow` が `updated_at: pr.updatedAt` を明示送信し、
+                         全件 INSERT で終わる backfill では device の recency が DB に入る。
+                         片方の evidence をもう片方の説明に流用しない。
+
+device window   非適用（意図的） 近似 window（created_at）で verified を作らない。
+                         **window を適用しないこと自体が Level C の結論である**
+
+semantics       UNRESOLVED  ordering / cap / delete の product semantics は未決（HD-1〜HD-6）。
+                         Level C ruling は「未解決だから runtime enable しない」という
+                         安全判断であって、semantics を決めたものではない
+
+block           作らない  sourceKind=self_pr の canonical block は 0 件のまま。
+                         `self_pr_body` は /api/reason の **feature 入力**であって
+                         self_prs read ではない（混同禁止 / provenance = user_authored）
+
+Tutor 露出      変更なし  purpose registry の tutor に self_pr は無く、`buildCanonicalExamContext`
+                         は self_prs query を 1 本も発行しない
+                         （provenance = denied_by_purpose / skipped / contribution none）。
+                         Tutor prompt は byte-identical（qa:examSpine:characterization）
+
+runtime enable  BLOCKED  EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.self_pr（宣言であって gate ではない）
+
+overall         PARTIAL（transport lane は「進めない」ことが確定した状態）
+```
+
+### ★ 「transport lane 完了」は「同期してよい」ではない ★
+
+```text
+Stage 5.10 の COMPLETE は **sync / runtime enable してはいけないことが確定した**という意味である。
+consumer switch を実装してよいという意味ではない。self_pr の consumer 作業は BLOCKED。
+```
+
+### 未解決のまま据え置く product 判断（Stage 5.10 / 番号は本 packet 内の作業用）
+
+```text
+HD-1  「現在の自己PR」とは何か（device は card 群で単一 canonical の概念を持たない）
+HD-2  recency は created_at か updated_at か
+HD-3  cap 5 は self_pr に妥当か（UI 上限なしの store）
+HD-4  cap overflow は comparison を無効化すべきか（fail-closed か window 一致か）
+HD-5  delete の意味（mirror 残存を許容するか tombstone を先行させるか）
+HD-6  Tutor は self_pr を見るべきか（現在は purpose registry で NO）
+
+⚠️ Level C ruling はこれらを解決していない。解決したことにして window / claim を
+   足す packet を書かないこと。6 項目はすべて未着手のまま次 Stage へ渡す。
 ```
 
 ### essay readiness（S5-P10 / 層ごとに分ける）
@@ -995,6 +1115,27 @@ revert commit 1  → docs/principles/exam_spine/ が消える
 ---
 
 # 13. Next Stage
+
+## Run 2 の入口（Run 1 完了時点）
+
+```text
+starting authority   exam-spine-stage4-stabilize の現 HEAD（唯一）
+                     解決手順は §1.1 のとおり git rev-parse で実測する
+
+Run 1 で閉じたもの
+  residual QA guard  N6 / N10 / N13     COMPLETE
+  Stage 5.10 self_pr Level C / blocked  COMPLETE（= 同期してはいけないことが確定）
+
+Run 2 の対象（Run 1 では **着手していない**）
+  diagnosis
+  schema_version convergence
+  consumer switch
+
+Run 1 が **決めていない**こと
+  HD-1〜HD-6（self_pr の product semantics）はすべて OPEN。
+  Level C ruling は semantics の解決ではない。window / claim を足す packet を
+  「解決済み」を前提に書かないこと。
+```
 
 ## Wave 2 — Canonical Convergence（完了）
 

@@ -1560,7 +1560,7 @@ Exam-specific differences / Rollback implications
 
 ## E-S50 — device history window の tie-break は kind ごとに保証度が異なる
 
-- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で昇格。**S5-P9 で interview_record / S5-P10 で essay を追加**）
+- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で昇格。**S5-P9 で interview_record / S5-P10 で essay / S5-P11 で presentation（N/A）/ Stage 5.10 で self_pr を追加**）
 - **ID 由来（S5-P8 promotion）:** source branch では branch-local `E-S45` として
   採番されていたが、canonical の `E-S45`（activity の canonical 表現はカテゴリ別件数）は
   **別 Decision** である。**E-S50** へ再採番した。
@@ -1600,6 +1600,24 @@ Exam-specific differences / Rollback implications
                     → device は **揃えるべき順序キーそのものを持っていない**。
                       selectDeviceSyncWindow を掛けても解決しない（近似で verified を作らない）
                     → **Level C**（tie の揺らぎではなく選択規則そのものの不一致）
+
+  self_pr           server: updated_at DESC, created_at DESC, id DESC        ★ Stage 5.10 で追加
+                    cap = 5（`EXAM_READ_CAPS.self_pr`）/ query limit = cap + 1 = 6
+                    device: `deviceSelfPrView` は **window 未適用**で全件を hash する
+                    ★ essay と違い「完全反転」は起きない
+                      `prToRow` が `updated_at: pr.updatedAt` を明示送信するため、
+                      全件 INSERT で終わる backfill では device の recency が DB に入る。
+                      **essay の根拠をここへ流用しない。**
+                    ★ それでも選択集合の一致を構造的に保証できない ★
+                      (a) device 全件 vs server 上位 5 件 → 6 件以上で永久 mismatch
+                      (b) `selectDeviceSyncWindow` は created_at でしか選べないが
+                          server の第 1 キーは updated_at。さらに DO UPDATE 経路では
+                          trigger `self_prs_set_updated_at` が now() で上書きするため、
+                          編集後の device `updatedAt` と DB `updated_at` は一致しない
+                      (c) `dualWriteSelfPRsDelta` は `propagateDelete: false` 固定で、
+                          device で削除した PR が mirror に残り top-5 を占め得る
+                      (d) device row は `id: null` を置き、server の id tie-break を再現できない
+                    → **Level C**（window / ordering parity が未成立。claim は配線しない）
   ```
 
 ## Level 分類（S5-P9 で明文化）
@@ -1616,8 +1634,10 @@ Level B  selected-set parity only
 
 Level C  no structural guarantee
          共有 stable id / 共有 ordering key が無く、選択集合の一致自体を構造的に
-         保証できない。→ **essay**（S5-P10 で実測）。
-         `self_pr` は window 未適用かつ未 audit で、claim 配線時にここから評価を始めること。
+         保証できない。→ **essay**（S5-P10 で実測）/ **self_pr**（Stage 5.10 で監査）。
+         ⚠️ 同じ Level C でも **根拠は別**である。essay は backfill による updated_at の
+            完全反転、self_pr は window 未適用 ＋ created_at/updated_at のキー不一致 ＋
+            delete 非伝播 ＋ id tie-break 不能。片方の evidence をもう片方の説明に使わない。
 
 N/A      本監査の対象外。**class 2（server_authoritative / E-S3）で device claim を
          持たない kind**は、device↔server window parity という命題自体が成立しない。
@@ -1668,8 +1688,11 @@ window parity を要求する理由にならない。
   前者は claim を policy input へ近づけ（E-S33 に反する）、後者は「最新 N 件」という
   window の意味を変える。いずれも Stage 5.6 の scope を超える。
 - **★ 新 kind へ window を広げる packet はこの表を更新すること ★**
-  `self_pr` / `essay` の device view は現時点で window 未適用であり、claim も未配線。
-  claim を配線する Stage で「その kind の tie-break 保証度」を本表へ追記し、
+  `self_pr` / `essay` の device view は window 未適用であり、claim も未配線。
+  **両者とも Level C として監査済みで、window を適用しないことが結論である**
+  （essay = S5-P10 / E-S52、self_pr = Stage 5.10）。近似 window で verified を
+  作らないため、この 2 kind は `EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` に宣言してある。
+  今後 window を広げる新 kind は、「その kind の tie-break 保証度」を本表へ追記し、
   Level を判定してから window を適用する。
   （`interview_record` は S5-P9 でこの手順どおり追記 → Level B 判定 → window 適用した。）
   **class 2（`presentation` / `interview_ai`）はこの手順の対象ではない。**
