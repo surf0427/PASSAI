@@ -276,28 +276,54 @@ function t7Static(): void {
       !afterPrompt.includes('diagnosis_type_hint'));
     check('T7 prompt 以降に shadowResolvedInput が現れない',
       !afterPrompt.includes('shadowResolvedInput'));
+    // optional chaining（`.context?.blocks`）でも抜けないよう正規表現で見る。
     check('T7 prompt 以降に canonical block 配列が現れない',
-      !afterPrompt.includes('.context.blocks'));
+      !/\.context\??\.blocks/.test(afterPrompt));
   }
   const legacy = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
   check('T7 legacy が canonical block を import しない', !legacy.includes('examSpine/blocks'));
   check('T7 legacy が canonical context を import しない', !legacy.includes('examSpine/context'));
 
-  // ── T8: Stage 5.2 の境界（5.3 以降を巻き込んでいないこと）────────────
+  // ── T8: canonical stage 境界（未昇格 stage を巻き込んでいないこと）──────
   //
-  //   Stage 5.2 は diagnosis block だけを昇格する packet である。
-  //   source lineage には 5.3（activity category counts）/ 5.4（self_analysis claim）/
-  //   5.6（statement_review）が続いており、cherry-pick 時に混入しやすい。
-  //   block 集合と tutor の claim kind 集合を pin して accidental promotion を落とす。
-  console.log('\n8. Stage 5.2 boundary');
+  //   S5-P4 時点ではこの guard は「Stage 5.3 の block が混入していない」ことを
+  //   固定していた。S5-P5 で Stage 5.3（activity）を canonical へ昇格したため、
+  //   境界を **1 段前へ進める**（削除して弱くするのではない）。
+  //
+  //     ALLOWED   basic_info（5.1）/ diagnosis（5.2）/ activity（5.3）
+  //     FORBIDDEN self_analysis（5.4）/ history window（5.5）/
+  //               statement_review（5.6）/ interview_record（その先）
+  //
+  //   ★ registry の membership だけでは足りない ★
+  //     5.4 / 5.6 は **既存 block を再利用**して claim kind だけを足すため、
+  //     block 集合を見ても検出できない。claim kind 集合も併せて pin する。
+  console.log('\n8. Canonical stage boundary');
   const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
   check('T8 diagnosis_type_hint が登録されている', blockIds.includes('diagnosis_type_hint'));
-  for (const later of ['activity_category_counts']) {
-    check(`T8 Stage 5.3 の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  check('T8 Stage 5.3 の activity_category_counts は昇格済み（許可）',
+    blockIds.includes('activity_category_counts'));
+  //   後続 stage が **新設**する block id。interview_record は interview_issue_line を足す。
+  for (const later of ['interview_issue_line']) {
+    check(`T8 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
   }
-  //   tutor が申告する device claim kind は Stage 5.2 時点で basic_info + diagnosis の 2 つ。
-  //   5.3 / 5.4 / 5.6 はここへ kind を足すので、集合を固定すれば混入が落ちる。
-  const claimKinds = buildTutorDeviceClaimEntries(
+  //   tutor が申告する device claim kind は Stage 5.3 時点で basic_info + diagnosis +
+  //   activity の 3 つ。5.4 / 5.6 / interview_record はここへ kind を足す。
+  //
+  //   ★ arity 非依存にする ★
+  //     `buildTutorDeviceClaimEntries()` を呼ぶだけの検査は、後続 stage が引数を
+  //     増やした場合「渡さなければ出ない」ので混入を見逃す。push している kind
+  //     literal を関数本体から直接読み取る。
+  const claimFile = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimFile.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('T8 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const declaredKinds = Array.from(
+    claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  eq('T8 tutor の claim kind は basic_info + diagnosis + activity のみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis']);
+  //   実際に組み立てても同じ集合であること（宣言と挙動の一致）。
+  const builtKinds = buildTutorDeviceClaimEntries(
     { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
       typeof buildTutorDeviceClaimEntries
     >[0],
@@ -305,7 +331,13 @@ function t7Static(): void {
       typeof buildTutorDeviceClaimEntries
     >[1],
   ).map((e) => e.kind).sort();
-  eq('T8 tutor の claim kind は basic_info + diagnosis のみ', claimKinds, ['basic_info', 'diagnosis']);
+  eq('T8 activity を渡さなければ claim も出ない（申告のみ / 生成しない）', builtKinds,
+    ['basic_info', 'diagnosis']);
+  //   Stage 5.5（history comparison window）を巻き込んでいない。
+  const deviceViews = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  check('T8 Stage 5.5 の read-cap window が混入していない',
+    !deviceViews.includes('selectDeviceSyncWindow'));
 }
 
 async function main(): Promise<void> {

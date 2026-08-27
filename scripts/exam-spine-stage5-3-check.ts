@@ -36,6 +36,7 @@ import { EXAM_DEVICE_CLAIM_MAX_BYTES } from '@/lib/examSpine/sync/claim/types';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import { EXAM_CONTEXT_BLOCK_REGISTRY } from '@/lib/examSpine/blocks/registry';
+import { EXAM_PURPOSE_PLANS } from '@/lib/examSpine/orchestrator/plan';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import * as Q from '@/lib/examSpine/read/queries';
 import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnapshot.server';
@@ -324,6 +325,26 @@ async function t7Shadow(): Promise<void> {
   const v = await run(token, '部活動9件');
   eq('T7 値違いは VALUE_MISMATCH', v.diff?.diff, 'VALUE_MISMATCH');
 
+  // ★ VALUE_MISMATCH こそ値が漏れやすい ★
+  //   S5-P5 の負例 N5 で、`reason` に legacy / canonical の実値を載せても
+  //   どの guard も落ちないことが判明した（MATCH 経路しか見ていなかった）。
+  //   shadow entry が持ってよいのは field id / diff kind / origin / status / reason の
+  //   **enum 相当**だけであり、値そのもの・block content・claim token は出さない（E-S13 / §13）。
+  const vJson = JSON.stringify(v.cmp);
+  check('T7 mismatch 時も diff に活動本文が出ない', !vJson.includes(SECRET));
+  check('T7 mismatch 時に canonical block content が出ない', !vJson.includes(EXPECTED_COUNTS));
+  check('T7 mismatch 時に legacy の実値が出ない', !vJson.includes('部活動9件'));
+  check('T7 mismatch 時に claim token（fingerprint）が出ない',
+    token !== null && !vJson.includes(token));
+  //   reason は自由文字列なので、値を載せない enum 相当であることを明示的に固定する。
+  //   （型上は enum だが、型を広げる変更が入っても runtime で落ちるようにしておく。
+  //     負例 N5 はまさに `reason` を自由文字列へ広げる形の leak だった。）
+  const reasons = v.cmp.entries
+    .map((e) => e.reason as unknown)
+    .filter((r): r is string => typeof r === 'string');
+  check('T7 reason は既知の enum 相当のみ',
+    reasons.every((r) => /^[a-z_]+$/.test(r)), reasons.join(' | '));
+
   const r = m.cmp.readiness.find((x) => x.kind === 'activity');
   eq('T7 MATCH なら activity は READY', r?.readiness, 'READY');
   check('T7 diff に活動本文が出ない', !JSON.stringify(m.cmp).includes(SECRET));
@@ -371,17 +392,103 @@ function t8Static(): void {
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
   check('T8 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
-  const promptIdx = route.indexOf('buildTutorUserPrompt');
+  // canonical block が prompt へ入っていない
+  //
+  // ★ 修正（S5-P5 promotion）★ source 側の実装は
+  //   `route.indexOf('buildTutorUserPrompt')` を anchor に ±1500 字の window を
+  //   検査していた。この識別子は file 冒頭の見出しコメントにも現れるため window が
+  //   file 先頭に張られ、実際の prompt 組み立て位置を検査できていなかった
+  //   （S5-P4 で stage 5.2 側に同じ defect が見つかっている）。
+  //   コメント行を除いた実コード上で **呼び出し形**に anchor し、
+  //   固定 window ではなく prompt 組み立て「以降すべて」を検査する。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('T8 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
-    const w = route.slice(Math.max(0, promptIdx - 1500), promptIdx + 1500);
-    check('T8 prompt 付近に activity_category_counts が現れない', !w.includes('activity_category_counts'));
-    check('T8 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T8 prompt 以降に activity_category_counts が現れない',
+      !afterPrompt.includes('activity_category_counts'));
+    check('T8 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    // optional chaining（`.context?.blocks`）でも抜けないよう正規表現で見る。
+    check('T8 prompt 以降に canonical block 配列が現れない',
+      !/\.context\??\.blocks/.test(afterPrompt));
   }
+  const legacyActivity = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
+  check('T8 legacy が canonical block を import しない', !legacyActivity.includes('examSpine/blocks'));
+  check('T8 legacy が canonical context を import しない', !legacyActivity.includes('examSpine/context'));
   // 書き込みが無い
   const claimSrc = stripComments(readFileSync(join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8'));
   check('T8 claim 層に mutation が無い', !/\.(insert|upsert|update|delete|rpc)\s*\(/.test(claimSrc));
   const page = readFileSync(join(ROOT, 'app/tutor/page.tsx'), 'utf8');
   check('T8 client は device canonical を読むだけ', page.includes('loadActivityData()'));
+}
+
+
+// ── 9. Stage 5.3 の境界（5.4 以降を巻き込んでいないこと）─────────────────
+//
+//   Stage 5.3 は activity block ＋ activity device claim だけを昇格する packet である。
+//   source lineage には 5.4（self_analysis claim）/ 5.5（history comparison window）/
+//   5.6（statement_review）/ その先の interview_record が続いており、
+//   cherry-pick 時に混入しやすい。
+//
+//   ★ registry の membership だけでは足りない ★
+//     5.4 / 5.6 は **既存 block を再利用**して claim kind だけを足すため、
+//     block 集合を見ても検出できない。したがって
+//       (a) tutor plan の block 列
+//       (b) tutor が申告する claim kind 集合（**実ソースから抽出** = arity 非依存）
+//       (c) 後続 stage が新設する block id の不在
+//     の 3 点を pin する。
+function t9Boundary(): void {
+  console.log('\n9. Stage 5.3 boundary');
+
+  // (a) tutor plan の block 列 — Stage 5.1 / 5.2 / 5.3 の 3 つだけ。
+  const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
+  eq('T9 tutor plan の block は 5.1 + 5.2 + 5.3 の 3 つだけ', tutorBlocks, [
+    'tutor_student_context',
+    'diagnosis_type_hint',
+    'activity_category_counts',
+  ]);
+
+  // (b) tutor claim kind — **実ソースから抽出**する。
+  //     `buildTutorDeviceClaimEntries()` を呼ぶだけの検査は、後続 stage が
+  //     引数を増やした場合に「渡さなければ出ない」ので混入を見逃す（arity 依存）。
+  //     push している kind literal を関数本体から直接読み取る。
+  const claimSrc = readFileSync(join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimSrc.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('T9 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const fnBody = fnIdx === -1 ? '' : claimSrc.slice(fnIdx);
+  const declaredKinds = Array.from(fnBody.matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g))
+    .map((m) => m[1])
+    .sort();
+  eq('T9 tutor の claim kind は basic_info + diagnosis + activity のみ', declaredKinds, [
+    'activity',
+    'basic_info',
+    'diagnosis',
+  ]);
+
+  // (c) 後続 stage が新設する block id が registry に無い。
+  //     interview_record（5.6 の先）は `interview_issue_line` を新設する。
+  const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
+  check('T9 activity_category_counts が登録されている', blockIds.includes('activity_category_counts'));
+  for (const later of ['interview_issue_line']) {
+    check(`T9 後続 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  }
+
+  // (d) consumer switch は行われていない — first consumer / slot の pin が動いていない。
+  const entry = readFileSync(join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STAGE5_ENTRY.md'), 'utf8');
+  check('T9 FIRST_STAGE5_CONSUMER=tutor のまま', /FIRST_STAGE5_CONSUMER\s*=\s*tutor\b/.test(entry));
+  check('T9 FIRST_STAGE5_SLOT=basic_info のまま（activity へ切り替えない）',
+    /FIRST_STAGE5_SLOT\s*=\s*basic_info\b/.test(entry));
+
+  // (e) 5.5（history comparison window）を巻き込んでいない。
+  //     selectDeviceSyncWindow は 5.5 で device list view に入る cap 適用である。
+  const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  check('T9 Stage 5.5 の read-cap window が混入していない',
+    !deviceViews.includes('selectDeviceSyncWindow'));
 }
 
 async function main(): Promise<void> {
@@ -394,6 +501,7 @@ async function main(): Promise<void> {
   await t6Privacy();
   await t7Shadow();
   t8Static();
+  t9Boundary();
 
   if (fetchCallCount !== 0) {
     console.error(`\n[exam-spine-stage5.3] FAIL: 外部通信 ${fetchCallCount} 回`);
