@@ -1254,6 +1254,121 @@ Exam-specific differences / Rollback implications
   plan から外せば consumer への影響なく取り消せる。claim も送らなくなれば
   `unclaimed` に戻るだけで legacy 挙動は不変。
 
+## E-S46 — self_analysis の canonical 比較元は Supabase 層 projection であり、readiness は実データを要求する
+
+- **Status:** `LOCKED`（Stage 5.4 で実装 + QA 済み。Tutor migration gap G7）
+- **ID 由来（S5-P6 promotion）:** source branch は Stage 5.4 の Decision を
+  branch-local に `E-S40` / `E-S41` / `E-S42` として採番していたが、canonical の
+  同番はいずれも別 Decision である（E-S40 = Stage 5 最初の consumer 固定、
+  E-S41 = R5 essay sync eligibility、E-S42 = Packet J shadow contract）。
+  verbatim では持ち込まず、Stage 5.4 の semantic decision を **E-S46** へ統合再採番した。
+  branch-local `E-S40`（window parity）だけは独立した locked authority が要るため
+  **E-S47** として分離した（下記）。branch-local `E-S41`（truncation blocker）は
+  「未解消の制約の記録」であって独立した authority ではないので、本 Decision の
+  §blocker として吸収した。
+- **Decision:** Tutor における `self_analysis` の device claim を配線する。
+  claim token の材料と window 選択は canonical device view
+  （`deviceSelfAnalysisView`）へ委譲し、client は `loadSelfAnalysisLogs()` を読むだけ。
+  shadow の **legacy 側比較元**は body の `studentProfile` ではなく
+  Supabase 層の `context.selfAnalysis` とする。
+- **★ 比較元を訂正する理由 ★**
+  Tutor が prompt に出しているのは `buildTutorSupabaseContextSection` の 4 行
+  （強み / 課題 / 将来の方向性 / 要約）であり、その材料は `tutorContext.ts` の
+  `context.selfAnalysis` である。body の `studentProfile` は block 2 の材料なので、
+  そちらと比べると「どの経路の差か」が混ざる。activity（E-S45）で同じ取り違えがあった。
+  併せて legacy が実際に出している 4 つ目 `futureConnections` の比較を追加する。
+- **★ false-empty MATCH を READY にしない ★**
+  双方に値が無い比較も `MATCH` として数えるが、それだけで readiness を `READY` に
+  しない。fixture や shape 違いで両側が空になっているだけの可能性があり、実際
+  activity と self_analysis の両方で「shape 違いにより常に空同士」という latent bug が
+  起きていた。kind ごとに **実データのある比較が 1 件以上**あることを READY の必要条件とする。
+  ```text
+  この guard は導入時点で Stage 5.1 の assertion を落としており
+  （空同士で MATCH になっていた）、実際に機能することが確認できている。
+  ```
+- **★ self_analysis は本 Stage では READY にしない ★** claim wiring（G7）は完了したが、
+  以下 2 点が残るため readiness は `DEFERRED` のままとする。
+  ```text
+  ① truncation blocker
+     server の行数が cap（5）を超えると Stage 3 が truncated を立て、
+     Stage 4 が unreadable に落とす（E-S8 / E-S30）。claim が一致していても
+     available にならない。self_analysis は log が貯まる kind なので実運用では
+     大半の user が該当し得る。claim wiring とは独立した migration blocker であり、
+     Stage 5.4 QA の T11 が明示的に pin している。
+     → 解消は Stage 5.5（cap を比較 window とみなす）の scope。**本 packet では未昇格**。
+  ② tutor 向けの canonical block が無い
+     legacy が prompt に出している 4 行に対応する block を Stage 5.4 では追加しない
+     （新 block を乱造しない方針）。block coverage の課題であり G2-G5 と同じ扱い。
+  ```
+- **★ これは consumer switch ではない ★** Stage 5 の最初の切替対象は **E-S40 のまま
+  tutor の `basic_info` slot**であり、production tutor prompt は本 Decision 後も
+  legacy 経路のままである（E-S43）。S5-P6 では promotion 前後で
+  `buildTutorSupabaseContextSection` / `buildTutorStudentContextSection` の出力を
+  8 fixture（0 件 / 1 件 / 複数 / window 境界 / 同一 timestamp / device-server 不一致 /
+  full / 空）で **byte 一致**確認している。
+- **mirror gap（既知 / 本 Stage では直さない）:** `dualWriteSelfAnalysisLog` は log 確定時に
+  発火するが **削除は伝播しない**（`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G9）。
+  端末で log を消しても server に残るため、その端末では正当に mismatch になる。
+  Source-Sync が stale な server 値を使わせない設計どおりの挙動であり握り潰さない。
+- **Implementation evidence:** `lib/examSpine/sync/claim/deviceBasicInfo.ts`
+  （`deviceSelfAnalysisToken`）／`app/tutor/page.tsx`（`loadSelfAnalysisLogs()`）／
+  `lib/examSpine/context/shadow/compareTutor.ts`（比較元訂正 ＋ `readinessOf` の
+  meaningful 要件）／`app/api/tutor/route.ts`（shadow へ渡す legacy projection）。
+  QA は `scripts/exam-spine-stage5-4-check.ts`。
+- **Alternatives rejected:**
+  - *body の `studentProfile` と比べ続ける* — 経路の違いが値の違いに化ける。
+  - *空同士 MATCH で READY にする* — latent bug を「移行可能」と誤報する。
+  - *tutor 向け block をこの Stage で追加する* — locked intent の変更であり、
+    block coverage は別 Stage の課題。
+- **Rollback implications:** claim を送らなくなれば `unclaimed` に戻るだけで legacy 挙動は
+  不変。比較元訂正と false-empty guard は shadow の内部評価のみに効く。
+
+## E-S47 — device の history window は server の read window と一致させる（Stage 5.5 feature とは別物）
+
+- **Status:** `LOCKED`（Stage 5.4 の前提として S5-P6 で昇格。branch-local `E-S40` を再採番）
+- **Decision:** history 系 kind の device canonical view は、server が読むのと
+  **同じ部分集合**（`created_at` DESC で上位 `EXAM_READ_CAPS[kind]` 件）を選ぶ。
+  選択規則は `selectDeviceSyncWindow()` として canonical device view 側に置き、
+  Stage 5.4 で claim を配線する `self_analysis` にのみ適用する。
+- **★ なぜ Stage 5.4 の前提なのか ★**
+  Stage 3 は `cap + 1` 件取得して `cap` を超えたら `truncated` にする
+  （`queries.ts` の `created_at DESC, id DESC` ＋ `readSources.ts` の `applyCap`）。
+  device 側が **全件**を hash すると、cap を超えた user は
+  **内容が完全に同期していても永久に mismatch** になる。runtime では「mismatch」と
+  しか見えず原因が表面化しない（E-S38 の schema_version と同じ検出不能な故障）。
+  ```text
+  実測: この primitive が無いと Stage 5.4 QA は type check すら通らない
+        （TS2305: no exported member 'selectDeviceSyncWindow'）。
+        Stage 5.4 の T3（cap parity）と T6（device 7 件 / server cap 5 件でも
+        verified）は本 primitive の semantics を直接 assert している。
+  ```
+- **★ Stage 5.5 feature と同一視しない（S5-P6 の分類訂正）★**
+  ```text
+  device sync window primitive（本 Decision / deviceViews.ts）
+    device 側の「どの N 件を選ぶか」だけを server に合わせる。
+    canonical source の可読性判定は一切変えない。          → 昇格済み
+
+  Stage 5.5 feature（assemble.server.ts + adapters/types.ts）
+    「cap を比較 window とみなし truncated を unreadable にしない」。
+    canonical source の可読性 semantics そのものの変更。    → 未昇格
+  ```
+  S5-P5 の boundary guard は前者を「Stage 5.5 の read-cap window」として
+  一律禁止しており、これは誤分類だった。S5-P6 で guard を
+  「primitive の存在」ではなく「feature surface の不在」を見る形へ訂正した。
+- **★ 並び順そのものは fingerprint に影響しない ★** `listSyncView` は `sortSyncItems` で
+  **各 item の fingerprint 順**に並べ直すため、localStorage の挿入順にも DB の返却順にも
+  依存しない。揃える必要があるのは「どの N 件を選ぶか」だけである。
+- **⚠️ tie（構造的保証ではない / 記録）:** server は同一 `created_at` を `id DESC` で解くが、
+  device 側の view は `id` を含まない（`deviceSelfAnalysisRow` が `id: null` を置く）。
+  同一 timestamp の log が cap 境界をまたぐ場合だけ選択がずれ得る。実運用では
+  `createdAt` がミリ秒まで入るため衝突は起きにくいが、保証ではないことを記録しておく。
+- **適用範囲を広げない:** `statement_review` / `self_pr` / `interview_record` / `essay` の
+  device view にも同じ window 問題があるが、いずれも claim 未配線で production 影響が
+  無いため適用しない。広げるのは各 kind の claim を配線する Stage の判断とする
+  （Stage 5.4 QA の T12 が「self_analysis 以外へ広がっていない」ことを pin する）。
+- **Rollback implications:** primitive を外すと cap 超過 user の claim が
+  永久 mismatch に戻るだけで、production prompt には影響しない。
+
 ---
 
 # 5. Policy / persistence decisions
