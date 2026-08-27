@@ -9,14 +9,14 @@
 //        `workspace->reviews` は `EssayWorkspace.reviews` そのものである
 //        （writer が EssayWorkspace を jsonb へ丸ごと書くため、構成上そうなる）。
 //
-//     2. transport         = NOT_READY（E-S47）
+//     2. transport         = NOT_READY（E-S52）
 //        server は `updated_at DESC` で read window を選ぶが、`updated_at` は
 //        **DB trigger / mirror 書込時刻**であって device の `workspace.updatedAt`
 //        ではない。backfill は LS の updatedAt DESC 順に逐次 upsert するため、
 //        DB の updated_at は device の recency と **逆順**になる。
 //        したがって device は server と同じ N 件を選べない。
 //
-//     3. semantics         = DIFFERENT_SEMANTICS（E-S48）
+//     3. semantics         = DIFFERENT_SEMANTICS（E-S53）
 //        legacy Tutor の小論文材料は localStorage `essayPracticeReview`
 //        （SavedReview 単数）であり、canonical が読む `essayWorkspaces` /
 //        `essay_workspaces` とは **別 store**である。前者に mirror は存在しない。
@@ -24,7 +24,7 @@
 // ★ 本 Stage で **成立してはいけない**こと ★
 //   essay の claim wiring / canonical block / production 到達。§5 で検査する。
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 let fetchCallCount = 0;
@@ -50,7 +50,9 @@ import { serializeDeviceClaim } from '@/lib/examSpine/sync/claim/serialize';
 import { EXAM_DEVICE_CLAIM_MAX_BYTES } from '@/lib/examSpine/sync/claim/types';
 import { EXAM_READ_CAPS, isExamCappedSourceKind } from '@/lib/examSpine/read/types';
 import { EXAM_CONTEXT_BLOCK_REGISTRY } from '@/lib/examSpine/blocks/registry';
-import { EXAM_SYNC_ADAPTER_CONTRACTS } from '@/lib/examSpine/sync/adapters/registry';
+import { EXAM_SYNC_ADAPTER_CONTRACTS,
+  EXAM_SYNC_RUNTIME_ENABLE_BLOCKED } from '@/lib/examSpine/sync/adapters/registry';
+import { isExamSyncRuntimeBlocked } from '@/lib/examSpine/sync/enable';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import * as Q from '@/lib/examSpine/read/queries';
 
@@ -237,7 +239,7 @@ function s2Projection(): void {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// 3. Window / ordering audit — E-S47（transport NOT_READY の根拠）
+// 3. Window / ordering audit — E-S52（transport NOT_READY の根拠）
 // ══════════════════════════════════════════════════════════════════
 function s3Window(): void {
   console.log('\n3. Window / ordering');
@@ -291,7 +293,7 @@ function s3Window(): void {
   }
   const src = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
   const fn = src.slice(src.indexOf('export function deviceEssayView'));
-  check('W2 deviceEssayView に selectDeviceSyncWindow が無いことを pin（E-S47）',
+  check('W2 deviceEssayView に selectDeviceSyncWindow が無いことを pin（E-S52）',
     !fn.slice(0, 300).includes('selectDeviceSyncWindow'));
 
   // ★ CAP 以下なら両者は必ず一致する（transport が成立する境界）★
@@ -322,7 +324,7 @@ function s3Window(): void {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// 4. Legacy Tutor semantics — E-S48（DIFFERENT_SEMANTICS）
+// 4. Legacy Tutor semantics — E-S53（DIFFERENT_SEMANTICS）
 // ══════════════════════════════════════════════════════════════════
 function s4Semantics(): void {
   console.log('\n4. Legacy semantics');
@@ -458,9 +460,54 @@ function s5Invariants(): void {
     !route.includes('essay_workspaces') && !route.includes('loadEssayWorkspaces'));
 
   // registry の blocker が残っている（out-of-band 済でも window が未解決）
-  const reg = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/registry.ts'), 'utf8');
+  //
+  // ★ source 実装は registry.ts の**ソース文字列**を
+  //   /essay:\s*'[^']*runtime claim/ で見ていたが、これは blocker 文が
+  //   1 行の single-quoted literal であることに依存する脆い anchor だった
+  //   （canonical では複数行連結にしたため誤検出した）。
+  //   宣言の **実値** と、それを読む decision layer の判定を直接見る。
+  // ★ essay の device claim は配線しない（E-S52）★
+  //   window parity が構造的に成立しない以上、claim を送ると 6〜10 件の user で
+  //   永久 mismatch になる。claim kind 集合を実ソースから抽出して pin する
+  //   （arity 非依存。後続 stage が引数を増やしても見逃さない）。
+  const claimSrc = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimSrc.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('I6 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const claimKinds = Array.from(
+    claimSrc.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  check('I6 essay の claim は配線されていない（E-S52）', !claimKinds.includes('essay'));
+  eq('I6 tutor の claim kind は 5.1-5.7 の 6 つのまま', claimKinds,
+    ['activity', 'basic_info', 'diagnosis', 'interview_record',
+     'self_analysis', 'statement_review']);
+
+  const blockedReason = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay;
   check('I6 essay の runtime blocker が残っている（claim / enable / canary 禁止）',
-    /essay:\s*'[^']*runtime claim/.test(reg));
+    typeof blockedReason === 'string' && blockedReason.includes('runtime claim'));
+  check('I6 blocker は現 blocker（read window）を名指しする',
+    (blockedReason ?? '').includes('read window'));
+  check('I6 decision layer が構造的に veto する',
+    isExamSyncRuntimeBlocked('essay'));
+  //   禁止 kind の集合は essay のみ（他 kind が黙って増えない）。
+  eq('I6 runtime block は essay のみ',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
+  //   ★ 宣言であって gate ではない ★ production は blocker を読まない。
+  const blockerConsumers: string[] = [];
+  const walkB = (dir: string): void => {
+    for (const e of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${e.name}`;
+      if (e.isDirectory()) { walkB(rel); continue; }
+      if (!/\.tsx?$/.test(e.name)) continue;
+      if (rel === 'lib/examSpine/sync/adapters/registry.ts') continue;
+      if (rel === 'lib/examSpine/sync/enable.ts') continue;
+      if (readFileSync(join(ROOT, rel), 'utf8').includes('EXAM_SYNC_RUNTIME_ENABLE_BLOCKED')) {
+        blockerConsumers.push(rel);
+      }
+    }
+  };
+  for (const d of ['lib', 'app']) walkB(d);
+  eq('I6 blocker を読むのは宣言元と pure decision layer だけ', blockerConsumers, []);
 }
 
 async function main(): Promise<void> {
