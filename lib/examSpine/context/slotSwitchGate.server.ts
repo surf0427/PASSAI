@@ -8,8 +8,8 @@
 //   shadowGate.server.ts と同じ構造。purpose ではなく **slot** 単位で列挙させる。
 //
 // ★ 認識する slot は正式に切替を完了したものだけ ★
-//   E-S40 が開けた `tutor.basic_info`（E-S55）と、S5-P10 で切り替えた
-//   `tutor.activity`（E-S57）の 2 つ。他の token は env に書かれても無視する。
+//   E-S40 が開けた `tutor.basic_info`（E-S56）と、S5-P10 で切り替えた
+//   `tutor.activity`（E-S58）の 2 つ。他の token は env に書かれても無視する。
 //   「次の slot へ勝手に進まない」を env ではなくコードで担保するため allowlist 方式にする。
 //   slot を増やすのは、その slot の AI-visible 同値を実測した packet の明示的な仕事。
 //

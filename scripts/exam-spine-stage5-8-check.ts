@@ -440,7 +440,7 @@ function s5Invariants(): void {
   //
   // ★ S5-P11 retarget（不変条件は 1 つも弱めていない）★
   //   source 側は「section 構築 → shadow gate → canonical 組み立て」の **位置関係**を
-  //   proxy にしていた。本 lineage では controlled consumer switch（E-S55 / E-S57）が
+  //   proxy にしていた。本 lineage では controlled consumer switch（E-S56 / E-S58）が
   //   prompt より前に canonical を必要とするため canonical の組み立てが前へ移り、
   //   さらに prompt 合成が composeTutorPrompt へ抽出済みで `iSection` が route に無い。
   //   位置は不変条件ではない。**不変条件は「essay の prompt 材料が body.* だけであり、

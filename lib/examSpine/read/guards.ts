@@ -91,7 +91,7 @@ export type IndexedRecord = {
 /**
  * `toRecordArray` と同じ走査で、**生配列の何番目だったか**を併せて返す。
  *
- * ★ なぜ index が要るか（E-S56）★
+ * ★ なぜ index が要るか（E-S57）★
  *   `toRecordArray` は「record でない要素を捨てながら詰める」正規化である。
  *   一方、同じ配列を見ている legacy consumer には「生配列の先頭 N slot だけを見る」
  *   ものがあり（tutor の `preferences`）、詰めたあとの列からは

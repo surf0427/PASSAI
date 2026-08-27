@@ -222,7 +222,7 @@ export type CanonicalExamContextResult =
        */
       readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
       /**
-       * tutor の `activity` slot（E-S57）。basic_info slot と同じ扱いで、
+       * tutor の `activity` slot（E-S58）。basic_info slot と同じ扱いで、
        * **これを prompt へ直接載せてはいけない**。consumer 側の
        * `decideTutorActivitySlot` が legacy と突き合わせ、完全一致した場合だけ採用する。
        */

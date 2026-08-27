@@ -508,9 +508,9 @@ function t6Boundary(): void {
   }
   //     tutor plan は 5.1 + 5.2 + 5.3 の 3 block のまま（5.4/5.5/5.6 は block を足さない）。
   const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
-  eq('T6 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks,
+  eq('T6 tutor plan の block は 5.1/5.2/5.3/5.7/5.9 の 5 つ', tutorBlocks,
     ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
-     'interview_issue_line']);
+     'interview_issue_line', 'presentation_result_summary']);
 
   // (d) consumer switch が動いていない。
   const entry = readFileSync(

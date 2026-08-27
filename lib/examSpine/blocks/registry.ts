@@ -234,6 +234,23 @@ export const EXAM_CONTEXT_BLOCK_REGISTRY: Readonly<
       'app/tutor/page.tsx:423 の getInterviewRecords()[0] を材料とする「面接練習の課題」1 行',
   },
 
+  // ── プレゼン ──────────────────────────────────────────────────────
+  presentation_result_summary: {
+    sourceKind: 'presentation',
+    // AI（PresentationFeedback）が生成した評価をラベル化して並べた要約。
+    provenance: 'ai_derived',
+    derivation: 'deterministic',
+    headingOwner: 'none',
+    meaning:
+      '直近 1 件のプレゼン評価の要約行（実施日 / 大学・学部 / テーマ / 総合評価 / ' +
+      'カテゴリ評価 / 良かった点3 / 改善点3 / 次の練習2）。' +
+      '録画・Storage URL・STT 全文（transcript）・発表原稿（script）・Q&A 履歴は含まない',
+    legacySource:
+      'lib/contextBuilders/tutorPresentationSection.ts の projectTutorPresentationContext + ' +
+      'renderTutorPresentationLines（正本を共有）＝ ' +
+      'buildTutorSupabaseContextSection の「・直近のプレゼン練習（…）の結果が保存されています。」以下',
+  },
+
   // ── 診断 ──────────────────────────────────────────────────────────
   diagnosis_type_hint: {
     sourceKind: 'diagnosis',

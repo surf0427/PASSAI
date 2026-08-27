@@ -462,7 +462,7 @@ function basicInfoRow(): ExamBasicInfoServerRow {
       { university: 'A大学', faculty: '法学部', department: '法律学科' },
       { university: 'B大学', faculty: null, department: null },
     ],
-    // ★ sync view には入らない事実列（E-S56）★ 入っていないことは T? が検査する。
+    // ★ sync view には入らない事実列（E-S57）★ 入っていないことは T? が検査する。
     rawPreferences: [
       { sourceIndex: 0, university: 'A大学', faculty: '法学部', department: '法律学科' },
       { sourceIndex: 1, university: 'B大学', faculty: null, department: null },

@@ -50,6 +50,7 @@ import type {
   ExamBasicInfoServerRow,
   ExamDiagnosisServerRow,
   ExamInterviewRecordServerRow,
+  ExamPresentationServerRow,
   ExamSelfAnalysisServerRow,
   ExamStatementReviewServerRow,
 } from '../read/rowMappers';
@@ -95,6 +96,7 @@ import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasic
 import { projectTutorActivitySlot, type TutorActivitySlot } from './tutorActivitySlot';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
 import { projectInterviewIssueLine } from './interviewRecordProjection';
+import { projectPresentationResultSummary } from './presentationProjection';
 import {
   projectActivity,
   projectBasicInfo,
@@ -599,7 +601,7 @@ function resolveContextInput(args: {
       next.activityCategoryCounts = formatActivityCategoryCounts(summary);
       origins.activity = 'server';
     }
-    // ★ E-S57: tutor の activity slot を別途 project する ★
+    // ★ E-S58: tutor の activity slot を別途 project する ★
     //   block（activityCategoryCounts）が持つのは行の「値」部分だけで、legacy の
     //   section 行は `計N件` も要る。slot は totalCount + categoryCounts の pair を返す。
     //   同じ row / 同じ集計関数を使うので追加 query は 1 本も出ない。
@@ -662,6 +664,24 @@ function resolveContextInput(args: {
     if (line) {
       next.interviewIssueLine = line;
       origins.interview_record = 'server';
+    }
+  }
+
+  // presentation → presentationResultSummary（Stage 5.9 / G4）
+  //
+  // ★ class 2 = server_authoritative（E-S3）★
+  //   device claim を要求しない。authority は「authenticated owner + owner-scoped
+  //   RLS + server state」であり、Source-Sync の verified/mismatch 軸を持たない。
+  //
+  // ★ 本文を持ち込まない ★
+  //   transcript / storage_path / script / material_path は canonical query が
+  //   そもそも SELECT しない。ここで取り出すのも要約行だけである（E-P5 / Canon §55）。
+  if (usable('presentation')) {
+    const rows = slot<readonly ExamPresentationServerRow[] | null>('presentation');
+    const summary = projectPresentationResultSummary(rows);
+    if (summary) {
+      next.presentationResultSummary = summary;
+      origins.presentation = 'server';
     }
   }
 

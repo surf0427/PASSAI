@@ -216,6 +216,12 @@ function buildBlockContents(
     //   済ませている。ここで再度掛けると二重整形になり legacy と byte がずれる。
     interview_issue_line: input.interviewIssueLine ?? null,
 
+    // プレゼン: 要約行をそのまま content にする。
+    // ★ ここで truncate / join / slice を足さない ★
+    //   件数・字数・カテゴリラベル・行連結は tutorPresentationSection（legacy の正本）が
+    //   済ませている。再度掛けると二重整形になり legacy と byte がずれる。
+    presentation_result_summary: input.presentationResultSummary ?? null,
+
     tutor_student_context: input.tutorSources
       ? buildTutorStudentContextSection(buildTutorStudentContext(input.tutorSources))
       : null,

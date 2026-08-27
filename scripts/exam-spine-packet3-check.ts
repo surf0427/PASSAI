@@ -199,7 +199,7 @@ const PAYLOADS: Array<[string, unknown]> = [
   ['payload が配列', []],
   ['payload が文字列', 'x'],
 
-  // ── S5-P10: projection semantics の全数行列（E-S56）─────────────────
+  // ── S5-P10: projection semantics の全数行列（E-S57）─────────────────
   //   legacy は **生配列の先頭 3 slot** を見て、その中の record だけを使う。
   //   canonical は `rawPreferences`（生 index つきの事実列）から同じ規則を再現する。
   //   不正値の **位置** と **型** を総当たりし、両者が byte 一致することを示す。
@@ -310,11 +310,11 @@ async function equivalenceMatrix(): Promise<void> {
     eq('生 slot 0..2 が全部不正なら canonical slot は null', projectTutorBasicInfoSlot(r), null);
   }
 
-  // ★ S5-P10（E-S56）★ projection の構造差は解消済み。
+  // ★ S5-P10（E-S57）★ projection の構造差は解消済み。
   //   Packet 3 では「生 slot が不正値に消費されたか」が row に残らず
   //   `divergent_projection` へ倒すしかなかった。read layer が `rawPreferences` を
   //   報告するようになったため、legacy の規則を再現できる。
-  eq('★ divergent_projection は 0 件（E-S56）', reasons.divergent_projection ?? 0, 0);
+  eq('★ divergent_projection は 0 件（E-S57）', reasons.divergent_projection ?? 0, 0);
   eq('★ would_reduce_context は projection 由来では 0 件', reasons.would_reduce_context ?? 0, capResidual);
   // ★ 「veto を外して数字を合わせた」のではないことを示す ★
   //   実際に食い違う組を渡したら今も legacy に倒れること（別途 slotDecision でも検査）。
@@ -377,7 +377,7 @@ async function equivalenceMatrix(): Promise<void> {
   check('評定が section に出ない', !piiSection.includes('4.2') && !piiSection.includes('国語'));
 }
 
-// ── raw metadata の封じ込め（E-S56）─────────────────────────────────
+// ── raw metadata の封じ込め（E-S57）─────────────────────────────────
 //
 // `rawPreferences` / `sourceIndex` は **consumer compatibility のための事実**であって
 // AI-visible でも wire でもない。次のどれにも出てはいけない:

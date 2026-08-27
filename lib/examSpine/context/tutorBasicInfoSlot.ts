@@ -62,7 +62,7 @@ function trimmed(value: string | null | undefined): string {
  *   targetFields    … 同上（faculty）
  *   どれも空なら **null**（＝ section に basic_info 行を 1 行も出さない）
  *
- * ★ 生 slot を数える（E-S56）★
+ * ★ 生 slot を数える（E-S57）★
  *   legacy は `preferences.slice(0, 3)` を **生配列**に対して行い、そのあとで
  *   非 record を捨てる。したがって「先頭 3 slot のうち何個が非 record に消費されたか」
  *   が採用件数に効く。正規化列（`row.preferences`）は非 record を詰めてしまうので
@@ -151,7 +151,7 @@ export type TutorBasicInfoSlotFallbackReason =
  *   これは「一致するまで canonical を使わない」という弱い妥協ではなく、
  *   制約そのものの機械的な強制である。veto は **恒久的な安全網として残す**。
  *
- * ★ projection 差は解消済み（E-S55 → E-S56）★
+ * ★ projection 差は解消済み（E-S56 → E-S57）★
  *   Packet 3 の時点では次の構造差が残っていた:
  *
  *     legacy      : preferences を **生のまま 3 件に切ってから** 非 record を捨てる

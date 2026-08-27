@@ -365,10 +365,13 @@ function t7Static(): void {
   //   後続 stage が **新設**する block id。interview_record は interview_issue_line を足す。
   check('T8 Stage 5.7 の interview_issue_line は昇格済み（許可）',
     blockIds.includes('interview_issue_line'));
-  //   Stage 5.8 以降（essay / presentation）が新設する block はまだ無い。
-  for (const later of ['essay_issue_line', 'presentation_issue_line']) {
-    check(`T8 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
-  }
+  check('T8 Stage 5.9 の presentation_result_summary は昇格済み（許可）',
+    blockIds.includes('presentation_result_summary'));
+  //   ★ essay は block を作らない（E-S53）★ 推測 id ではなく sourceKind で 0 件を見る。
+  const essayBlocks = blockIds.filter(
+    (id) => (EXAM_CONTEXT_BLOCK_REGISTRY as Record<string, { sourceKind?: string }>)[id]
+      ?.sourceKind === 'essay');
+  eq('T8 sourceKind=essay の block は作られていない（E-S53）', essayBlocks, []);
   //   tutor が申告する device claim kind は Stage 5.3 時点で basic_info + diagnosis +
   //   activity の 3 つ。5.4 / 5.6 / interview_record はここへ kind を足す。
   //

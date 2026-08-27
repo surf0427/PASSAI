@@ -10,7 +10,7 @@
 
 | 項目 | 値 |
 |---|---|
-| Date | 2026-08-26 |
+| Date | 2026-08-27 |
 | Repository | `/Users/yk/paid-app` → `github.com/surf0427/PASSAI.git` |
 | Branch | `exam-spine-w1-convergence-v2`（canonical lineage = `exam-spine-stage3` 系列 / E-S23） |
 | Base HEAD（Stage 0 着手時） | `200b5a62f8287a55daf434a2f69c46a4296bc39d` |
@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `bde6293e1fcc0aaddaa650f8ce734979f4dc0999` |
+| Canonical HEAD at this arbitration | `40b76a85a2ab86874316d7c3808fcef57b7580a1` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,12 +49,12 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `de30cae`（継続前進中） | **PARTIAL（Stage 5.1〜5.8 昇格済み。5.8 は blocker 確定まで）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）、Stage 5.8（essay の **blocker 確定のみ**。claim / window / block は意図的に作らない）は S5-P10 で（`f3fa929`〜`985ba0f`／decision → **E-S52 / E-S53**、E-S50 に essay 行を追記）canonical へ targeted cherry-pick 済み。**未昇格**は presentation（Stage 5.9 相当）と、statement_review の **consumer semantics**（product 判断待ち / E-S49）、essay の **transport**（E-S52 の read window blocker）、および全 kind の **AI-visible consumer activation** である |
+| `exam-spine-w1-convergence-v2` | `de30cae`（tip / Stage 5.9 まで） | **PARTIAL（Stage 5.1〜5.9 昇格済み。5.8 は blocker 確定まで）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）、Stage 5.8（essay の **blocker 確定のみ**。claim / window / block は意図的に作らない）は S5-P10 で（`f3fa929`〜`985ba0f`／decision → **E-S52 / E-S53**、E-S50 に essay 行を追記）Stage 5.9（presentation の canonical block ＋ shadow 実比較。class 2 なので Source-Sync は増やさない）は S5-P11 で（`91e9ca6`〜`7792ebc`／decision → **E-S54**、E-S50 に presentation の **N/A** 行を追記）canonical へ targeted promotion 済み。**source branch の tip はここまで**（Stage 5.10 相当は source にも未実装）。**未昇格**は statement_review の **consumer semantics**（product 判断待ち / E-S49）、essay の **transport**（E-S52 の read window blocker）、および全 kind の **AI-visible consumer activation** である |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `fb32d50` | **SUPERSEDED（内容は S5-P8 で canonical に到達済み）** | transport 収束（`ac1ef85` / signal.ts 撤去 + verdict の transport 非依存化）は s5p2 lineage 側で `299549e` として再実装されており、S5-P8 で s5p3 経由 merge されたときに canonical へ入った。`verdict.ts` / `signal.ts` は s5p1 と s5p3 で file 単位で同一、`E-H7` 節も byte 一致であることを実測したため **duplicate promotion しない**。decision は **E-S49**（人間裁定 / E-H7 = OPTION C。`E-S39` Decision 2 を supersede）。**branch は削除しない** |
 | `exam-spine-s5p2-lineage-convergence` | `6a017db` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | Packet E 統合・L1 server read layer の再配置・prompt 合成の抽出・loader / composition / canary characterization QA。s5p3 の ancestor なので controlled-switch lineage には入っているが、`exam-spine-stage4-stabilize` の tree には **存在しない**（S5-P11 で実測: `lib/contextBuilders/tutor/serverRead/reader.server.ts` / `lib/tutor/composeTutorPrompt.ts` いずれも ABSENT） |
-| `exam-spine-s5p3-basic-info-switch` | `c33bacd` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | tutor `basic_info` slot の切替（現行 **E-S55**）と transport 収束（現行 **E-S54**）。decision ID は canonical の前進に合わせて 3 度再採番している（E-S38-3。canonical 側の番号は 1 つも動かしていない）。`slotSwitchGate.server.ts` / `tutorBasicInfoSlot.ts` は canonical tree に **存在しない**（S5-P11 実測）。**branch は削除しない** |
+| `exam-spine-s5p3-basic-info-switch` | `c33bacd` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | tutor `basic_info` slot の切替（現行 **E-S56**）と transport 収束（現行 **E-S55**）。decision ID は canonical の前進に合わせて 3 度再採番している（E-S38-3。canonical 側の番号は 1 つも動かしていない）。`slotSwitchGate.server.ts` / `tutorBasicInfoSlot.ts` は canonical tree に **存在しない**（S5-P11 実測）。**branch は削除しない** |
 | `exam-spine-w1-packet-e` | `ea20e07` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | unique commit 13 本を列挙・審査のうえ merge。legacy read layer の退避先（`lib/contextBuilders/tutor/serverRead/**` 4 file）と shipping tutor runtime / QA を **controlled-switch lineage** へ合流させ single integration base を成立させた。canonical branch tree には未反映（S5-P11 実測）。**branch は削除しない** |
 
 ### S5-P8 — Packet 1/2/3 lineage の canonical 収束 + projection semantics の確定
@@ -108,7 +108,7 @@ packet branch    exam-spine-s5p5-activity-switch
 target 選定（推測ではなく E-S40 の 4 条件を再測して決めた）:
   activity / diagnosis が 4 条件（server read / device claim / canary / canonical block）を満たす。
   activity を先に採る根拠は schema_version drift が無いこと（E-S45 実測）と
-  集計正本が既に共有されていること。→ E-S55 に記録。
+  集計正本が既に共有されていること。→ E-S56 に記録。
 
 実測:
   AI-visible byte equivalence   44 payload すべて一致（legacy loader vs 切替後 loader）
@@ -156,7 +156,7 @@ target 選定（推測ではなく E-S40 の 4 条件を再測して決めた）
     lib/examSpine/context/tutorActivitySlot.ts                ABSENT
     scripts/exam-spine-packet3-check.ts / packet4-check.ts    ABSENT
   canonical tree に残っている退役済み資産
-    lib/examSpine/sync/signal.ts                              PRESENT（lineage 側では E-S54 で撤去済み）
+    lib/examSpine/sync/signal.ts                              PRESENT（lineage 側では E-S55 で撤去済み）
 
   → canonical branch は Stage 5.x（claim / block / readiness）track を進めており、
     controlled consumer switch track は本 lineage 側にしか無い。**2 本の track が並行している。**
@@ -164,9 +164,9 @@ target 選定（推測ではなく E-S40 の 4 条件を再測して決めた）
 promotion branch（本 packet の成果物）:
   branch  exam-spine-s5p6-canonical-promotion
   base    canonical @ 87867f3 を取り込み済み（fast-forward 可能な状態）
-  内容    Packet 1/2/3 + basic_info（E-S55 / E-S56）+ activity（E-S57）+ transport（E-S54）
+  内容    Packet 1/2/3 + basic_info（E-S56 / E-S57）+ activity（E-S58）+ transport（E-S55）
   decision 再採番  canonical が E-S48-E-S53 を占めるため、後発である本 lineage の 4 件を
-                   E-S54 / E-S55 / E-S56 / E-S57 へ再採番し、全参照を retarget した。
+                   E-S55 / E-S56 / E-S57 / E-S58 へ再採番し、全参照を retarget した。
                    canonical 側の番号は 1 つも動かしていない（E-S38-3）。
 
 canonical branch pointer の移動は本 packet では **行っていない**。理由は §promotion 参照。
@@ -306,8 +306,81 @@ Stage 5.8  essay            ← ★ S5-P10 で canonical へ昇格（blocker 確
   def3882  verify essay projection, window, and semantics separately
            → canonical f3fa929 + 985ba0f（blocker 検査を実値化 / claim 未配線 pin 追加）
   acb7fb1 相当の STATE 反映 → 本 STATE の essay 行
-      ↓（5.9 以降は未昇格）
-presentation（Stage 5.9 相当）← 未昇格。branch-local E-S49 を使用（canonical E-S49 と衝突）
+      ↓
+Stage 5.9  presentation      ← ★ S5-P11 で canonical へ昇格 ★
+  85f3e27  extract the presentation section normalizer as a pure module
+           → canonical 91e9ca6（内容不変。byte 不変を 30 fixture で実測）
+  29a7bfc  build a canonical tutor block for presentation
+           → canonical 6d8d77f（E-S45 参照のみ E-S50 へ訂正。source の E-S45 は
+             tie-break 監査だが canonical の E-S45 は activity で別 decision）
+  7c082d7  promote the presentation shadow comparison to a real comparison
+           → canonical c920de9（内容不変）
+  57743de  verify presentation authority, semantics, and block separately
+           → canonical 2cb3150 + 6add46b + 7792ebc
+             （固定長 slice 廃止 / robust prompt anchor / 先行 Stage 境界 /
+               golden bytes / negative control で見つけた 5 つの盲点を追加）
+  de30cae  register E-S49 …
+           → canonical 1d9c0a9（**E-S54** へ再採番。E-H7（採番衝突の PENDING_HUMAN）は
+             canonical では E-S37 / E-S38 が lineage 帰属を LOCKED 済みのため持ち込まない）
+      ↓（5.10 以降は未昇格 / source branch にもまだ存在しない）
+self_pr（Stage 5.10 相当）← source branch の tip が de30cae のため **未実装**
+```
+
+### presentation readiness（S5-P11 / class 2 なので Source-Sync 軸を使わない）
+
+```text
+authority model READY    class 2 = server_authoritative（E-S3 / LOCKED）。
+                         device に canonical は存在せず client の値は表示用 cache。
+                         構造的証明: EXAM_SYNC_SUPPORTED_KINDS に無く、
+                         examSyncUsability は canary 許可 + verified でも
+                         `kind_not_syncable` で veto する
+
+Source-Sync     N/A      ★ transport READY / NOT_READY という語を使わない ★
+                         claim / device window / fingerprint / verified は
+                         **1 つも作っていない**。作るべきでもない（E-S3）。
+                         essay 用の EXAM_SYNC_RUNTIME_ENABLE_BLOCKED も流用しない
+                         （class 2 は既に構造的に落ちており、blocker を足すと
+                           「解除すれば使える」という誤った含意が生まれる）
+
+order audit     N/A      E-S50 は device↔server の window parity 監査であり、
+                         claim を配線する kind が対象。presentation は claim を
+                         配線しないため Level A/B/C を与えない（E-S50 に N/A 行を追加）
+
+semantics       READY    E-S54 classification **B — EQUIVALENT_AFTER_NORMALIZATION**。
+                         legacy と canonical は同一 table・同一 read graph・同一 record
+                         （presentation_results を created_at DESC で最新 1 件）。
+                         差は canonical mapper の shortText=200 / longText=4000 の
+                         先行 truncate だけで、legacy の 40 / 120 字がそれより短いため
+                         冪等（結果を変えない）
+
+block           READY    presentation_result_summary。整形の正本は
+                         lib/contextBuilders/tutorPresentationSection.ts を legacy と共有し、
+                         canonical 側で書き写さない（E-P6）
+
+shadow          READY    presentation.resultSummary を実比較（両側を同じ renderer に通す）。
+                         録画 / STT 全文 / 発表原稿 / Q&A 履歴は
+                         presentation.rawArtifacts = raw_body_excluded
+
+consumer        DEFERRED plan に載せたのは shadow から build させるためで、
+                         production prompt は legacy の Supabase 層のまま。
+                         AI-visible ではない（PRE_HASH == POST_HASH で実測）
+
+overall         READY_AS_CANONICAL_CONTRACT
+                         「consumer 未活性だから未完了」ではない。Stage 5.9 の authority は
+                         block と shadow contract の確立までであり、AI-visible 化を
+                         要求していない
+```
+
+### ★ 共有正本を持つ Stage では「比較」だけでは足りない ★
+
+```text
+legacy と canonical が同じ normalizer を共有した結果、書式を変えると
+**両側が同時に変わり shadow comparison は MATCH のまま**通る。
+S5-P11 の negative control は実際にこれを踏んだ（delimiter / 件数 cap の変更が
+比較検査をすり抜けた）。したがって QA は
+  絶対 bytes（golden 9 件。値は「抽出前の legacy 出力」から採る）
+  legacy 由来のリテラル（3 / 3 / 2 / 40 / 120。定数と自分自身を比べない）
+を併置する。
 ```
 
 ### essay readiness（S5-P10 / 層ごとに分ける）
@@ -480,18 +553,24 @@ Stage 5.4 の semantic decision を **E-S46** へ統合し、window prerequisite
 実例 4: Stage 5.6 の branch-local `E-S44` / `E-S45` も canonical の同番とは別 Decision
 （canonical E-S44 = diagnosis hint 表 / E-S45 = activity カテゴリ別件数）。S5-P8 で
 **E-S49 / E-S50** へ再採番した。
-⚠️ source branch は presentation 用に branch-local `E-S49` も使い始めている。
+✅ presentation 用の branch-local `E-S49` は S5-P11 で canonical `E-S54` へ再採番済み。
    canonical `E-S49` は statement_review の projection classification である。
-   **presentation を昇格する packet でも必ず再採番すること。**
 実例 5: Stage 5.7 の branch-local `E-S46` も canonical の同番とは別 Decision
 （canonical E-S46 = self_analysis の比較元と false-empty guard）。S5-P9 で
 **E-S51** へ再採番した。
 実例 6: Stage 5.8 の branch-local `E-S47` / `E-S48` も canonical の同番とは別 Decision
 （canonical E-S47 = device history window parity / E-S48 = cap は比較 window）。
 S5-P10 で **E-S52 / E-S53** へ再採番した。
-⚠️ 残る既知衝突: source は presentation 用に branch-local `E-S49` を使っている
-   （canonical E-S49 = statement_review の projection classification）。
-   **presentation を昇格する packet では必ず再採番すること。**
+実例 7: Stage 5.9 の branch-local `E-S49` も canonical の同番とは別 Decision
+（canonical E-S49 = statement_review の projection classification）。
+S5-P11 で **E-S54** へ再採番した。
+✅ これで source branch tip（`de30cae`）までの衝突はすべて解消済み。
+   source が今後 `E-S50` 以降を採番したら、同じ手順で canonical の未使用 ID へ再採番する。
+   なお source は `E-H7`（採番衝突そのものを PENDING_HUMAN とする decision）も
+   追加しているが、canonical では **持ち込まない**。canonical lineage の帰属は
+   E-S37 / E-S38 が既に LOCKED で決めており（`exam-spine-stage4-stabilize`）、
+   採番 authority もそこにある。canonical の `E-H7` は別内容（device claim transport
+   の 2 実装 / RESOLVED）で既に埋まっている。
 昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule
