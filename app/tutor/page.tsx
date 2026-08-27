@@ -620,7 +620,14 @@ export default function TutorPage() {
         loadSelfAnalysisLogs(),
         //   Stage 5.6: statement_review も申告する（G8）。history kind なので
         //   window 選択は canonical view が行う。
-        loadReviewHistory(),
+        //   ★ safeSource で包む ★
+        //     `loadReviewHistory()` は localStorage の値が「配列でない有効な JSON」の
+        //     とき `raw.map is not a function` を投げる。ここは `try` の外・
+        //     `setLoading(true)` の後なので、投げると送信が spinner 固定のまま中断する。
+        //     同ファイルの既存呼び出し（statementReviewLatest）と直後の
+        //     interview_record 申告は既に safeSource で包まれており、ここだけ抜けていた。
+        //     claim は落としても unclaimed に倒れるだけで AI-visible 出力は変わらない。
+        safeSource(() => loadReviewHistory()) ?? [],
         //   Stage 5.7: interview_record も申告する（G5）。
         //   ★ prompt 材料と同じ source を申告する ★
         //     この route が prompt に出している「面接練習の課題」行は
