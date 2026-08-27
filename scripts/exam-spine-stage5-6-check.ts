@@ -40,6 +40,14 @@ import type { ExamRequestAuthorization } from '@/lib/examSpine/read/requestSnaps
 import { createRecordingExecutor, USER_A, type FakeDb } from './fixtures/examSpineStage3';
 
 const ROOT = process.cwd();
+
+/** `export function <name>(` から次の `export function` 直前までを切り出す。 */
+function fnBody(src: string, name: string): string {
+  const i = src.indexOf(`export function ${name}(`);
+  if (i === -1) return '';
+  const next = src.indexOf('\nexport function ', i + 1);
+  return next === -1 ? src.slice(i) : src.slice(i, next);
+}
 let passed = 0;
 const failures: string[] = [];
 function check(label: string, ok: boolean, detail = ''): void {
@@ -452,32 +460,32 @@ function t6Boundary(): void {
   const kinds = Array.from(
     claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
   ).map((m) => m[1]).sort();
-  eq('T6 tutor の claim kind は 5.1-5.6 の 5 つのみ', kinds,
-    ['activity', 'basic_info', 'diagnosis', 'self_analysis', 'statement_review']);
+  eq('T6 tutor の claim kind は 5.1-5.7 の 6 つのみ', kinds,
+    ['activity', 'basic_info', 'diagnosis', 'interview_record', 'self_analysis', 'statement_review']);
 
   // (b) device window primitive は self_analysis + statement_review のみ。
   //     Stage 5.7 以降（self_pr / interview_record / essay）へ広げない。
   const deviceViews = readFileSync(
     join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
-  const windowed = ['deviceSelfAnalysisView', 'deviceStatementReviewView', 'deviceSelfPrView',
-    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
-    const i = deviceViews.indexOf(`export function ${fn}(`);
-    return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  const windowed = ['deviceSelfAnalysisView', 'deviceStatementReviewView',
+    'deviceInterviewRecordView', 'deviceSelfPrView', 'deviceEssayView'].filter((fn) => {
+        return fnBody(deviceViews, fn).includes('selectDeviceSyncWindow');
   }).sort();
-  eq('T6 window primitive は self_analysis + statement_review のみ', windowed,
-    ['deviceSelfAnalysisView', 'deviceStatementReviewView']);
+  eq('T6 window primitive は 5.4/5.6/5.7 の 3 kind のみ', windowed,
+    ['deviceInterviewRecordView', 'deviceSelfAnalysisView', 'deviceStatementReviewView']);
 
   // (c) ★ tutor-facing canonical block を作っていない（§Canonical block boundary）★
   const registry = readFileSync(join(ROOT, 'lib/examSpine/blocks/registry.ts'), 'utf8');
   for (const forbidden of ['statement_review_tutor', 'statement_review_summary',
     'statement_review_history', 'statement_weakness_line',
-    'self_analysis_tutor', 'self_analysis_summary_line', 'interview_issue_line']) {
+    'self_analysis_tutor', 'self_analysis_summary_line']) {
     check(`T6 block \`${forbidden}\` は追加されていない`, !registry.includes(`${forbidden}:`));
   }
   //     tutor plan は 5.1 + 5.2 + 5.3 の 3 block のまま（5.4/5.5/5.6 は block を足さない）。
   const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
-  eq('T6 tutor plan の block は 3 つのまま', tutorBlocks,
-    ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts']);
+  eq('T6 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks,
+    ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
+     'interview_issue_line']);
 
   // (d) consumer switch が動いていない。
   const entry = readFileSync(

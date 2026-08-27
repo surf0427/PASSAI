@@ -447,10 +447,11 @@ function t9Boundary(): void {
 
   // (a) tutor plan の block 列 — Stage 5.1 / 5.2 / 5.3 の 3 つだけ。
   const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
-  eq('T9 tutor plan の block は 5.1 + 5.2 + 5.3 の 3 つだけ', tutorBlocks, [
+  eq('T9 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks, [
     'tutor_student_context',
     'diagnosis_type_hint',
     'activity_category_counts',
+    'interview_issue_line',
   ]);
 
   // (b) tutor claim kind — **実ソースから抽出**する。
@@ -464,10 +465,11 @@ function t9Boundary(): void {
   const declaredKinds = Array.from(fnBody.matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g))
     .map((m) => m[1])
     .sort();
-  eq('T9 tutor の claim kind は 5.1-5.6 の 5 つのみ', declaredKinds, [
+  eq('T9 tutor の claim kind は 5.1-5.7 の 6 つのみ', declaredKinds, [
     'activity',
     'basic_info',
     'diagnosis',
+    'interview_record',
     'self_analysis',
     'statement_review',
   ]);
@@ -476,8 +478,11 @@ function t9Boundary(): void {
   //     interview_record（5.6 の先）は `interview_issue_line` を新設する。
   const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
   check('T9 activity_category_counts が登録されている', blockIds.includes('activity_category_counts'));
-  for (const later of ['interview_issue_line']) {
-    check(`T9 後続 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  check('T9 Stage 5.7 の interview_issue_line は昇格済み（許可）',
+    blockIds.includes('interview_issue_line'));
+  //   Stage 5.8 以降（essay / presentation）が新設する block はまだ無い。
+  for (const later of ['essay_issue_line', 'presentation_issue_line']) {
+    check(`T9 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
   }
 
   // (d) consumer switch は行われていない — first consumer / slot の pin が動いていない。
