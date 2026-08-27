@@ -562,8 +562,27 @@ function staticChecks(): void {
   //   不変条件は「shadow は観測であって出力に影響しない」。したがってこの 2 変数は
   //   宣言 / shadow block 内での代入 / telemetry への受け渡し 以外に現れてはいけない。
   const SHADOW_OBSERVATIONS = ['shadowOverall', 'shadowMismatchCount'] as const;
-  const flushAt = routeCode.indexOf('lat.flush({');
-  check('telemetry flush の位置を特定できる', flushAt !== -1);
+  //
+  // ★ 修正（S5-P12）★ 旧実装は `routeCode.indexOf('lat.flush({')` を境界にして
+  //   「それより後ろは telemetry だから合法」としていた。しかし最初の `lat.flush({` は
+  //   **早期 return の error path**（phase: 'emergency'）であり route のかなり手前に出る。
+  //   その結果 **route 本体のほぼ全域が免除**され、prompt 合成へ shadow の enum を
+  //   持ち込む注入を検出できなかった（negative control N4 で実測）。
+  //   位置ではなく **`lat.flush({ ... })` の引数 span の内側か**で判定する。
+  const flushSpans: Array<[number, number]> = [];
+  for (const m of routeCode.matchAll(/lat\.flush\(\{/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1; // '{' の位置
+    let depth = 0;
+    for (let i = open; i < routeCode.length; i += 1) {
+      if (routeCode[i] === '{') depth += 1;
+      else if (routeCode[i] === '}') {
+        depth -= 1;
+        if (depth === 0) { flushSpans.push([open, i]); break; }
+      }
+    }
+  }
+  check('telemetry flush の引数 span を特定できる', flushSpans.length > 0);
+  const inFlush = (at: number): boolean => flushSpans.some(([a, b]) => at > a && at < b);
   for (const name of SHADOW_OBSERVATIONS) {
     const uses = [...routeCode.matchAll(new RegExp(`(?<![\\w$])${name}(?![\\w$])`, 'g'))];
     check(`${name} が route に現れる（空回り検査でない）`, uses.length > 0);
@@ -573,7 +592,7 @@ function staticChecks(): void {
       const line = routeCode.slice(lineStart, routeCode.indexOf('\n', at));
       if (new RegExp(`^\\s*let ${name}`).test(line)) return false; // 宣言
       if (new RegExp(`^\\s*${name} = `).test(line)) return false; // shadow block 内の代入
-      if (at > flushAt && flushAt !== -1) return false; // telemetry
+      if (inFlush(at)) return false; // telemetry の引数の中だけ許可
       return true;
     });
     eq(`${name} は宣言 / shadow 内代入 / telemetry 以外に現れない`,

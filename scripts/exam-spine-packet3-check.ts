@@ -617,6 +617,19 @@ function staticChecks(): void {
   //   どの suite でも検出されなかったため塞いだ。slot 切替と shadow は同じ context を
   //   共用する契約であり、2 本目を足すと同一 request 内で canonical read が二重化する。
   const routeBody = route.split('\n').filter((l) => !/^\s*import /.test(l)).join('\n');
+
+  // ★ route の wiring そのものを pin する（S5-P12 / negative control N1）★
+  //   equivalence harness は module を直接呼ぶため、route の配線を外しても緑のままだった
+  //   （activity 側は packet4 で塞いであったが basic_info 側に同じ穴が残っていた）。
+  //   packet4 の activity 検査と対称にする。
+  check('route が decideTutorBasicInfoSlot を呼んでいる',
+    /decideTutorBasicInfoSlot\s*\(/.test(routeBody));
+  check('route が basic_info slot の gate を評価している',
+    /isExamSpineSlotSwitchEnabled\('tutor\.basic_info',/.test(routeBody));
+  check('basic_info slot の usable は gate AND canonical.ok',
+    /decideTutorBasicInfoSlot\(\{[\s\S]{0,200}?usable: slotSwitchEnabled && canonical\?\.ok === true/
+      .test(routeBody));
+
   eq('canonical assembly の呼び出しは route に 1 箇所だけ',
     (routeBody.match(/buildCanonicalExamContext\s*\(/g) ?? []).length, 1);
   eq('canonical への代入先は 1 つだけ',
