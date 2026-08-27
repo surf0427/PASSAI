@@ -65,6 +65,8 @@ export type TutorLegacyInput = {
    */
   readonly diagnosisTypeHint?: unknown;
   readonly presentationLatest?: unknown;
+  /** legacy tutor が prompt に出している「直近のプレゼン練習の結果」行（改行連結）。 */
+  readonly presentationResultSummary?: unknown;
   /**
    * ★ この 2 つは同じ 1 レコード由来である（E-S46）★
    *   `app/tutor/page.tsx:423` の `getInterviewRecords()[0]` から両方が作られる。
@@ -325,9 +327,28 @@ export function compareTutorShadow(input: {
       legacy: text(input.legacy.diagnosisTypeHint),
       canonical: blockContent(input.context, 'diagnosis_type_hint'),
       provenance: prov('diagnosis') }),
-    compareField({ field: 'presentation.latest', kind: 'presentation',
-      legacy: input.legacy.presentationLatest, canonical: null, provenance: prov('presentation'),
-      omitted: 'no_canonical_block' }),
+    // ── presentation ─────────────────────────────────────────────
+    //
+    // ★ Stage 5.9 で canonical block ができたので実比較へ昇格（G4）★
+    //   ★ 比較対象は「Tutor が prompt に出している表現」＝要約行 ★
+    //     legacy の `presentationLatest` は date/university/overall/categories… を
+    //     持つ record で、canonical 側の block content は整形後の複数行文字列。
+    //     そのまま比べると常に VALUE_MISMATCH になり「移行できない」という
+    //     誤った結論になる（statement_review / interview_record と同じ罠）。
+    //     どちらも `renderTutorPresentationLines` を通した値で比べる。
+    //
+    // ★ class 2 なので syncStatus は verified にならない（E-S3）★
+    //   device claim が無いことは mismatch ではない。authority は server 側にある。
+    compareField({ field: 'presentation.resultSummary', kind: 'presentation',
+      legacy: text(input.legacy.presentationResultSummary),
+      canonical: blockContent(input.context, 'presentation_result_summary'),
+      provenance: prov('presentation') }),
+    // 録画 / STT 全文 / 発表原稿 / Q&A 履歴は canonical に載せない（E-P5）。
+    // canonical query が transcript / storage_path / script / material_path を
+    // そもそも SELECT しないことは stage3 が検査する。
+    compareField({ field: 'presentation.rawArtifacts', kind: 'presentation',
+      legacy: null, canonical: null, provenance: prov('presentation'),
+      omitted: 'raw_body_excluded' }),
 
     // ── canonical block coverage 外（Stage 2 未対応 kind）──────────
     compareField({ field: 'essay.reviewLatest', kind: 'essay',

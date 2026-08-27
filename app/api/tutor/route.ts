@@ -68,6 +68,7 @@ import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.serv
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
 import { formatActivityCategoryCounts } from '@/lib/activityCategories';
+import { renderTutorPresentationLines } from '@/lib/contextBuilders/tutorPresentationSection';
 import {
   buildInterviewLine,
   buildStatementWeaknessLine,
@@ -543,6 +544,12 @@ export async function POST(req: Request): Promise<Response> {
               body.interviewFeedbackLatest ?? null,
               body.interviewRecordLatest ?? null,
             ),
+            // legacy の Supabase 層が prompt に出している「直近のプレゼン練習の結果」。
+            // ★ canonical と同じ renderer を通した値で比べる（Stage 5.9 / G4）★
+            //   presentation は class 2（server_authoritative / E-S3）なので
+            //   device claim は無い。ここは shadow 比較のための legacy 値のみ。
+            presentationResultSummary:
+              renderTutorPresentationLines(contextResult.context.presentation).join('\n') || null,
             // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
             diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
             // legacy の Supabase 層が prompt に出している自己分析 projection。
