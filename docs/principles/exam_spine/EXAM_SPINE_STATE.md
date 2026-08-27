@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `32cafacd7c5565c5c841f54ec6c3b054844f68f2` |
+| Canonical HEAD at this arbitration | `__S5P10_HEAD__` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,7 +49,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `de30cae`（継続前進中） | **PARTIAL（Stage 5.1〜5.7 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）canonical へ targeted cherry-pick 済み。**未昇格**は essay / presentation（Stage 5.8-5.9 相当）と、statement_review の **consumer semantics**（product 判断待ち / E-S49）、および全 kind の **AI-visible consumer activation** である |
+| `exam-spine-w1-convergence-v2` | `de30cae`（継続前進中） | **PARTIAL（Stage 5.1〜5.8 昇格済み。5.8 は blocker 確定まで）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）、Stage 5.8（essay の **blocker 確定のみ**。claim / window / block は意図的に作らない）は S5-P10 で（`f3fa929`〜`985ba0f`／decision → **E-S52 / E-S53**、E-S50 に essay 行を追記）canonical へ targeted cherry-pick 済み。**未昇格**は presentation（Stage 5.9 相当）と、statement_review の **consumer semantics**（product 判断待ち / E-S49）、essay の **transport**（E-S52 の read window blocker）、および全 kind の **AI-visible consumer activation** である |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
@@ -162,9 +162,59 @@ Stage 5.7  interview_record   ← ★ S5-P9 で canonical へ昇格済み ★
   029fafd  verify interview_record transport, semantics, and block separately
                                                                 → canonical 50ce097（+ anchor 修正）
   acb7fb1  record interview_record as ready                     → canonical では STATE 行として反映
-      ↓（5.8 以降は未昇格）
-essay（Stage 5.8 相当）      ← 未昇格。branch-local E-S47 を使用（canonical E-S47 と衝突）
+      ↓
+Stage 5.8  essay            ← ★ S5-P10 で canonical へ昇格（blocker 確定まで）★
+  6bbc4d4  close the E-S27 sub-path residual and split the essay blockers
+           → canonical E-S52 / E-S53 として再採番（branch-local E-S47 / E-S48）
+  131ba32  retarget the essay runtime blocker
+           → canonical bb700a0（canonical は blocker が空だったため **再投入**）
+  def3882  verify essay projection, window, and semantics separately
+           → canonical f3fa929 + 985ba0f（blocker 検査を実値化 / claim 未配線 pin 追加）
+  acb7fb1 相当の STATE 反映 → 本 STATE の essay 行
+      ↓（5.9 以降は未昇格）
 presentation（Stage 5.9 相当）← 未昇格。branch-local E-S49 を使用（canonical E-S49 と衝突）
+```
+
+### essay readiness（S5-P10 / 層ごとに分ける）
+
+```text
+projection      READY    E-S27（reviews:workspace->reviews）は R5 / E-S41 で CLOSED。
+                         device ↔ mirror の pure parity は成立（qa:examSpine:syncDevice）
+
+transport       BLOCKED  ★ E-S52 read window ★
+                         server は updated_at DESC（= mirror 書込時刻）で上位 cap 件を選ぶが、
+                         device は workspace.updatedAt しか持たない。backfill 経路では
+                         **完全反転**する。workspace 6〜10 件の user は内容が同期していても
+                         永久 mismatch になる。→ claim を配線しない
+
+device window   非適用（意図的） selectDeviceSyncWindow を掛けても
+                         **揃えるべき順序キーを device が持っていない**ので解決しない。
+                         近似で verified を作らないため据え置く。tie-break は Level C
+
+semantics       DEFERRED ★ E-S53 classification C ★
+                         legacy は essayPracticeReview（単数 / mirror 無し）、
+                         canonical は essayWorkspaces（LRU 10 / mirror あり）で **別 store**。
+                         server は legacy の材料を原理的に読めない。どちらを正とするかは
+                         product 判断
+
+block           作らない  E-S53。shadow は no_canonical_block のまま据え置く
+
+runtime enable  BLOCKED  EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay（宣言であって gate ではない）
+
+overall         PARTIAL
+```
+
+### ★ blocker は「消えた」のではなく「入れ替わった」★
+
+```text
+S5-P2   R5 evidence（E-S41 / E-H1）で E-S27 が CLOSED → essay を宣言から撤去
+S5-P10  canonical 実コードで別 blocker（E-S52 read window）の実在を確認 → 再投入
+
+⚠️ 「R5 evidence が揃っている ⇔ block が外れている」という双条件を張ってはいけない。
+   blocker の軸は 1 本ではない。syncDevice の drift guard は S5-P10 で 2 軸へ分離した:
+     (1) R5 evidence が欠けているなら block は必須
+     (2) block があるなら現に有効な blocker を名指しし、解消済みの理由を放置しない
+   「block が 0 件であること」自体は不変条件ではない。
 ```
 
 ### interview_record readiness（S5-P9 / 4 層に分解する）
@@ -301,6 +351,12 @@ Stage 5.4 の semantic decision を **E-S46** へ統合し、window prerequisite
 実例 5: Stage 5.7 の branch-local `E-S46` も canonical の同番とは別 Decision
 （canonical E-S46 = self_analysis の比較元と false-empty guard）。S5-P9 で
 **E-S51** へ再採番した。
+実例 6: Stage 5.8 の branch-local `E-S47` / `E-S48` も canonical の同番とは別 Decision
+（canonical E-S47 = device history window parity / E-S48 = cap は比較 window）。
+S5-P10 で **E-S52 / E-S53** へ再採番した。
+⚠️ 残る既知衝突: source は presentation 用に branch-local `E-S49` を使っている
+   （canonical E-S49 = statement_review の projection classification）。
+   **presentation を昇格する packet では必ず再採番すること。**
 昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule
