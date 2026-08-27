@@ -338,12 +338,13 @@ function t7Static(): void {
   //   固定していた。S5-P5 で Stage 5.3（activity）を canonical へ昇格したため、
   //   境界を **1 段前へ進める**（削除して弱くするのではない）。
   //
-  //   S5-P6 で Stage 5.4（self_analysis）を昇格したため、境界をさらに 1 段進める。
+  //   S5-P7 で Stage 5.5（windowed readability）を昇格したため、さらに 1 段進める。
   //
   //     ALLOWED   basic_info（5.1）/ diagnosis（5.2）/ activity（5.3）/
-  //               self_analysis（5.4）/ device sync window primitive（5.4 の前提）
-  //     FORBIDDEN Stage 5.5 **feature** semantics / statement_review（5.6）/
-  //               interview_record（その先）/ consumer switch
+  //               self_analysis（5.4）/ device sync window primitive（E-S47）/
+  //               Stage 5.5 windowed readability feature（E-S48）
+  //     FORBIDDEN statement_review（5.6）/ essay / interview_record /
+  //               consumer switch / self_analysis の tutor-facing canonical block
   //
   //   ★ registry の membership だけでは足りない ★
   //     5.4 / 5.6 は **既存 block を再利用**して claim kind だけを足すため、
@@ -414,17 +415,34 @@ function t7Static(): void {
   const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
   check('T8 serverMirrorCandidate を特定できる', smcIdx !== -1);
   const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
-  check('T8 Stage 5.5 feature（windowed opt-in）が混入していない',
-    !/\bwindowed\b/.test(smcBody));
-  check('T8 serverMirrorCandidate は strict のまま（ok 以外は unreadable）',
-    /status\s*!==\s*'ok'/.test(smcBody));
+  check('T8 Stage 5.5 の windowed opt-in は昇格済み（許可）', /\bwindowed\b/.test(smcBody));
+  //   ★ opt-in であることは維持する（無条件 readable は禁止）★
+  //     既定 strict — windowed を明示しない呼び出しでは truncated は unreadable。
+  check('T8 windowed は opt-in（既定 strict）',
+    /input\.windowed === true/.test(smcBody) && /if \(!readable\) return UNREADABLE_CANDIDATE/.test(smcBody));
+  check('T8 windowed でも ok/truncated 以外は unreadable',
+    /status === 'ok'/.test(smcBody) && /status === 'truncated'/.test(smcBody));
 
-  //   feature surface 2: assembler が truncated を unreadable に倒し続けている。
+  //   assembler 側: opt-in は capped kind に限定され、非 capped の truncated は
+  //   契約違反として unreadable に倒し続ける。
   const assembler = readFileSync(
     join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
-  check('T8 assembler は truncated を unreadable のままにしている',
-    /readStatus === 'truncated'/.test(assembler)
-      && /state: 'unreadable', readStatus, syncStatus: null, rowCount, truncated: true/.test(assembler));
+  check('T8 windowed の付与は capped kind に限定されている',
+    /windowed: isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T8 非 capped kind の truncated は unreadable のまま',
+    /truncated && !isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T8 実際の失敗（error / skipped）は unreadable のまま',
+    /readStatus === 'error' \|\| readStatus === 'skipped'/.test(assembler));
+
+  // ── Stage 5.6 以降の feature surface が現れていない ──
+  const claimTypes = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  const spread = ['deviceStatementReviewView', 'deviceSelfPrView',
+    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
+    const i = claimTypes.indexOf(`export function ${fn}(`);
+    return i !== -1 && claimTypes.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  });
+  eq('T8 device window primitive は self_analysis 以外へ広がっていない', spread, []);
 }
 
 async function main(): Promise<void> {

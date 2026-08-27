@@ -62,7 +62,7 @@ function trimmed(value: string | null | undefined): string {
  *   targetFields    … 同上（faculty）
  *   どれも空なら **null**（＝ section に basic_info 行を 1 行も出さない）
  *
- * ★ 生 slot を数える（E-S50）★
+ * ★ 生 slot を数える（E-S51）★
  *   legacy は `preferences.slice(0, 3)` を **生配列**に対して行い、そのあとで
  *   非 record を捨てる。したがって「先頭 3 slot のうち何個が非 record に消費されたか」
  *   が採用件数に効く。正規化列（`row.preferences`）は非 record を詰めてしまうので
@@ -151,7 +151,7 @@ export type TutorBasicInfoSlotFallbackReason =
  *   これは「一致するまで canonical を使わない」という弱い妥協ではなく、
  *   制約そのものの機械的な強制である。veto は **恒久的な安全網として残す**。
  *
- * ★ projection 差は解消済み（E-S49 → E-S50）★
+ * ★ projection 差は解消済み（E-S50 → E-S51）★
  *   Packet 3 の時点では次の構造差が残っていた:
  *
  *     legacy      : preferences を **生のまま 3 件に切ってから** 非 record を捨てる
@@ -159,7 +159,7 @@ export type TutorBasicInfoSlotFallbackReason =
  *
  *   壊れた entry が 3 件境界より前にあると採用件数がずれ、ずれの原因である
  *   「どの生 slot が壊れた entry に消費されたか」は当時の row には残っていなかった。
- *   S5-P7 で read layer が `rawPreferences`（生 index つきの事実列）を報告するように
+ *   S5-P8 で read layer が `rawPreferences`（生 index つきの事実列）を報告するように
  *   なったため、`projectTutorBasicInfoSlot` が legacy の規則をそのまま再現できる。
  *   `divergent_projection` は **設計上の既知差としては 0 件**である。
  *

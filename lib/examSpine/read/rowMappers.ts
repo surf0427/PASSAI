@@ -60,7 +60,7 @@ export type ExamBasicInfoServerRow = {
   examTypes: string[];
   preferences: { university: string; faculty: string | null; department: string | null }[];
   /**
-   * ★ 生 `preferences` 配列を **正規化せずに** 報告したもの（E-S50）★
+   * ★ 生 `preferences` 配列を **正規化せずに** 報告したもの（E-S51）★
    *
    *   `preferences` は「record でない要素を捨て、`university` が string でない行も捨てて
    *   詰めた」正規化列である。一方、legacy tutor consumer は同じ配列を
@@ -117,7 +117,7 @@ export function mapBasicInfoRow(
     const university = truncateString(pref.university, limits.shortText);
     const faculty = truncateString(pref.faculty, limits.shortText);
     const department = truncateString(pref.department, limits.shortText);
-    // ★ 事実列は 1 行も落とさない（E-S50）★
+    // ★ 事実列は 1 行も落とさない（E-S51）★
     //   `university` が string でない行も、その行が持つ `faculty` を legacy consumer が
     //   使っている。落とすとその事実が消え、consumer 側で復元できない。
     rawPreferences.push({ sourceIndex, university, faculty, department });

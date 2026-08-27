@@ -1299,16 +1299,18 @@ Exam-specific differences / Rollback implications
   この guard は導入時点で Stage 5.1 の assertion を落としており
   （空同士で MATCH になっていた）、実際に機能することが確認できている。
   ```
-- **★ self_analysis は本 Stage では READY にしない ★** claim wiring（G7）は完了したが、
-  以下 2 点が残るため readiness は `DEFERRED` のままとする。
+- **★ self_analysis の readiness（S5-P7 で更新）★** claim wiring（G7）は Stage 5.4 で完了。
+  下記 ① は S5-P7（E-S48）で解消したため readiness は **`READY`** へ進んだ。
+  ② は block coverage の課題として残るが Source-Sync の blocker ではない。
   ```text
-  ① truncation blocker
-     server の行数が cap（5）を超えると Stage 3 が truncated を立て、
-     Stage 4 が unreadable に落とす（E-S8 / E-S30）。claim が一致していても
-     available にならない。self_analysis は log が貯まる kind なので実運用では
-     大半の user が該当し得る。claim wiring とは独立した migration blocker であり、
-     Stage 5.4 QA の T11 が明示的に pin している。
-     → 解消は Stage 5.5（cap を比較 window とみなす）の scope。**本 packet では未昇格**。
+  ① truncation blocker  → ★ S5-P7 の E-S48 で RESOLVED ★
+     （Stage 5.4 時点の記述）server の行数が cap（5）を超えると Stage 3 が
+     truncated を立て、Stage 4 が unreadable に落とす（E-S8 / E-S30）。claim が
+     一致していても available にならない。self_analysis は log が貯まる kind なので
+     実運用では大半の user が該当し得る。
+     → S5-P7 で Stage 5.5（E-S48「cap は比較 window」）を昇格し解消した。
+       overflow は unreadable にせず、top-cap window 同士を比較する。
+       Stage 5.4 QA の T11 は blocker の pin から **解消後の挙動の pin** へ移設済み。
   ② tutor 向けの canonical block が無い
      legacy が prompt に出している 4 行に対応する block を Stage 5.4 では追加しない
      （新 block を乱造しない方針）。block coverage の課題であり G2-G5 と同じ扱い。
@@ -1382,17 +1384,111 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** primitive を外すと cap 超過 user の claim が
   永久 mismatch に戻るだけで、production prompt には影響しない。
 
+## E-S48 — canonical read cap は「比較 window」であり、overflow は unreadable ではない
+
+- **Status:** `LOCKED`（Stage 5.5 で実装 + QA 済み。**E-S46 の blocker ① を解消する**）
+- **ID 由来（S5-P7 promotion）:** source branch では branch-local `E-S43` として
+  採番されていたが、canonical の `E-S43`（shadow の結果と canonical の値を consumer
+  経路へ渡さない）は **別 Decision** である。verbatim では持ち込まず canonical の
+  次番 **E-S48** へ再採番した（内容は不変）。
+  なお source branch は別途 branch-local `E-S47`（essay の read window は device から
+  再現できない）も使用しているが、canonical `E-S47` は device history window parity で
+  あり別物。essay 側は本 packet では昇格しない。
+- **対象:** *ordered bounded history source* ＝ `EXAM_READ_CAPS` にエントリを持つ kind
+  （`self_analysis` / `statement_review` / `self_pr` / `essay` / `interview_record` /
+  `interview_ai` / `presentation`）。`basic_info` / `activity` / `diagnosis` のような
+  `maybeSingle` snapshot kind は対象外（構造的に truncate し得ない）。
+- **Decision:**
+  ```text
+  canonical read cap は「読めた範囲」ではなく **意図された比較 window** を定義する。
+
+  canonical comparison window =
+    canonical ordering（queries.ts の order）→ 先頭 EXAM_READ_CAPS[kind] 件
+  device comparison window =
+    同一の logical ordering → 先頭 EXAM_READ_CAPS[kind] 件（E-S47）
+
+  fingerprint / claim verification に参加するのは **window の中身だけ**である。
+
+  `cap + 1` 件目を受け取ったことは overflow（＝ window の外にまだ行がある）という
+  **観測**であって、canonical source が読めなかったことの証拠ではない。
+  したがって overflow は `unreadable` にしない。
+  ```
+- **★ E-S8 と矛盾しない理由（重要）★**
+  E-S8 は *「truncated を ok と同一視する」* を明示的に却下しており、本 Decision は
+  それを覆さない。E-S8 が禁じているのは
+  **「一部しか読めていない状態から source 全体の同一性を主張する」**ことである。
+  ```text
+  E-S8 が守るもの     : 「この source の内容は同じ」という主張を部分読みから導かない
+  E-S48 が定めるもの  : そもそも主張の対象を「source 全体」ではなく
+                        「決定論的に選ばれた top-N window」に限定する
+  ```
+  `readStatus` は引き続き `truncated` のまま保持し `ok` へ書き換えない
+  （overflow の事実を消さない）。freshness の権威にしない点も変わらない。
+- **★ opt-in であり、無条件 readable ではない ★**
+  ```text
+  serverMirrorCandidate({ status, observation })                 → 既定 strict
+    truncated は unreadable のまま（window 契約を宣言していない呼び出し）
+  serverMirrorCandidate({ status, observation, windowed: true }) → opt-in
+    truncated のみ readable。error / skipped は依然 unreadable
+  ```
+  assembler は `windowed: isExamCappedSourceKind(kind)` を渡す。すなわち
+  **capped kind だけ**が opt-in され、非 capped kind が `truncated` を返した場合は
+  契約違反として `unreadable` に倒す。新しい public status enum は追加しない。
+- **★ 適用範囲（誤読しやすいので明示）★**
+  opt-in の対象は capped kind **全部**であって `self_analysis` 限定ではない。
+  ただし canonical で実際に `verified` へ到達し得るのは `self_analysis` だけである
+  （他の capped kind は device claim が未配線なので `unclaimed` 止まり）。
+  この非対称性は Stage 5.5 QA の T7（opt-in scope）が機械的に固定する。
+  ```text
+  windowed 対象      : capped kind すべて（E-S48）
+  device window 適用 : self_analysis のみ（E-S47）
+  claim 配線済み     : basic_info / diagnosis / activity / self_analysis
+  → verified 到達可  : self_analysis のみ
+  ```
+- **★ 実際の失敗は引き続き unreadable ★**
+  query failure / mapping failure / `skipped` は従来どおり `unreadable` で、
+  sync 判定に進まず origin も `bridge` のまま。overflow とは別物である。
+- **★ window が違えば必ず mismatch のまま ★**
+  本 Decision は「overflow なら自動 MATCH」にする変更ではない。
+  top-N window の中身が 1 つでも違えば fingerprint が変わり mismatch になる。
+- **既知の残余（E-S47 から継続）:** server は同一 `created_at` を `id DESC` で解くが
+  device view は `id` を持たない。同一 timestamp の record が **cap 境界をまたぐ**場合だけ
+  選択がずれ得る。構造的保証ではないことを記録しておく。
+- **★ これは consumer switch ではない ★** 本 Decision は canonical source の可読性判定を
+  変えるだけで、production tutor prompt は legacy 経路のままである（E-S43）。
+  S5-P7 では promotion 前後で `buildTutorSupabaseContextSection` /
+  `buildTutorStudentContextSection` の出力を 14 fixture（0 件 / 1 件 / cap ちょうど /
+  cap+1 / cap 超過 / 同一 timestamp 境界 / device-server 一致 / device-server 不一致 /
+  truncated / 空 / full ほか）で **byte 一致**確認している。
+  self_analysis の tutor 向け canonical block も引き続き **追加しない**。
+- **Alternatives rejected:**
+  - *cap を上げる* — 転送量と prompt budget が増えるだけで、どこかに必ず境界が残る。
+  - *overflow 時に全件読む* — cap の目的（latency / memory の予測可能性 / E-S19）を壊す。
+  - *`readStatus` を `ok` に書き換える* — E-S8 が却下した「truncated を ok と同一視する」
+    そのものになり、overflow の観測が失われる。
+  - *全 kind の truncated を無条件 readable にする* — window 契約が無い呼び出しでも
+    部分読みからの同一性主張になる。opt-in を必須にした理由。
+  - *新しい status enum（`windowed` 等）を足す* — 消費側の分岐が増える。
+- **Implementation evidence:** `lib/examSpine/context/assemble.server.ts`
+  （`normalizeSourceStates` の overflow 分岐）／`lib/examSpine/sync/adapters/types.ts`
+  （`serverMirrorCandidate` の `windowed` opt-in）。
+  QA は `scripts/exam-spine-stage5-5-check.ts`、および Stage 5.4 QA の T11（解消後の挙動）。
+- **Rollback implications:** `assemble.server.ts` の state 判定 1 箇所を戻せば従来挙動。
+  consumer は未接続なので production 影響ゼロ。
+
 ---
 
 # 5. Policy / persistence decisions
 
-## E-S48 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+## E-S49 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
 
 - **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S45` → `E-S46` として採番していたが、canonical はその後 `E-S46` を Stage 5.4
   （self_analysis 比較元）へ割り当てた（S5-P6）。canonical の番号は動かさず、
-  後発である本 Decision を **E-S48** へ再採番した（E-S38-3 の手順）。内容は無変更。
+  後発である本 Decision を再採番した。canonical はその後さらに `E-S48` を
+  Stage 5.5 read-window contract に割り当てたため、S5-P8 で **E-S49** へ再々採番した
+  （E-S38-3 の手順。canonical の番号は 1 つも動かしていない）。内容は無変更。
 - **HUMAN RULING（本 decision の権威）:**
   ```text
   E-H7 = OPTION C
@@ -1442,14 +1538,14 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** `verdict.ts` の入力型を戻せば復帰できるが、`esy1` codec を復活させる
   意味は無い（production importer 0 のまま廃止された）。
 
-## E-S49 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
+## E-S50 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
 
 - **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet 3。`E-S40` が開けた最初の consumer 切替の実装判断）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S47` として採番していたが、canonical はその後 `E-S47` を Stage 5.5 の
-  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S49** へ
+  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S50** へ
   再採番した（E-S38-3 の手順）。内容は無変更。参照していた `E-S48`（transport）は
-  再採番後の `E-S48` を指す。
+  再採番後の `E-S49` を指す。
 - **決定:**
   ```text
   切替対象   tutor purpose の basic_info slot のみ（E-S40）
@@ -1483,6 +1579,95 @@ Exam-specific differences / Rollback implications
   canary は default deny の連言（`E-S11`）/ 評定・氏名は slot に載せない（`E-P5` / `E-P8`）。
 - **query 本数:** slot 切替と shadow は同じ canonical context を 1 回だけ組み立てて共用する。
   どちらも OFF の user では canonical assembly を 1 本も発行しない。
+
+## E-S51 — read layer は生 `preferences` slot を事実として報告し、consumer 互換 projection をそこから作る
+
+- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P8。`E-S50` が bounded fallback として
+  残した projection 差の解消。`E-S50` の採用条件（AI-visible 同値）自体は変更しない）
+- **解決した差:**
+  ```text
+  legacy      preferences を **生配列のまま 3 件へ切ってから** 非 record を捨てる。
+              record でありさえすれば university / faculty を独立に読む
+              （university: 123 の行でも faculty は採る）。
+  canonical   read mapper が 非 record を捨てながら 10 件へ詰め、さらに
+              university が string でない行を **行ごと** 落とす。
+  → 壊れた entry が 3 件境界より前にあると採用件数がずれ、
+    型不整合行の faculty は消える。
+  ```
+- **★ authority の判定（実測。どちらかを「好み」で選んでいない）★**
+  ```text
+  legacy 側 slice-before-filter
+    A 明示仕様            該当なし。仕様文書にも DECISIONS にも記述が無い。
+    B characterization    ★ 該当 ★ scripts/fixtures/exam-spine-tutor-loader/
+                          T5-adversarial-shapes（"defensive parsing を固定する"）が
+                          preferences: [null, 'string-not-object', {university:123,
+                          faculty:'…'}] に対する section を golden で凍結している。
+    C 偶然の実装詳細      ★ 該当 ★ 導入は無題の単一 commit a03c52c "Update UX"
+                          （2026-06-05）。**同じ commit の中で** examTypes は
+                          toStringArray（filter-before-slice）になっており、
+                          2 つの配列で規則が食い違う。設計された規則ではない。
+    D bug と判定済み      該当なし。bug fix を許可した decision は存在しない。
+  canonical 側 filter-before-cap
+    A source contract     ★ 該当 ★ E-S20（mapper は policy-free / 既定値を持たない）に
+                          沿った read layer の正規化。
+    C 他 consumer が依存  ★ 該当 ★ basicInfoSyncView の fingerprint（device / server の
+                          両側が同じ mapper を通る）と projectBasicInfo（canonical block）。
+  ```
+  **両者を同じ authority level で LOCK した decision は存在しない**ので human ruling は要らない。
+  由来が「無題 commit の実装詳細」である legacy を仕様として read layer へ持ち込むのも、
+  characterization で凍結された AI-visible 出力を今変えるのも、どちらも採らない。
+- **Decision:** read layer は **正規化した列を変えず**、生 slot の事実を併せて報告する。
+  ```text
+  guards.ts     toIndexedRecordArray(value, max)  … 生 index つき走査。
+                toRecordArray はこれを map するだけに縮退（走査規則は 1 本）。
+  rowMappers.ts ExamBasicInfoServerRow.rawPreferences
+                  { sourceIndex, university, faculty, department }（string でなければ null）
+                `preferences`（正規化列）と **同じ走査・同じ cap**（limits.recordItems）で
+                1 回のループから作る。型不整合行も落とさない。
+  consumer      projectTutorBasicInfoSlot が rawPreferences を sourceIndex < 3 で読み、
+                legacy の規則を **書き写す**。mapper 後の値から「壊れた entry が
+                あったはず」と推測する経路は作らない。
+  ```
+- **なぜ read layer に置いてよいか:** `sourceIndex` は payload に対する **事実**であって
+  feature の方針ではない。どの slot を採るか・型不整合行を使うかは consumer が決めたままである。
+  E-S20 が禁じているのは mapper が policy（cap の既定値・prompt 文言・採否判断）を持つことで、
+  事実を報告することではない（`rowMappers.ts` の既存コメント「Stage 3 は事実をそのまま報告する」）。
+- **★ AI-visible ではない / wire でもない（実測で封じ込め）★**
+  ```text
+  sync view        basicInfoSyncView は Pick で rawPreferences を受けない。
+                   fingerprint は変更前後で byte 一致（efp1:2dcd09d8…）。
+                   ここに漏れると device と server の claim が永久不一致になる。
+  device view      deviceBasicInfoView も同じ mapper を通るが view には出ない。
+  canonical block  projectBasicInfo の出力に sourceIndex は出ない。
+  slot / section   slot の key は 5 つのまま。section 文字列にも出ない。
+  DB               schema 変更なし。read model（in-memory）だけで閉じている。
+  ```
+- **実測結果:** 79 payload（malformed の位置 × 型 × 件数 × 長さ境界）で
+  legacy と **byte 一致**。`divergent_projection` は 7 → **0**。canonical が authority を
+  取る payload は 64 件（切替が空回りしていない）。
+- **★ 残す bounded fallback（projection 差ではない）★**
+  ```text
+  先頭 200 字がすべて空白の文字列は read cap（E-S19 / shortText=200）により
+  canonical 側が中身を見られない。legacy は trim 後に 40 字で切るので値が残る。
+  → would_reduce_context / canonical_absent として legacy 維持。
+    「canonical が値を持っていない」ケースであり、fail-closed が正しい。
+  ```
+- **equivalence veto は外さない:** 差が 0 になっても `E-S50` の採用条件は残す。
+  将来 mapper や legacy を触ったときに黙って AI-visible 出力が変わらないための安全網である。
+- **legacy serverRead は削除しない:** 同値検査の相手であり fallback でもある（`E-S50`）。
+- **Alternatives rejected:**
+  - *legacy を filter-before-cap へ揃える* — AI-visible 出力が変わる。characterization
+    golden（T5）を書き換えることになり、本 packet の制約に反する。
+  - *canonical mapper を slice-before-filter へ変える* — `preferences` の値が変わり
+    Source-Sync の fingerprint が動く。他 consumer（canonical block）も巻き込む。
+  - *consumer 側で「不正値があったはず」と件数から推測する* — mapper 後の値からは
+    復元できない。payload 推測ロジックを consumer に増殖させる。
+  - *`divergent_projection` を無条件に canonical 扱いする* — 制約そのものの放棄。
+- **QA:** `scripts/exam-spine-packet3-check.ts`（79 payload byte 比較 / 封じ込め /
+  4 gate combination の read 本数 0-1-1-1 / shadow legacy input の定数短絡検出）。
+  negative control 20 件を mutation で実測しすべて検出。
+- **Rollback implications:** `rawPreferences` を読まなくすれば Packet 3 時点の
+  fail-closed 挙動へ戻るだけで、AI-visible 出力は不変。DB / wire / deploy への影響なし。
 
 ## E-P1 — 3 層のみ採用する（Layer 3/4/5 を持ち込まない）
 
