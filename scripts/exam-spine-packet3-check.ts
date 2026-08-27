@@ -537,11 +537,13 @@ function gateChecks(): void {
   set(saveSlots, saveUsers);
 
   // ★ Rule 10: 次の slot へ勝手に進まない ★
-  // ★ S5-P10: 承認済み slot は 2 つ ★ 勝手に 3 つ目が増えていないことを固定する。
+  // ★ Stage 5.11: 承認済み slot は 3 つ ★ 勝手に 4 つ目が増えていないことを固定する。
   //   （順序も含めて pin する。allowlist は「今どこまで切替を実測したか」の記録なので、
-  //     packet を経ずに token を足すと gate が意味を失う。）
-  eq('切替可能 slot は承認済みの 2 つだけ',
-    [...EXAM_SPINE_SWITCHABLE_SLOTS], ['tutor.basic_info', 'tutor.activity']);
+  //     packet を経ずに token を足すと gate が意味を失う。
+  //     `tutor.diagnosis` は Stage 5.11 / E-S60 で AI-visible 同値を実測して追加した。）
+  eq('切替可能 slot は承認済みの 3 つだけ',
+    [...EXAM_SPINE_SWITCHABLE_SLOTS],
+    ['tutor.basic_info', 'tutor.activity', 'tutor.diagnosis']);
   check('gate: tutor.activity も slot + allowlist の連言が要る（片方では deny）', (() => {
     const s0 = process.env.EXAM_SPINE_SLOT_SWITCH_SLOTS;
     const u0 = process.env.EXAM_SPINE_SLOT_SWITCH_USER_IDS;
@@ -597,9 +599,12 @@ function staticChecks(): void {
     // 差し替えられる key は必ず `{` か `,` の直後に `key:` として現れる
     //   `{ ...ctx, basicInfo: v }` / `? { activity: v }` のどちらの形でも拾える。
     const keys = [...after.matchAll(/[{,]\s*(\w+)\s*:/g)].map((m) => m[1]);
-    eq('差し替える slot は承認済みの 2 つだけ', [...new Set(keys)].sort(), ['activity', 'basicInfo']);
+    eq('差し替える slot は承認済みの 3 つだけ', [...new Set(keys)].sort(),
+      ['activity', 'basicInfo', 'diagnosis']);
     check('basic_info の slot 値は decideTutorBasicInfoSlot 由来', body.includes('slotDecision.value'));
     check('activity の slot 値は decideTutorActivitySlot 由来', body.includes('activitySlotDecision.value'));
+    check('diagnosis の slot 値は decideTutorDiagnosisSlot 由来',
+      body.includes('diagnosisSlotDecision.value'));
   }
 
   // canonical slot は usable('basic_info') の内側でしか作らない
@@ -658,14 +663,15 @@ function staticChecks(): void {
   check('canonical assembly の gate 条件を取り出せる', gateCond !== null);
   if (gateCond) {
     const cond = gateCond[1].trim();
-    // ★ S5-P10: slot が 2 つになったので条件は 2 段になった ★
+    // ★ Stage 5.11: slot が 3 つになった ★ gate 段数は増えていない（OR が 1 つ増えただけ）。
     //   `anySlotSwitchEnabled` の定義まで遡って評価し、read 本数表を導く。
     eq('gate 条件は anySlot OR shadow', cond, 'anySlotSwitchEnabled || shadowEnabled');
     const anyDecl = /const anySlotSwitchEnabled = ([^;]+);/.exec(routeBody);
     check('anySlotSwitchEnabled の定義が読める', anyDecl !== null);
     if (anyDecl) {
-      eq('anySlotSwitchEnabled は承認済み 2 slot の OR',
-        anyDecl[1].trim(), 'slotSwitchEnabled || activitySlotSwitchEnabled');
+      eq('anySlotSwitchEnabled は承認済み 3 slot の OR',
+        anyDecl[1].replace(/\s+/g, ' ').trim(),
+        'slotSwitchEnabled || activitySlotSwitchEnabled || diagnosisSlotSwitchEnabled');
     }
     // 2 slot × shadow の 8 通り。呼び出しは 1 箇所だけ（上で固定済み）なので
     // 条件が真なら 1 本・偽なら 0 本。**どの組合せでも 2 本にならない**ことが要点。

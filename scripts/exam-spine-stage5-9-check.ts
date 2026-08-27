@@ -812,8 +812,11 @@ function s7Consumer(): void {
       .test(routeCode));
   // gate 変数の集合が増えていないこと（増えたら 8 通り表を拡張する必要がある）。
   const gateVars = [...routeCode.matchAll(/const (\w*[Ee]nabled) =/g)].map((m) => m[1]).sort();
-  eq('C7 gate 変数は basic_info / activity / shadow の 3 つ + 集約 1 つ', gateVars,
-    ['activitySlotSwitchEnabled', 'anySlotSwitchEnabled', 'shadowEnabled', 'slotSwitchEnabled']);
+  //   Stage 5.11 で diagnosis slot の gate が加わり 4 slot 変数 + 集約 1 つになった。
+  //   presentation は class 2 なので **依然として gate を持たない**（上の検査で固定）。
+  eq('C7 gate 変数は basic_info / activity / diagnosis / shadow + 集約 1 つ', gateVars,
+    ['activitySlotSwitchEnabled', 'anySlotSwitchEnabled', 'diagnosisSlotSwitchEnabled',
+     'shadowEnabled', 'slotSwitchEnabled']);
 }
 
 // ══════════════════════════════════════════════════════════════════

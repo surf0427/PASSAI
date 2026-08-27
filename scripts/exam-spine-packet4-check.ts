@@ -494,8 +494,10 @@ function gateChecks(): void {
   check('gate: 2 slot 同時 ON も可', on() && isExamSpineSlotSwitchEnabled('tutor.basic_info', USER));
   set(saveSlots, saveUsers);
 
-  eq('切替可能 slot は承認済みの 2 つだけ',
-    [...EXAM_SPINE_SWITCHABLE_SLOTS], ['tutor.basic_info', 'tutor.activity']);
+  // ★ Stage 5.11 で `tutor.diagnosis` を追加（E-S60）★ 4 つ目が黙って増えないよう順序ごと pin。
+  eq('切替可能 slot は承認済みの 3 つだけ',
+    [...EXAM_SPINE_SWITCHABLE_SLOTS],
+    ['tutor.basic_info', 'tutor.activity', 'tutor.diagnosis']);
 }
 
 // ── static（切替範囲 / legacy 保全 / read 本数）────────────────────────

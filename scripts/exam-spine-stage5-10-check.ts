@@ -627,11 +627,21 @@ function s10Decision(): void {
   check('K window を適用しないことが結論だと明記されている',
     es50.includes('window を適用しないことが結論である'));
 
-  // ★ 新 Decision ID を増やしていない ★
-  //   canonical の最大は E-S58（S5-P12 の再採番後）。Stage 5.10 は既存 E-S50 と
-  //   既存 runtime blocker authority へ載せるだけで、新規採番をしない。
-  const ids = Array.from(dec.matchAll(/^## E-S(\d+)/gm)).map((m) => Number(m[1]));
-  eq('K E-S の最大 ID は 58 のまま（Stage 5.10 で新規採番なし）', Math.max(...ids), 58);
+  // ★ Stage 5.10 は新 Decision ID を採番していない ★
+  //
+  //   ⚠️ 以前ここは「E-S の最大 ID は 58」を pin していたが、それは **誤った不変条件**
+  //     だった。後続 Stage が新 ID を採番するのは正常であり、Stage 5.10 の主張は
+  //     「self_pr の ruling が既存 authority に載っている」ことでしかない。
+  //     max ID を固定すると後続 Stage を無条件に落とす（Stage 5.11 で実測）。
+  //     したがって **self_pr 専用の decision 見出しが存在しないこと**を pin する。
+  const headings = Array.from(dec.matchAll(/^## (E-[A-Z]?\d+) — (.*)$/gm));
+  check('K decision 見出しを抽出できる（空回り検査でない）', headings.length > 40);
+  const selfPrOwned = headings.filter(([, , title]) => /self_pr|自己PR/.test(title));
+  eq('K self_pr 専用の Decision 見出しは存在しない（既存 authority に載せた）',
+    selfPrOwned.map(([, id]) => id), []);
+  //   ruling の所在は E-S50（device history window の tie-break）である。
+  check('K self_pr Level C の authority は E-S50 である',
+    /self_pr[\s\S]*?\*\*Level C\*\*/.test(es50));
   //   E-S50 が別主題へすり替わっていないこと（N13 と同じ規律）。
   const es50Head = dec.split('\n').find((l) => l.startsWith('## E-S50 ')) ?? '';
   check('K E-S50 の見出しは device history window のまま',
