@@ -40,6 +40,7 @@ import {
   EXAM_SYNC_RUNTIME_ENABLE_BLOCKED,
   EXAM_SYNC_ADAPTER_CONTRACTS,
   EXAM_WRITER_SCHEMA_CONTRACTS,
+  isComparableSchemaVersion,
 } from '@/lib/examSpine/sync/adapters/registry';
 import { isExamSyncRuntimeBlocked, examSyncUsability } from '@/lib/examSpine/sync/enable';
 import { EXAM_SPINE_SWITCHABLE_SLOTS } from '@/lib/examSpine/context/slotSwitchGate.server';
@@ -476,6 +477,22 @@ function s5Invariants(): void {
   eq('B4 diagnosis の current 版は "3"', EXAM_WRITER_SCHEMA_CONTRACTS.diagnosis.current, '3');
   eq('B4 diagnosis の superseded は "1" と "2"',
     [...EXAM_WRITER_SCHEMA_CONTRACTS.diagnosis.superseded].sort(), ['1', '2']);
+  //   ★ eligibility は current だけ（fail-closed）★
+  //     集合を pin するだけでは「判定関数が常に true を返す」変異を通してしまう
+  //     （F-N12 で実測）。判定そのものを最終状態として固定する。
+  for (const kind of ['basic_info', 'activity', 'diagnosis'] as const) {
+    const c = EXAM_WRITER_SCHEMA_CONTRACTS[kind];
+    check(`B4 ${kind}: current 版は comparison eligible`,
+      isComparableSchemaVersion(kind, c.current));
+    for (const v of c.superseded) {
+      check(`B4 ${kind}: superseded 版 "${v}" は ineligible`,
+        !isComparableSchemaVersion(kind, v));
+    }
+    for (const v of [null, undefined, '', '99']) {
+      check(`B4 ${kind}: unknown/null は ineligible（fail-closed）`,
+        !isComparableSchemaVersion(kind, v as string | null | undefined));
+    }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
