@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `3151e75814cca4b9bb47f5e7f3cc1e445d12ad6f` |
+| Canonical HEAD at this arbitration | `__S5P9_HEAD__` |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,7 +49,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `de30cae`（継続前進中） | **PARTIAL（Stage 5.1〜5.6 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）canonical へ targeted cherry-pick 済み。**未昇格**は Stage 5.7（interview_record）/ essay / presentation（Stage 5.8-5.9 相当）と、statement_review の **consumer semantics**（product 判断待ち / E-S49）である |
+| `exam-spine-w1-convergence-v2` | `de30cae`（継続前進中） | **PARTIAL（Stage 5.1〜5.7 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）、Stage 5.4（self-analysis device claim ＋ 比較元訂正、および前提となる device window primitive）は S5-P6 で（`861398a`〜`5b1ae25`／decision → **E-S46 / E-S47**）、Stage 5.5（cap を比較 window とみなす windowed readability feature）は S5-P7 で（`b873572`〜`c3d2bdf`／decision → **E-S48**）、Stage 5.6（statement_review の **transport のみ**）は S5-P8 で（`e6fa941`〜`3c34d5b`／decision → **E-S49 / E-S50**）、Stage 5.7（interview_record の transport ＋ semantics ＋ `interview_issue_line` block）は S5-P9 で（`69821e0`〜`50ce097`／decision → **E-S51**、E-S50 に interview_record 行を追記）canonical へ targeted cherry-pick 済み。**未昇格**は essay / presentation（Stage 5.8-5.9 相当）と、statement_review の **consumer semantics**（product 判断待ち / E-S49）、および全 kind の **AI-visible consumer activation** である |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `5359108` | **NON_CANONICAL_SUPERSEDED（部分）** | canonical から分岐し `398e7f4` を merge しただけの状態。branch 名が示す transport convergence 自体は未実装で、その判断は canonical 側で **E-S39** として確定済み。R5 部分は上行と同一 commit |
@@ -151,10 +151,57 @@ Stage 5.6  statement_review transport        ← ★ S5-P8 で canonical へ昇�
                                                               → canonical 3c34d5b（+ prompt anchor 修正）
   d2f9daa  record statement_review transport ready and semantics deferred
            → canonical では STATE の readiness 行として反映
-      ↓（5.7 以降は未昇格）
-Stage 5.7  interview_record  ← 未昇格。新 block `interview_issue_line` を足す
+      ↓
+Stage 5.7  interview_record   ← ★ S5-P9 で canonical へ昇格済み ★
+  4929964  classify interview_record semantics and require a tutor block
+           → canonical E-S51 として再採番（branch-local E-S46）
+  1bae1c8  claim interview_record from the tutor device        → canonical 69821e0
+           ※ device window ＋ claim を同一 commit で適用（claim-first を作らない）
+  bff2e77  build a canonical tutor block for interview_record  → canonical 2d45b68
+           ※ interview_issue_line を registry ＋ tutor plan に追加（AI 非可視のまま）
+  029fafd  verify interview_record transport, semantics, and block separately
+                                                                → canonical 50ce097（+ anchor 修正）
+  acb7fb1  record interview_record as ready                     → canonical では STATE 行として反映
+      ↓（5.8 以降は未昇格）
 essay（Stage 5.8 相当）      ← 未昇格。branch-local E-S47 を使用（canonical E-S47 と衝突）
 presentation（Stage 5.9 相当）← 未昇格。branch-local E-S49 を使用（canonical E-S49 と衝突）
+```
+
+### interview_record readiness（S5-P9 / 4 層に分解する）
+
+```text
+transport  READY   claim 配線済み（tutor の 6 番目の kind）
+                   device window parity 成立（selectDeviceSyncWindow を適用 / Level B）
+                   cap 超過（truncated）でも top-N window 同士で verified
+                   header は履歴 5 / 200 / 1000 件いずれも 228 bytes
+                   逐語（questions_asked / my_answers）は server SELECT が読まない
+
+semantics  READY   classification B — EQUIVALENT_AFTER_NORMALIZATION
+                   legacy の buildInterviewLine を **共有**（再実装しない）
+                   canonical 側に競合する projection が無いため product 判断が要らない
+                   （statement_review が C で DEFERRED なのと対照的）
+
+block      READY   interview_issue_line が registry ＋ tutor plan に登録済み
+                   決定論的 / 空なら行を出さない / 整形上限は legacy と共有
+
+consumer   DEFERRED  ★ AI-visible activation は別 Stage ★
+                     plan に載っていても production は plan を読まない
+                     （EXAM_PURPOSE_PLANS の import が production に 0 件、
+                       tutor plan は render: null / legacyBuilder: null）
+```
+
+### ★ 「block がある」と「AI が見る」を混同しない ★
+
+```text
+A. projection が存在する            YES
+B. canonical block が登録されている  YES
+C. tutor plan に載っている           YES
+D. prompt builder が plan を読む     NO  ← ここで止まっている
+E. AI-visible prompt が変わる        NO
+
+Stage 5.4-5.6 までは「tutor plan の block 数」を AI 非可視の proxy に使えていたが、
+Stage 5.7 で plan に block が増えたためその proxy は使えない。
+以後は D を直接検査すること（production の plan import 走査 / render 検査）。
 ```
 
 ### statement_review readiness（S5-P8 / transport と semantics を分ける）
@@ -251,6 +298,9 @@ Stage 5.4 の semantic decision を **E-S46** へ統合し、window prerequisite
 ⚠️ source branch は presentation 用に branch-local `E-S49` も使い始めている。
    canonical `E-S49` は statement_review の projection classification である。
    **presentation を昇格する packet でも必ず再採番すること。**
+実例 5: Stage 5.7 の branch-local `E-S46` も canonical の同番とは別 Decision
+（canonical E-S46 = self_analysis の比較元と false-empty guard）。S5-P9 で
+**E-S51** へ再採番した。
 昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule
