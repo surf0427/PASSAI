@@ -33,6 +33,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabaseClient } from '@/lib/supabase/serverClient';
 import { resolveDiagnosisTypeHint } from '@/lib/examDiagnosis/tutorHints';
 import { summarizeActivityCategories } from '@/lib/activityCategories';
+import {
+  projectTutorPresentationContext,
+  renderTutorPresentationLines,
+  type TutorPresentationContext,
+} from './tutorPresentationSection';
 // AI 面接モードのラベル（純データモジュール。server-only 依存なし）。
 import {
   INTERVIEW_TYPE_LABELS,
@@ -82,18 +87,8 @@ export type TutorStudentContext = {
   // presentation_results 由来（最新の evaluated プレゼン 1 件）。結果画面と同じ保存済み feedback を読む。
   //   - 録画動画 / Storage URL / STT 全文 / 発表後 Q&A 履歴は含めない（結果サマリのみ）。
   //   - 直近 3 件へ拡張する場合は loadPresentationContext の limit を上げて配列化すればよい。MVP は最新 1 件のみ。
-  presentation?: {
-    date?: string; // 実施日時（JST の年月日）
-    university?: string; // 大学名
-    faculty?: string; // 学部名
-    theme?: string; // 発表テーマ
-    overall?: string; // 総合評価（overallComment）
-    goodPoints?: string[]; // 良かった点
-    improvements?: string[]; // 改善点
-    nextPractice?: string[]; // 次に練習すると良い点
-    // カテゴリ評価（存在時のみ）。weak/normal/strong を日本語ラベル化済み。
-    categories?: { label: string; level: string }[];
-  };
+  //   shape は `tutorPresentationSection.ts` の TutorPresentationContext が正本。
+  presentation?: TutorPresentationContext;
   // どの source が取得できたかの真偽サマリ（section 構築・観測用）。
   sourceSummary: {
     hasSelfAnalysis: boolean;
@@ -117,37 +112,8 @@ const MAX_TOTAL_LENGTH = 1200;
 const MAX_INTERVIEW_AI_GOOD = 3;
 const MAX_INTERVIEW_AI_IMPROVE = 3;
 const MAX_INTERVIEW_AI_NEXT = 2;
-// プレゼン結果サマリの件数上限（録画 / STT 全文 / Q&A 履歴は渡さない。結果画面の主要項目だけ短く渡す）。
-const MAX_PRESENTATION_GOOD = 3;
-const MAX_PRESENTATION_IMPROVE = 3;
-const MAX_PRESENTATION_NEXT = 2;
-
-// プレゼン評価カテゴリ key → 日本語ラベル（結果画面 CATEGORY_ORDER と一致）。
-const PRESENTATION_CATEGORY_LABELS: Record<string, string> = {
-  composition: '構成力',
-  persuasion: '説得力',
-  concreteness: '具体性',
-  clarity: 'わかりやすさ',
-  timeManagement: '時間配分',
-  completeness: '完成度',
-  materialConsistency: '資料整合性',
-};
-// プレゼン評価カテゴリの順序（資料整合性は存在時のみ末尾に付与）。
-const PRESENTATION_CATEGORY_ORDER: readonly string[] = [
-  'composition',
-  'persuasion',
-  'concreteness',
-  'clarity',
-  'timeManagement',
-  'completeness',
-  'materialConsistency',
-];
-// weak/normal/strong → 日本語ラベル（結果画面 LEVEL_LABEL と一致）。
-const PRESENTATION_LEVEL_LABELS: Record<string, string> = {
-  weak: '要改善',
-  normal: '標準',
-  strong: '良い',
-};
+// プレゼンの件数上限 / カテゴリラベル / 順序 / level ラベルは
+// `tutorPresentationSection.ts` が正本（canonical 側と共有するため / Stage 5.9）。
 
 // 受験タイプ診断 resultType(legacy 1-4) → 会話補助 hint（ラベル名そのものは出さない）。
 // app/diagnosis/page.tsx:RESULT_TYPES の 4 タイプの趣旨を、断定しない支援方針へ言い換える。
@@ -471,43 +437,24 @@ async function loadPresentationContext(
   }
   if (!resultRow) return {};
 
-  const feedback = asRecord(resultRow.feedback);
-  if (!feedback) return {};
-
-  const overall = truncate(
-    toTrimmedString(feedback.overallComment),
-    MAX_SUMMARY_LENGTH,
-  );
-  const goodPoints = toStringArray(feedback.goodPoints, MAX_PRESENTATION_GOOD);
-  const improvements = toStringArray(feedback.improvements, MAX_PRESENTATION_IMPROVE);
-  const nextPractice = toStringArray(feedback.nextPractice, MAX_PRESENTATION_NEXT);
-
-  // カテゴリ評価（存在時のみ）。weak/normal/strong を日本語ラベルへ。資料整合性は付いていれば末尾に。
-  const cats = asRecord(feedback.categories);
-  const categories: { label: string; level: string }[] = [];
-  if (cats) {
-    for (const key of PRESENTATION_CATEGORY_ORDER) {
-      const level = PRESENTATION_LEVEL_LABELS[toTrimmedString(cats[key])];
-      if (level) {
-        categories.push({ label: PRESENTATION_CATEGORY_LABELS[key], level });
-      }
-    }
-  }
-
-  const hasAny =
-    overall !== '' ||
-    goodPoints.length > 0 ||
-    improvements.length > 0 ||
-    nextPractice.length > 0 ||
-    categories.length > 0;
-  if (!hasAny) return {};
-
-  const date = formatDateJst(toTrimmedString(resultRow.created_at));
+  // ★ 整形規則は `tutorPresentationSection.ts` が正本（canonical 側と共有）★
+  //   ここでは read（順序 / limit / enrichment）だけを持ち、
+  //   「何を prompt に出すか」は projector に委ねる。
+  //
+  // ★ enrichment の発行条件を変えない ★
+  //   出せるものが 1 つも無い評価では従来どおり attempt/session を読まない。
+  //   projector は純関数なので、enrichment 無しで 1 度試し、
+  //   出るものがあると分かってから enrichment を読み、最後にもう 1 度射影する。
+  const core = projectTutorPresentationContext({
+    feedback: resultRow.feedback,
+    createdAt: resultRow.created_at,
+  });
+  if (!core) return {};
 
   // enrichment（best-effort）: attempt → session の大学名 / 学部名 / テーマ。失敗しても core は返す。
-  let university = '';
-  let faculty = '';
-  let theme = '';
+  let universityName: unknown;
+  let facultyName: unknown;
+  let sessionTheme: unknown;
   if (attemptId) {
     try {
       const res = await client
@@ -519,28 +466,24 @@ async function loadPresentationContext(
       const sessRaw = attemptRec?.presentation_sessions;
       const sess = Array.isArray(sessRaw) ? asRecord(sessRaw[0]) : asRecord(sessRaw);
       if (sess) {
-        university = truncate(toTrimmedString(sess.university_name), MAX_ITEM_LENGTH);
-        faculty = truncate(toTrimmedString(sess.faculty_name), MAX_ITEM_LENGTH);
-        theme = truncate(toTrimmedString(sess.theme), MAX_SUMMARY_LENGTH);
+        universityName = sess.university_name;
+        facultyName = sess.faculty_name;
+        sessionTheme = sess.theme;
       }
     } catch {
       // enrichment 失敗は無視（core feedback のみで section を出す）。
     }
   }
 
-  return {
-    presentation: {
-      ...(date !== '' ? { date } : {}),
-      ...(university !== '' ? { university } : {}),
-      ...(faculty !== '' ? { faculty } : {}),
-      ...(theme !== '' ? { theme } : {}),
-      ...(overall !== '' ? { overall } : {}),
-      ...(goodPoints.length > 0 ? { goodPoints } : {}),
-      ...(improvements.length > 0 ? { improvements } : {}),
-      ...(nextPractice.length > 0 ? { nextPractice } : {}),
-      ...(categories.length > 0 ? { categories } : {}),
-    },
-  };
+  const presentation = projectTutorPresentationContext({
+    feedback: resultRow.feedback,
+    createdAt: resultRow.created_at,
+    universityName,
+    facultyName,
+    theme: sessionTheme,
+  });
+  if (!presentation) return {};
+  return { presentation };
 }
 
 // ISO 文字列 → JST の年月日（不正値は ''）。section builder は純粋関数のため日時整形はここで行う。
@@ -874,44 +817,8 @@ export function buildTutorSupabaseContextSection(
   }
 
   // 6. 直近のプレゼン練習の結果（結果画面と同じ保存済み feedback。録画 / STT 全文 / Q&A 履歴は含めない）。
-  const pr = context.presentation;
-  if (pr) {
-    const headParts: string[] = [];
-    if (pr.date) headParts.push(`${pr.date}実施`);
-    if (pr.university) {
-      headParts.push(pr.faculty ? `${pr.university} ${pr.faculty}` : pr.university);
-    }
-    const head = headParts.join('・');
-    lines.push(
-      `・直近のプレゼン練習${head ? `（${head}）` : ''}の結果が保存されています。`,
-    );
-    if (pr.theme) {
-      lines.push(`  - 発表テーマ: ${pr.theme}`);
-    }
-    if (pr.overall) {
-      lines.push(`  - 総合評価: ${pr.overall}`);
-    }
-    if (pr.categories && pr.categories.length > 0) {
-      lines.push(
-        `  - カテゴリ評価: ${pr.categories.map((c) => `${c.label}=${c.level}`).join(' / ')}`,
-      );
-    }
-    if (pr.goodPoints && pr.goodPoints.length > 0) {
-      lines.push(
-        `  - 良かった点: ${pr.goodPoints.map((s) => `「${s}」`).join('')}`,
-      );
-    }
-    if (pr.improvements && pr.improvements.length > 0) {
-      lines.push(
-        `  - 改善点: ${pr.improvements.map((s) => `「${s}」`).join('')}`,
-      );
-    }
-    if (pr.nextPractice && pr.nextPractice.length > 0) {
-      lines.push(
-        `  - 次に練習すると良い点: ${pr.nextPractice.map((s) => `「${s}」`).join('')}`,
-      );
-    }
-  }
+  // 行の組み立ても `tutorPresentationSection.ts` が正本（canonical 側と共有）。
+  lines.push(...renderTutorPresentationLines(context.presentation));
 
   if (lines.length === 0) return '';
 
