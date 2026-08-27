@@ -18,6 +18,7 @@
 
 import type { BasicInfo } from '@/types/basicInfo';
 import type { DiagnosisResult } from '@/lib/diagnosisStorage';
+import type { ActivityData } from '@/types/activity';
 
 import { buildDeviceClaim } from '../adapters/deviceSources';
 import type { ExamDeviceClaim } from '../adapters/deviceSources';
@@ -81,6 +82,30 @@ export function deviceDiagnosisToken(
 }
 
 /**
+ * device canonical の `ActivityData` → claim token（canonical projection へ委譲）。
+ *
+ * ★ Stage 5.3 で追加（G6）★
+ *   `activity` は class 1（device_canonical_mirrored）なので、claim が無いと
+ *   Source-Sync が verified にならず canonical block が生成されない。
+ *
+ * ⚠️ mirror gap（既知 / 今回は直さない）:
+ *   `dualWriteActivityLog` は **submit 時にしか発火しない**（autosave は mirror されない /
+ *   `EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G1）。したがって入力途中の端末では
+ *   device と server が正当に食い違い、claim は mismatch になる。
+ *   これは Source-Sync が **stale な server 値を使わせない**という設計どおりの挙動であり、
+ *   欠陥ではない。transport 側で握り潰さない。
+ */
+export function deviceActivityToken(
+  activity: ActivityData | null | undefined,
+): string | null {
+  const claim = buildDeviceClaim(
+    'activity',
+    activity ? { state: 'present', value: activity } : { state: 'absent' },
+  );
+  return claim.state === 'claimed' ? claim.observation.fingerprint : null;
+}
+
+/**
  * pilot（tutor）の claim entry を組み立てる。
  *
  * ★ 載せる kind は purpose の移行状況で決める ★
@@ -92,11 +117,17 @@ export function deviceDiagnosisToken(
 export function buildTutorDeviceClaimEntries(
   basicInfo: BasicInfo | null | undefined,
   diagnosis?: DiagnosisResult | null,
+  activity?: ActivityData | null,
 ): readonly ExamDeviceClaimEntry[] {
+  // ★ 宣言順を固定する ★
+  //   偶然の object 順序に依存させない。kind ごとに独立した token なので
+  //   順序は wire 上の見た目だけに効くが、決定的にしておく（QA が固定する）。
   const entries: ExamDeviceClaimEntry[] = [];
   const basicToken = deviceBasicInfoToken(basicInfo);
   if (basicToken) entries.push({ kind: 'basic_info', token: basicToken });
   const diagnosisToken = deviceDiagnosisToken(diagnosis);
   if (diagnosisToken) entries.push({ kind: 'diagnosis', token: diagnosisToken });
+  const activityToken = deviceActivityToken(activity);
+  if (activityToken) entries.push({ kind: 'activity', token: activityToken });
   return entries;
 }

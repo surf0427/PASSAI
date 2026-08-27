@@ -1188,11 +1188,90 @@ Exam-specific differences / Rollback implications
 - **Rollback implications:** block を出さなくしても legacy 経路は不変。
   `resolveDiagnosisTypeHint` は legacy が既に使っているため戻さない。
 
+## E-S45 — activity の canonical 表現はカテゴリ別件数であり、mirror gap は Source-Sync に委ねる
+
+- **Status:** `LOCKED`（Stage 5.3 で実装 + QA 済み。Tutor migration gap G6）
+- **ID 由来（S5-P5 promotion）:** source branch `exam-spine-w1-convergence-v2` では
+  branch-local に `E-S39` として採番されていたが、canonical の `E-S39` は
+  「device claim の request transport は 1 本だけとし、`signal.ts` を transport に
+  しない」であり **別 Decision** である。verbatim で持ち込むと衝突するため、
+  canonical の次番 **E-S45** へ再採番した（内容は不変）。
+- **Decision:** Tutor における `activity` の canonical 表現は
+  **カテゴリ別件数の 1 行表現**（block id `activity_category_counts`）とする。
+  `activity_logs.payload` の narrative（活動名 / テーマ / 説明 / 成果）は
+  canonical block にも `ExamContextInput` にも載せない。
+  ラベル表・件数集計・1 行整形の正本は `lib/activityCategories.ts` の
+  `ACTIVITY_CATEGORY_LABELS` / `summarizeActivityCategories()` /
+  `formatActivityCategoryCounts()` とし、legacy（`tutorContext.ts` /
+  `tutorStudentContext.ts`）も canonical（assembler）も**同じ関数**を通す。
+- **★ 既存 activity block では代用できない ★**
+  ```text
+  activity_text            formatActivityData の全文        … self_analysis 系 purpose 向け
+  activity_context         buildActivityContext             … matching purpose 向け
+  activity_summary         800 字圧縮の要約                 … interview_questions 向け
+  activity_category_counts カテゴリ別件数（Stage 5.3 で追加）… tutor が実際に出している表現
+  ```
+  したがって claim を配線するだけでは activity は canonical 経路に載らない。
+  block の追加は E-S25（「凍結対象は今ある block の contract であって block 集合の
+  完全性ではない」）の範囲内であり、許可のための Decision は別途要らない。
+- **label 表を 1 箇所にする理由:** Stage 5.3 の時点で同一内容の
+  `ACTIVITY_CATEGORY_LABELS` が **2 箇所**に存在していた。canonical 側にもう 1 つ作ると
+  3 箇所になり、カテゴリ追加やラベル変更のときに
+  **同じ活動データから違う prompt が出る**（E-S35 / E-S44 と同じ失敗形）。
+- **claim transport:** 既存の `edc1` header に entry を 1 つ足すだけで、
+  header 名 / version / payload 形式 / server parser のいずれも変更しない
+  （E-S39 の「transport は 1 本」を維持する）。
+  client が申告するのは **device canonical の `ActivityData` 本体**であり、
+  body に載せている counts 射影ではない（射影を claim にすると server payload と
+  一致しない）。実測 120 → 220 bytes、活動 200 件でも 220 bytes のまま
+  （token は content 由来の固定長なので claim size は data size に比例しない）。
+- **★ mirror gap は Source-Sync に委ねる（握り潰さない）★**
+  `dualWriteActivityLog` は **submit 時にしか発火せず、autosave は mirror されない**
+  （`EXAM_SPINE_STAGE3_READINESS_AUDIT.md` §10.1 G1）。
+  したがって入力途中の端末では device と server が**正当に**食い違い、claim は
+  `mismatch` になって server 値が採用されない。
+  ```text
+  これは欠陥ではなく設計どおりの挙動である（E-S2 の負の安全ゲート）。
+  stale な server 値を prompt に載せないための仕組みが働いている状態。
+  transport 側で許容範囲を設けたり、autosave を mirror させたりして
+  「一致しやすくする」ことはしない。前者は verified の意味を壊し、
+  後者は G1（mirror gap）という別 STEP の課題である。
+  ```
+- **schema_version の drift は無い（実測）:** writer（`lib/supabase/activityLogs.ts`）は
+  `"1"`、DDL default も `'1'`、device 宣言も `'1'` で一致する。
+  diagnosis（E-S38）のような既存行の永久 mismatch リスクは **activity には無い**。
+  QA が writer の実ソースと `supabase/schema.sql` の DDL default を読んで一致を固定する。
+- **presence:** Stage 4 の source state に従う。`available`（Source-Sync verified）の
+  ときだけ `present`。`unverified` / `empty` / `unreadable` / `denied_by_purpose`、
+  および全カテゴリが 0 件の場合は block を出さない
+  （legacy も合計 0 件なら行ごと省略しており、代替文言を作らない）。
+- **★ これは consumer switch ではない ★** canonical context に activity block が
+  存在することと、AI consumer がそれを使うことは別工程である。
+  Stage 5 の最初の切替対象は **E-S40 のまま tutor の `basic_info` slot**であり、
+  production tutor prompt は本 Decision 後も legacy 経路のままである（E-S43）。
+  S5-P5 では promotion 前後で `buildTutorSupabaseContextSection` /
+  `buildTutorStudentContextSection` の出力を **byte 一致**で確認している。
+- **Implementation evidence:** `lib/activityCategories.ts` ／
+  `lib/examSpine/blocks/{types,registry,build}.ts`（`activity_category_counts`）／
+  `lib/examSpine/context/assemble.server.ts` / `orchestrator/{input,plan}.ts` ／
+  `lib/examSpine/context/shadow/compareTutor.ts` ／
+  `lib/examSpine/sync/claim/deviceBasicInfo.ts`（`deviceActivityToken`）。
+  QA は `scripts/exam-spine-stage5-3-check.ts`。
+- **Alternatives rejected:**
+  - *payload をそのまま block に載せる* — 活動の narrative が prompt 経路へ入る。
+  - *body の counts 射影を claim token の材料にする* — server payload は
+    `ActivityData` 本体なので永久に一致しない。
+  - *既存の `activity_text` を tutor に流用する* — legacy が出しているのは件数であり、
+    全文を載せると移行で prompt が大きく変わる（E-P7 の逆方向の劣化）。
+- **Rollback implications:** block は shadow からしか参照されないため、
+  plan から外せば consumer への影響なく取り消せる。claim も送らなくなれば
+  `unclaimed` に戻るだけで legacy 挙動は不変。
+
 ---
 
 # 5. Policy / persistence decisions
 
-## E-S45 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+## E-S46 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
 
 - **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
 - **HUMAN RULING（本 decision の権威）:**
@@ -1589,3 +1668,41 @@ policy 削除後、`mirror_events` への browser INSERT が `42501` になっ�
 | **D4** | `exam_personal_memory` を作らない。Layer 2 は request-local。second writer を作らない | `E-P2`（再判断 `E-H4`） |
 | **D5** | `statementDraft` を structural bridge として維持。`statement_drafts` を作らない | `E-P3`（再判断 `E-H5`） |
 | **D6** | 氏名を将来 prompt から落とす。Stage 0 では prompt 不変 | `E-P4` |
+
+## E-S47 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
+
+- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet 3。`E-S40` が開けた最初の consumer 切替の実装判断）
+- **決定:**
+  ```text
+  切替対象   tutor purpose の basic_info slot のみ（E-S40）
+  採用条件   Source-Sync verified ＋ canary 許可 ＋ canonical slot が legacy と完全一致
+  不一致時   legacy を維持し、理由を enum（divergent_projection / would_reduce_context /
+             canonical_absent / not_usable）として観測へ残す
+  承認 slot  EXAM_SPINE_SWITCHABLE_SLOTS = ['tutor.basic_info'] の 1 件のみ
+  ```
+- **なぜ「完全一致」を採用条件にしたか:** Packet 3 の制約は「consumer authority を切り替えるが、
+  AI が見る文字列は変えない」である。行が増えるのも減るのも AI-visible の変化なので、
+  同値を採用条件に据えるのが制約の機械的な強制になる。これは切替を骨抜きにする妥協ではなく、
+  **切替は provenance（authority of record）に対して起き、出力には起きない**という宣言である。
+  実測では 34 payload 中 25 件で canonical が authority を取り、切替は空回りしていない。
+- **一致しない構造差（本 packet で解消できないもの）:**
+  ```text
+  legacy      preferences を 生のまま 3 件へ切ってから 非 record を捨てる
+  canonical   read mapper が 非 record を捨てながら 10 件へ詰める
+  ```
+  壊れた entry が 3 件境界より前にあると採用件数がずれる。ずれの原因である
+  「どの生 slot が壊れた entry に消費されたか」は mapper 通過後の row に残らないため、
+  **row だけから legacy を再現することは原理的にできない**。read layer（Stage 3 / 全 consumer 共有）
+  を本 packet で変えるのは scope 外なので fail-closed に倒し、`divergent_projection` として
+  観測可能にした。壊れた entry は writer の型上は発生せず、localStorage 破損時のみ現れる。
+  **read layer 側を legacy 順序へ寄せるかどうかは、consumer を広げる前に人間が決める論点である。**
+- **cap の扱い:** legacy tutor は 40 字 / 3 件、canonical read layer は 200 字 / 10 件で切る。
+  40 ≤ 200 / 3 ≤ 10 なので legacy cap を後段でかけ直せば二段切りは 1 段切りと等価。
+  cap 値は `tutorBasicInfoSlot.ts` に宣言し、QA が `tutorContext.ts` の実値と突き合わせる
+  （adapter が `BASIC_INFO_SCHEMA_VERSION` に対して採った宣言 + pin と同じ pattern）。
+- **保持したもの:** legacy serverRead は削除しない（切替の土台であり、同値検査の相手でもある）/
+  transport は `edc1` 1 本のまま（`E-S46`）/ shadow は observer のまま（`E-S42` / `E-S43`）/
+  canary は default deny の連言（`E-S11`）/ 評定・氏名は slot に載せない（`E-P5` / `E-P8`）。
+- **query 本数:** slot 切替と shadow は同じ canonical context を 1 回だけ組み立てて共用する。
+  どちらも OFF の user では canonical assembly を 1 本も発行しない。
+

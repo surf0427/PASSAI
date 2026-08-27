@@ -26,7 +26,7 @@
 | 項目 | 値 |
 |---|---|
 | Canonical implementation branch | `exam-spine-stage4-stabilize`（Stage 4 final arbitration / E-S38 で確定） |
-| Canonical HEAD at this arbitration | `6b1a755b2675dea8c1b42614ce5f509810bb40f1`（S5-P2 の lineage convergence は `exam-spine-s5p2-lineage-convergence` でこの HEAD を取り込み済み） |
+| Canonical HEAD at this arbitration | `317a40ad3fc8c7cb1d554c80b5655b455235b390`（S5-P3 basic_info consumer switch は `exam-spine-s5p3-basic-info-switch` でこの HEAD を取り込み済み） |
 | Canonical ancestry root | `exam-spine-stage3` @ `a009116`（L2 / E-S23） |
 
 ## 解決手順（毎回これを実行する）
@@ -49,7 +49,7 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 
 | branch | HEAD（arbitration 時点） | 分類 | 理由 |
 |---|---|---|---|
-| `exam-spine-w1-convergence-v2` | `28ea240`（継続前進中） | **PARTIAL（Stage 5.1 + 5.2 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）canonical へ targeted cherry-pick 済み。**未昇格**は Stage 5.3（activity block）/ 5.4（self-analysis claim）/ 5.5（history window）/ 5.6（statement_review。本 packet 中に出現）で、consumer migration の前提作業として後続 packet で判断する |
+| `exam-spine-w1-convergence-v2` | `bff2e77`（継続前進中） | **PARTIAL（Stage 5.1 + 5.2 + 5.3 昇格済み）** | Stage 5.1（Packet J = shadow comparison）は S5-P3 で（`1f05b74`／decision → **E-S42 / E-S43**）、Stage 5.2（canonical diagnosis block）は S5-P4 で（`9f270c6`／decision → **E-S44**）、Stage 5.3（canonical activity block ＋ device activity claim）は S5-P5 で（`51f3a9f`〜`54d429e`／decision → **E-S45**）canonical へ targeted cherry-pick 済み。**未昇格**は Stage 5.4（self-analysis claim）/ 5.5（history comparison window）/ 5.6（statement_review）/ interview_record（S5-P5 観測時点で branch 上に出現）で、consumer migration の前提作業として後続 packet で判断する |
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `fb32d50` | **PROMOTED（S5-P2 で昇格済み）** | code commit `ac1ef85` を cherry-pick で canonical へ取り込み、**E-S42**（人間裁定 / E-H7 = OPTION C）として登録した。`E-S39` Decision 2 を supersede する |
@@ -131,12 +131,17 @@ Stage 5.2  diagnosis block
   7a80aaa  verify diagnosis block migration semantics         ← 上に依存
   3285d55  resolve tutor diagnosis migration gap              ← 上に依存
       ↓（5.3 も compareTutor.ts を拡張するため 5.2 が前提）
-Stage 5.3  activity category counts block
-  6432b54  unify the activity category label map              ← 独立に port 可能
-  e02c60c  add canonical activity category counts block       ← 6432b54 + 42cdf18 に依存
-  4309244  add activity to tutor device claims                ← e02c60c に依存
-  501734b  verify activity claim sync semantics               ← 上に依存
-  8a5bd09  resolve tutor activity claim gap                   ← 上に依存
+Stage 5.3  activity category counts block   ← ★ S5-P5 で canonical へ昇格済み ★
+  6432b54  unify the activity category label map              → canonical 51f3a9f
+  e02c60c  add canonical activity category counts block       → canonical 569fa94
+  4309244  add activity to tutor device claims                → canonical 377ce06
+  501734b  verify activity claim sync semantics               → canonical 54d429e（+ prompt anchor 修正）
+  8a5bd09  resolve tutor activity claim gap                   → canonical E-S45 として再採番
+      ↓（5.4 以降は未昇格）
+Stage 5.4  self-analysis device claim         ← 未昇格
+Stage 5.5  history comparison window          ← 未昇格
+Stage 5.6  statement_review device claim      ← 未昇格
+interview_record（5.6 の先 / S5-P5 観測時点で出現）← 未昇格。新 block `interview_issue_line` を足す
 ```
 
 **独立に port 可能な commit（2 件のみ）:**
@@ -151,6 +156,9 @@ shadow comparison にも依存しない。
 
 ⚠️ この branch の decision ID は **E-S35〜E-S39** を branch-local に使っている。
 canonical はすでに E-S35〜E-S40 を別の意味で確定済み（E-S38）。
+実例: Stage 5.3 の branch-local `E-S39`（activity の canonical 表現）は、canonical の
+`E-S39`（device claim transport は 1 本）と **別 Decision** である。S5-P5 では
+verbatim で持ち込まず canonical の次番 **E-S45** へ再採番した。
 昇格時は **必ず未使用 ID へ再採番**すること。verbatim merge は禁止。
 
 ## ancestry rule

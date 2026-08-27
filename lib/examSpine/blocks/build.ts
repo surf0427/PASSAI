@@ -200,6 +200,9 @@ function buildBlockContents(
         : buildStructureAnalysisSection(input.structureAnalysis ?? undefined),
 
     // ── 横断要約 ────────────────────────────────────────────────
+    // 活動: カテゴリ別件数の 1 行表現。legacy の「・活動整理には、…」の値部分。
+    activity_category_counts: input.activityCategoryCounts ?? null,
+
     // 診断: hint 1 文をそのまま content にする。
     // legacy と同じ 120 字 cap を掛ける（tutorContext の MAX_SUMMARY_LENGTH と同値。
     // 現行の hint はすべて 120 字未満なので実質 no-op だが、parity のために残す）。

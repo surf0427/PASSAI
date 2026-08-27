@@ -272,34 +272,106 @@ function t7Static(): void {
     consumerPath.includes('buildTutorSupabaseContextSection'));
 
   // canonical block が prompt へ入っていない
-  const promptIdx = Math.max(
-    consumerPath.indexOf('buildTutorUserPrompt'),
-    consumerPath.indexOf('composeTutorPrompt('),
-  );
+  //
+  // ★ 修正（S5-P4）★ 旧実装は route.indexOf('buildTutorUserPrompt') を使っていたが、
+  //   この識別子は file 冒頭の見出しコメントにも現れるため、±1500 字の window が
+  //   file の先頭に張られ、実際の prompt 組み立て位置を検査できていなかった
+  //   （負例 N3「prompt が diagnosis_type_hint を読む」が素通りした）。
+  //   コメント行を除いた実コード上で **呼び出し形**に anchor し、
+  //   window ではなく prompt 組み立て「以降すべて」を検査する（範囲を広げる方向の修正）。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  // ★ S5-P3 追加: shadow 比較の legacy 側が全 field を渡していること ★
+  //   本 packet の merge 検証で発覚した穴 —— canonical（S5-P5）が legacy 側へ足した
+  //   `activityCategoryCounts` を route から **丸ごと削除しても** tsc も全 QA も素通りした。
+  //   optional field なので型検査は落ちず、どの suite も個々の field を見ていなかった。
+  //   これは merge / refactor で canonical の比較 coverage が静かに縮む経路になる。
+  //   そこで「型が宣言した field を route が全部渡している」ことを機械的に突き合わせる。
+  {
+    const cmpSrc = readFileSync(join(ROOT, 'lib/examSpine/context/shadow/compareTutor.ts'), 'utf8');
+    const typeBlock = /export type TutorLegacyInput = \{([\s\S]*?)\n\};/.exec(cmpSrc);
+    check('T7 TutorLegacyInput の宣言を読める', typeBlock !== null);
+    if (typeBlock) {
+      const declared = [...typeBlock[1].matchAll(/readonly (\w+)\??:/g)].map((m) => m[1]);
+      const legacyArg = /compareTutorShadow\(\{\s*legacy:\s*\{([\s\S]*?)\n\s*\},/.exec(route);
+      check('T7 shadow 比較の legacy 引数を読める', legacyArg !== null);
+      if (legacyArg) {
+        const passed = [...legacyArg[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+        const missing = declared.filter((f) => !passed.includes(f));
+        check('T7 legacy 側は宣言された field を全部渡している',
+          missing.length === 0, `未指定=${missing.join(',')}`);
+      }
+    }
+  }
+
+  // ★ S5-P3 で anchor を「最も早い prompt 組み立て」へ広げた ★
+  //   S5-P4 の anchor は `= buildTutorUserPrompt(` 固定だったが、合流後の route では
+  //   prompt 合成が `composeTutorPrompt`（純関数）へ抽出されており、この識別子は
+  //   route に現れない＝ anchor が消えて検査が空回りする。
+  //   不変条件は「prompt 組み立て以降に shadow / canonical 由来が現れない」なので、
+  //   **実在する組み立て呼び出しのうち最も早いもの**に anchor する。
+  //   これは S5-P4 の意図（範囲を広げる方向）をそのまま踏襲した retarget である。
+  const promptAnchors = ['= composeTutorPrompt(', '= buildTutorUserPrompt(']
+    .map((a) => routeCode.indexOf(a))
+    .filter((i) => i !== -1);
+  const promptIdx = promptAnchors.length > 0 ? Math.min(...promptAnchors) : -1;
+  check('T7 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
-    const w = consumerPath.slice(Math.max(0, promptIdx - 1500), promptIdx + 1500);
-    check('T7 prompt 付近に diagnosis_type_hint が現れない', !w.includes('diagnosis_type_hint'));
-    check('T7 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T7 prompt 以降に diagnosis_type_hint が現れない',
+      !afterPrompt.includes('diagnosis_type_hint'));
+    check('T7 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    // optional chaining（`.context?.blocks`）でも抜けないよう正規表現で見る。
+    check('T7 prompt 以降に canonical block 配列が現れない',
+      !/\.context\??\.blocks/.test(afterPrompt));
   }
   const legacy = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
   check('T7 legacy が canonical block を import しない', !legacy.includes('examSpine/blocks'));
   check('T7 legacy が canonical context を import しない', !legacy.includes('examSpine/context'));
 
-  // ── T8: Stage 5.2 の境界（5.3 以降を巻き込んでいないこと）────────────
+  // ── T8: canonical stage 境界（未昇格 stage を巻き込んでいないこと）──────
   //
-  //   Stage 5.2 は diagnosis block だけを昇格する packet である。
-  //   source lineage には 5.3（activity category counts）/ 5.4（self_analysis claim）/
-  //   5.6（statement_review）が続いており、cherry-pick 時に混入しやすい。
-  //   block 集合と tutor の claim kind 集合を pin して accidental promotion を落とす。
-  console.log('\n8. Stage 5.2 boundary');
+  //   S5-P4 時点ではこの guard は「Stage 5.3 の block が混入していない」ことを
+  //   固定していた。S5-P5 で Stage 5.3（activity）を canonical へ昇格したため、
+  //   境界を **1 段前へ進める**（削除して弱くするのではない）。
+  //
+  //     ALLOWED   basic_info（5.1）/ diagnosis（5.2）/ activity（5.3）
+  //     FORBIDDEN self_analysis（5.4）/ history window（5.5）/
+  //               statement_review（5.6）/ interview_record（その先）
+  //
+  //   ★ registry の membership だけでは足りない ★
+  //     5.4 / 5.6 は **既存 block を再利用**して claim kind だけを足すため、
+  //     block 集合を見ても検出できない。claim kind 集合も併せて pin する。
+  console.log('\n8. Canonical stage boundary');
   const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
   check('T8 diagnosis_type_hint が登録されている', blockIds.includes('diagnosis_type_hint'));
-  for (const later of ['activity_category_counts']) {
-    check(`T8 Stage 5.3 の block \`${later}\` が混入していない`, !blockIds.includes(later));
+  check('T8 Stage 5.3 の activity_category_counts は昇格済み（許可）',
+    blockIds.includes('activity_category_counts'));
+  //   後続 stage が **新設**する block id。interview_record は interview_issue_line を足す。
+  for (const later of ['interview_issue_line']) {
+    check(`T8 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
   }
-  //   tutor が申告する device claim kind は Stage 5.2 時点で basic_info + diagnosis の 2 つ。
-  //   5.3 / 5.4 / 5.6 はここへ kind を足すので、集合を固定すれば混入が落ちる。
-  const claimKinds = buildTutorDeviceClaimEntries(
+  //   tutor が申告する device claim kind は Stage 5.3 時点で basic_info + diagnosis +
+  //   activity の 3 つ。5.4 / 5.6 / interview_record はここへ kind を足す。
+  //
+  //   ★ arity 非依存にする ★
+  //     `buildTutorDeviceClaimEntries()` を呼ぶだけの検査は、後続 stage が引数を
+  //     増やした場合「渡さなければ出ない」ので混入を見逃す。push している kind
+  //     literal を関数本体から直接読み取る。
+  const claimFile = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimFile.indexOf('export function buildTutorDeviceClaimEntries(');
+  check('T8 claim 組み立て関数を特定できる', fnIdx !== -1);
+  const declaredKinds = Array.from(
+    claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  eq('T8 tutor の claim kind は basic_info + diagnosis + activity のみ', declaredKinds,
+    ['activity', 'basic_info', 'diagnosis']);
+  //   実際に組み立てても同じ集合であること（宣言と挙動の一致）。
+  const builtKinds = buildTutorDeviceClaimEntries(
     { name: 'x', preferences: [], examTypes: [] } as unknown as Parameters<
       typeof buildTutorDeviceClaimEntries
     >[0],
@@ -307,7 +379,13 @@ function t7Static(): void {
       typeof buildTutorDeviceClaimEntries
     >[1],
   ).map((e) => e.kind).sort();
-  eq('T8 tutor の claim kind は basic_info + diagnosis のみ', claimKinds, ['basic_info', 'diagnosis']);
+  eq('T8 activity を渡さなければ claim も出ない（申告のみ / 生成しない）', builtKinds,
+    ['basic_info', 'diagnosis']);
+  //   Stage 5.5（history comparison window）を巻き込んでいない。
+  const deviceViews = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  check('T8 Stage 5.5 の read-cap window が混入していない',
+    !deviceViews.includes('selectDeviceSyncWindow'));
 }
 
 async function main(): Promise<void> {

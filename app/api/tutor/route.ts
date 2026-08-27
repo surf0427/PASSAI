@@ -63,6 +63,7 @@ import { decideTutorBasicInfoSlot } from '@/lib/examSpine/context/tutorBasicInfo
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
+import { formatActivityCategoryCounts } from '@/lib/activityCategories';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import { captureRouteException } from '@/lib/sentry/capture';
@@ -450,6 +451,60 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
+  // ── shadow comparison（Stage 5.1 / observer）──
+  //
+  // ★ prompt 組み立てより前に完結させる ★
+  //   canonical 側の QA は「prompt 以降に shadow 由来識別子が現れない」ことを検査する。
+  //   比較は canonical assembly と legacy context だけで完結し prompt を必要としないので、
+  //   ここで終わらせておけばその不変条件を retarget せずに満たせる。
+  let shadowOverall: string | undefined;
+  let shadowMismatchCount: number | undefined;
+  if (shadowEnabled && canonical?.ok === true) {
+    const shadow = canonical;
+    try {
+      // ★ 比較は純関数。追加 query を 1 本も出さない ★
+      //   結果は enum と hash だけで、raw 値も userId も含まない。
+      //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
+      //   ※ 比較の legacy 側には **切替前の** contextResult を使う。切替後の値を入れると
+      //     「canonical と canonical を比べて常に一致」になり、観測が自己参照で無意味になる。
+      const comparison = compareTutorShadow({
+        legacy: {
+          basicInfo: body.basicInfo ?? null,
+          activityData: body.activityData ?? null,
+          studentProfile: body.studentProfile ?? null,
+          statementReviewLatest: body.statementReviewLatest ?? null,
+          essayReviewLatest: body.essayReviewLatest ?? null,
+          interviewRecordLatest: body.interviewRecordLatest ?? null,
+          interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+          mypageSummary: body.mypageSummary ?? null,
+          statementDraft: body.statementDraft ?? null,
+          // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
+          diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
+          // legacy の Supabase 層が出している件数 1 行表現。canonical block と
+          // 同じ formatter を通すことで、表現の差ではなく値の差だけを見る。
+          activityCategoryCounts: contextResult.context.activity
+            ? formatActivityCategoryCounts({
+                categoryCounts: contextResult.context.activity.categoryCounts,
+                totalCount: contextResult.context.activity.totalCount,
+              })
+            : null,
+          presentationLatest: contextResult.context.presentation ?? null,
+        },
+        canonicalInput: shadow.shadowResolvedInput,
+        context: shadow.context,
+      });
+      // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
+      lat.record('spineShadowCompare_ms', tShadow);
+      shadowOverall = comparison.overall;
+      shadowMismatchCount = comparison.mismatchCount;
+    } catch {
+      // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
+    }
+  }
+  if (slotSwitchEnabled || shadowEnabled) {
+    lat.record('spineShadow_ms', tShadow);
+  }
+
   // ── basic_info slot の consumer 切替（E-S40）──
   //
   // ★ 切り替えるのは「値の出どころ」だけで、「AI が見る文字列」ではない ★
@@ -487,45 +542,6 @@ export async function POST(req: Request): Promise<Response> {
   });
   const systemBlocks = composed.systemBlocks;
 
-  let shadowOverall: string | undefined;
-  let shadowMismatchCount: number | undefined;
-  if (shadowEnabled && canonical?.ok === true) {
-    const shadow = canonical;
-    try {
-      // ★ 比較は純関数。追加 query を 1 本も出さない ★
-      //   結果は enum と hash だけで、raw 値も userId も含まない。
-      //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
-      //   ※ 比較の legacy 側には **切替前の** contextResult を使う。切替後の値を入れると
-      //     「canonical と canonical を比べて常に一致」になり、観測が自己参照で無意味になる。
-      const comparison = compareTutorShadow({
-        legacy: {
-          basicInfo: body.basicInfo ?? null,
-          activityData: body.activityData ?? null,
-          studentProfile: body.studentProfile ?? null,
-          statementReviewLatest: body.statementReviewLatest ?? null,
-          essayReviewLatest: body.essayReviewLatest ?? null,
-          interviewRecordLatest: body.interviewRecordLatest ?? null,
-          interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
-          mypageSummary: body.mypageSummary ?? null,
-          statementDraft: body.statementDraft ?? null,
-          // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
-          diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
-          presentationLatest: contextResult.context.presentation ?? null,
-        },
-        canonicalInput: shadow.shadowResolvedInput,
-        context: shadow.context,
-      });
-      // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
-      lat.record('spineShadowCompare_ms', tShadow);
-      shadowOverall = comparison.overall;
-      shadowMismatchCount = comparison.mismatchCount;
-    } catch {
-      // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
-    }
-  }
-  if (slotSwitchEnabled || shadowEnabled) {
-    lat.record('spineShadow_ms', tShadow);
-  }
 
   // ── user prompt 合成 ──
   // なぜ userPrompt 末尾に intent=advice を載せるのか:
