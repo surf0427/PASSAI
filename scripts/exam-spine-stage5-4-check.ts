@@ -568,14 +568,20 @@ function t12Boundary(): void {
   const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);
   check('T12 Stage 5.7 の interview_issue_line は昇格済み（許可）',
     blockIds.includes('interview_issue_line'));
-  for (const later of ['essay_issue_line', 'presentation_issue_line']) {
-    check(`T12 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
-  }
+  check('T12 Stage 5.9 の presentation_result_summary は昇格済み（許可）',
+    blockIds.includes('presentation_result_summary'));
+  //   ★ essay は block を作らない（E-S53）★ 推測 id ではなく sourceKind で 0 件を見る。
+  const essayBlocks = blockIds.filter(
+    (id) => (EXAM_CONTEXT_BLOCK_REGISTRY as Record<string, { sourceKind?: string }>)[id]
+      ?.sourceKind === 'essay');
+  eq('T12 sourceKind=essay の block は作られていない（E-S53）', essayBlocks, []);
   //   tutor plan は 5.1 + 5.2 + 5.3 のまま（5.4 は block を足さない / 下記 (e) 参照）。
   const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
-  eq('T12 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks, [
+  eq('T12 tutor plan の block は 5.1/5.2/5.3/5.7/5.9 の 5 つ', tutorBlocks, [
     'tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
     'interview_issue_line',
+    // ★ Stage 5.9（S5-P11）で追加 ★ plan membership であって AI-visible ではない。
+    'presentation_result_summary',
   ]);
 
   // (d) consumer switch が動いていない。

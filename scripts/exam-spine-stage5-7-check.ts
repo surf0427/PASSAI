@@ -646,9 +646,9 @@ function t6PlanNotVisible(): void {
 
   // (a) plan には載っている（Stage 5.7 の意図どおり）。
   const tutorBlocks = getExamPurposePlan('tutor').blocks.map((b) => b.id);
-  eq('T6 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks,
+  eq('T6 tutor plan の block は 5.1/5.2/5.3/5.7/5.9 の 5 つ', tutorBlocks,
     ['tutor_student_context', 'diagnosis_type_hint', 'activity_category_counts',
-     'interview_issue_line']);
+     'interview_issue_line', 'presentation_result_summary']);
 
   // (b) ★ しかし plan は production から読まれない ★
   //     production code（lib/ と app/、examSpine の orchestrator 自身を除く）が
@@ -704,8 +704,10 @@ function t6PlanNotVisible(): void {
   eq('T6 window primitive は 5.4/5.6/5.7 の 3 kind のみ', windowed,
     ['deviceInterviewRecordView', 'deviceSelfAnalysisView', 'deviceStatementReviewView']);
   const registry = readFileSync(join(ROOT, 'lib/examSpine/blocks/registry.ts'), 'utf8');
-  for (const later of ['essay_issue_line', 'presentation_issue_line',
-    'statement_review_tutor', 'self_analysis_tutor']) {
+  //   ★ presentation_result_summary は Stage 5.9（S5-P11）で昇格した ★
+  check('T6 Stage 5.9 の presentation_result_summary は registry にある（許可）',
+    registry.includes('presentation_result_summary:'));
+  for (const later of ['essay_issue_line', 'statement_review_tutor', 'self_analysis_tutor']) {
     check(`T6 未昇格 stage の block \`${later}\` が混入していない`,
       !registry.includes(`${later}:`));
   }

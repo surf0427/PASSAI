@@ -447,11 +447,13 @@ function t9Boundary(): void {
 
   // (a) tutor plan の block 列 — Stage 5.1 / 5.2 / 5.3 の 3 つだけ。
   const tutorBlocks = EXAM_PURPOSE_PLANS.tutor.blocks.map((b) => b.id);
-  eq('T9 tutor plan の block は 5.1/5.2/5.3/5.7 の 4 つ', tutorBlocks, [
+  eq('T9 tutor plan の block は 5.1/5.2/5.3/5.7/5.9 の 5 つ', tutorBlocks, [
     'tutor_student_context',
     'diagnosis_type_hint',
     'activity_category_counts',
     'interview_issue_line',
+    // ★ Stage 5.9（S5-P11）で追加 ★ plan membership であって AI-visible ではない。
+    'presentation_result_summary',
   ]);
 
   // (b) tutor claim kind — **実ソースから抽出**する。
@@ -480,10 +482,15 @@ function t9Boundary(): void {
   check('T9 activity_category_counts が登録されている', blockIds.includes('activity_category_counts'));
   check('T9 Stage 5.7 の interview_issue_line は昇格済み（許可）',
     blockIds.includes('interview_issue_line'));
-  //   Stage 5.8 以降（essay / presentation）が新設する block はまだ無い。
-  for (const later of ['essay_issue_line', 'presentation_issue_line']) {
-    check(`T9 未昇格 stage の block \`${later}\` が混入していない`, !blockIds.includes(later));
-  }
+  check('T9 Stage 5.9 の presentation_result_summary は昇格済み（許可）',
+    blockIds.includes('presentation_result_summary'));
+  //   ★ essay は block を作らない（E-S53）★ Stage 5.8 は「別 store なので block 無し」で
+  //     決着しており、後続 stage が勝手に新設していないことを pin する。
+  //     推測 id（*_issue_line）だけでなく **sourceKind = essay の block が 0 件**であることを見る。
+  const essayBlocks = blockIds.filter(
+    (id) => (EXAM_CONTEXT_BLOCK_REGISTRY as Record<string, { sourceKind?: string }>)[id]
+      ?.sourceKind === 'essay');
+  eq('T9 sourceKind=essay の block は作られていない（E-S53）', essayBlocks, []);
 
   // (d) consumer switch は行われていない — first consumer / slot の pin が動いていない。
   const entry = readFileSync(join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STAGE5_ENTRY.md'), 'utf8');
