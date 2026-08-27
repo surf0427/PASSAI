@@ -467,6 +467,38 @@ async function t11TruncationBlocker(): Promise<void> {
   eq('T11 overflow の観測は readStatus に残る', over.source?.readStatus, 'truncated');
   eq('T11 truncated flag が provenance に残る', over.source?.truncated, true);
   eq('T11 origin は server', over.source?.origin, 'server');
+
+  // ★ 旧 T11 が守っていた invariant のうち、E-S43 後も生き続けるものを移設する ★
+  //   （S5-P7 / §T11 migration。「QA を通すため削除」にしない）
+  //
+  //   旧 T11 の保証:
+  //     (1) 行数 > cap の server は unreadable            → E-S43 で意図的に廃止
+  //     (2) unreadable では sync 判定に進まない           → 実際の失敗については維持（下記 b）
+  //     (3) origin は bridge のまま                       → 同上
+  //     (4) truncated が readStatus に残る                → 維持（上記）
+  //   加えて E-S43 が新たに守るべきもの:
+  //     (5) overflow を ok へ丸めない
+  //     (6) 実際の失敗（error / skipped）は依然 unreadable
+  //     (7) window 内が違えば verified にしない（false verified を作らない）
+
+  // (a) overflow を ok へ丸めていない。
+  check('T11 overflow を ok へ丸めていない', over.source?.readStatus !== 'ok');
+
+  // (b) 実際の失敗は依然 unreadable で、sync 判定に進まず origin も bridge のまま。
+  const failed = await assemble({
+    logs: DEVICE_LOGS, claim: deviceSelfAnalysisToken(DEVICE_LOGS),
+    errors: { self_analysis_logs: { code: '42P01', message: 'x' } },
+  });
+  eq('T11 query failure は依然 unreadable', failed.source?.state, 'unreadable');
+  eq('T11 query failure では sync 判定に進まない', failed.source?.syncStatus, null);
+  eq('T11 query failure の origin は bridge のまま', failed.source?.origin, 'bridge');
+
+  // (c) overflow でも window 内が違えば verified にしない（自動 MATCH ではない）。
+  const wrongWindow = await assemble({
+    logs: DEVICE_LOGS, claim: 'efp1:' + 'd'.repeat(64),
+  });
+  check('T11 overflow でも window が違えば verified にしない',
+    wrongWindow.source?.syncStatus !== 'verified', String(wrongWindow.source?.syncStatus));
 }
 
 
@@ -515,13 +547,16 @@ function t12Boundary(): void {
   const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
   check('T12 serverMirrorCandidate を特定できる', smcIdx !== -1);
   const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
-  check('T12 Stage 5.5 feature（windowed opt-in）が混入していない', !/\bwindowed\b/.test(smcBody));
-  check('T12 serverMirrorCandidate は strict のまま（ok 以外は unreadable）',
-    /status\s*!==\s*'ok'/.test(smcBody));
+  //   S5-P7 で Stage 5.5（E-S48）を昇格した。禁止から「opt-in が維持されていること」へ。
+  check('T12 Stage 5.5 の windowed opt-in は昇格済み（許可）', /\bwindowed\b/.test(smcBody));
+  check('T12 windowed は opt-in のまま（既定 strict）',
+    /input\.windowed === true/.test(smcBody));
 
   const assembler = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
-  check('T12 assembler は truncated を unreadable のままにしている',
-    /readStatus === 'truncated'/.test(assembler));
+  check('T12 windowed の付与は capped kind に限定されている',
+    /windowed: isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T12 非 capped kind の truncated は unreadable のまま',
+    /truncated && !isExamCappedSourceKind\(kind\)/.test(assembler));
 
   // (c) Stage 5.6 / interview_record の block が混入していない。
   const blockIds = Object.keys(EXAM_CONTEXT_BLOCK_REGISTRY);

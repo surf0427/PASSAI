@@ -493,13 +493,16 @@ function t9Boundary(): void {
   //       選択規則（E-S47）であり、canonical source の可読性は変えない。
   //       Stage 5.5 の feature は assemble.server.ts / adapters/types.ts 側にある
   //       「truncated を unreadable にしない」semantics のほうである。
+  //     S5-P7 で Stage 5.5（windowed readability / E-S48）を昇格したので、
+  //     ここも「feature の不在」ではなく「opt-in が維持されていること」を見る。
   const adapterTypes = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/types.ts'), 'utf8');
   const smcIdx = adapterTypes.indexOf('export function serverMirrorCandidate(');
   const smcBody = smcIdx === -1 ? '' : adapterTypes.slice(smcIdx, smcIdx + 1200);
-  check('T9 Stage 5.5 feature（windowed opt-in）が混入していない', !/\bwindowed\b/.test(smcBody));
+  check('T9 windowed は opt-in のまま（無条件 readable ではない）',
+    /input\.windowed === true/.test(smcBody));
   const assembler = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
-  check('T9 assembler は truncated を unreadable のままにしている',
-    /readStatus === 'truncated'/.test(assembler));
+  check('T9 windowed の付与は capped kind に限定されている',
+    /windowed: isExamCappedSourceKind\(kind\)/.test(assembler));
 }
 
 async function main(): Promise<void> {

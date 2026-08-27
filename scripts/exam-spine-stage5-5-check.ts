@@ -271,6 +271,34 @@ async function t5Guards(): Promise<void> {
   // privacy
   check('T5 context に本文が出ない', !JSON.stringify(over.ctx).includes(SECRET));
   check('T5 diff に本文が出ない', !JSON.stringify(cmp).includes(SECRET));
+
+  // ★ mismatch path こそ値が漏れやすい（S5-P5 の負例 N5 で発見した失敗形）★
+  //   MATCH 経路しか見ていない guard は、VALUE_MISMATCH の `reason` に legacy /
+  //   canonical の実値を載せる変更をすり抜ける。overflow 状態でも同じ保証が要る。
+  const token = deviceSelfAnalysisToken(selectDeviceSyncWindow(logs, CAP, (l) => l.createdAt));
+  const vCmp = compareTutorShadow({
+    legacy: { selfAnalysis: { ...legacy, summary: 'MISMATCH_PROBE_SUMMARY' } },
+    canonicalInput: over.resolved, context: over.ctx });
+  const vDiffs = vCmp.entries.filter((e) => e.kind === 'self_analysis');
+  check('T5 mismatch は VALUE_MISMATCH になる',
+    vDiffs.some((d) => d.field === 'self_analysis.summary' && d.diff === 'VALUE_MISMATCH'));
+  const vJson = JSON.stringify(vCmp);
+  check('T5 mismatch 時も本文が出ない', !vJson.includes(SECRET));
+  check('T5 mismatch 時に legacy の実値が出ない', !vJson.includes('MISMATCH_PROBE_SUMMARY'));
+  check('T5 mismatch 時に canonical の実値が出ない',
+    !vJson.includes(String((newest.analysis as unknown as Record<string, unknown>).summary)));
+  check('T5 mismatch 時に claim token（fingerprint）が出ない',
+    token !== null && !vJson.includes(token));
+  //   reason は型上 enum だが、型を広げる変更が入っても runtime で落ちるようにする。
+  const reasons = vCmp.entries
+    .map((e) => e.reason as unknown)
+    .filter((r): r is string => typeof r === 'string');
+  check('T5 reason は既知の enum 相当のみ',
+    reasons.every((r) => /^[a-z_]+$/.test(r)), reasons.join(' | '));
+  //   raw self-analysis の各 field 名が telemetry に出ない（answers / deep_answers / free_memo）。
+  for (const raw of ['deep_answers', 'free_memo', 'displayed_questions']) {
+    check(`T5 mismatch telemetry に ${raw} が出ない`, !vJson.includes(raw));
+  }
 }
 
 // ── 6. query count / consumer invariance ─────────────────────────────
@@ -291,12 +319,132 @@ async function t6Invariants(): Promise<void> {
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
   check('T6 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
-  const idx = route.indexOf('buildTutorUserPrompt');
-  if (idx !== -1) {
-    const w = route.slice(Math.max(0, idx - 1500), idx + 1500);
-    check('T6 prompt 付近に shadowResolvedInput が現れない', !w.includes('shadowResolvedInput'));
-    check('T6 prompt 付近に comparison が現れない', !w.includes('comparison'));
+  // ★ 修正（S5-P7 promotion）★ source 側は route.indexOf('buildTutorUserPrompt') を
+  //   anchor に ±1500 字 window を見ていた。この識別子は file 冒頭の見出しコメントにも
+  //   現れるため window が file 先頭に張られ、実際の prompt 経路を検査できていない
+  //   （S5-P4 / S5-P5 / S5-P6 で 5.2 / 5.3 / 5.4 側に見つかったのと同じ defect。4 回目）。
+  const routeCode = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  check('T6 prompt 組み立て位置を特定できる', promptIdx !== -1);
+  if (promptIdx !== -1) {
+    const afterPrompt = routeCode.slice(promptIdx);
+    check('T6 prompt 以降に shadowResolvedInput が現れない',
+      !afterPrompt.includes('shadowResolvedInput'));
+    check('T6 prompt 以降に compareTutorShadow が現れない',
+      !afterPrompt.includes('compareTutorShadow'));
+    check('T6 prompt 以降に canonical block 配列が現れない',
+      !/\.context\??\.blocks/.test(afterPrompt));
+    check('T6 prompt 以降に windowed mirror 出力が現れない',
+      !afterPrompt.includes('selfAnalysisLogs') && !afterPrompt.includes('serverMirrorCandidate'));
   }
+  const legacyCtx = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
+  check('T6 legacy が canonical context を import しない', !legacyCtx.includes('examSpine/context'));
+}
+
+// ── 7. opt-in scope（誰が windowed になるのか）─────────────────────────
+//
+//   ★ E-S43 の対象は self_analysis だけではない ★
+//     assembler は `windowed: isExamCappedSourceKind(kind)` を渡すので、
+//     `EXAM_READ_CAPS` に載る **全 capped kind** が opt-in される。
+//     これは source authority（E-S43 の §対象）どおりだが、
+//     「self_analysis だけ」と誤読されやすいので scope を機械的に固定する。
+//
+//   ★ ただし canonical で verified に到達し得るのは self_analysis だけ ★
+//     他の capped kind は device claim が未配線なので `unclaimed` 止まりであり、
+//     windowed になっても available/verified にはならない。
+//     この非対称性が崩れる（＝ 5.6 以降の claim が混入する）と落ちる。
+function t7OptInScope(): void {
+  console.log('\n7. Opt-in scope');
+
+  // (a) 非 capped kind は opt-in されない。
+  for (const k of ['basic_info', 'activity', 'diagnosis'] as const) {
+    eq(`T7 ${k} は capped ではない（opt-in されない）`, isExamCappedSourceKind(k), false);
+  }
+  // (b) capped kind の集合を pin する（勝手に増減しない）。
+  const capped = Object.keys(EXAM_READ_CAPS).sort();
+  eq('T7 capped kind の集合', capped, ['essay', 'interview_ai', 'interview_record',
+    'presentation', 'self_analysis', 'self_pr', 'statement_review']);
+
+  // (c) assembler の opt-in は capped 判定に束縛されている（無条件ではない）。
+  const assembler = readFileSync(join(ROOT, 'lib/examSpine/context/assemble.server.ts'), 'utf8');
+  check('T7 windowed は capped kind 判定に束縛されている',
+    /windowed: isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T7 非 capped kind の truncated は契約違反として unreadable',
+    /truncated && !isExamCappedSourceKind\(kind\)/.test(assembler));
+  check('T7 実際の失敗（error / skipped）は unreadable のまま',
+    /readStatus === 'error' \|\| readStatus === 'skipped'/.test(assembler));
+
+  // (d) serverMirrorCandidate は opt-in しなければ strict のまま。
+  const strictTruncated = serverMirrorCandidate({ status: 'truncated', observation: null });
+  eq('T7 windowed 未指定なら truncated は unreadable', strictTruncated.state, 'unreadable');
+  const strictError = serverMirrorCandidate({ status: 'error', observation: null, windowed: true });
+  eq('T7 windowed でも error は unreadable', strictError.state, 'unreadable');
+  const strictSkipped = serverMirrorCandidate({ status: 'skipped', observation: null, windowed: true });
+  eq('T7 windowed でも skipped は unreadable', strictSkipped.state, 'unreadable');
+
+  // (e) device 側 window primitive は self_analysis 以外へ広がっていない（E-S47 の scope）。
+  const deviceViews = readFileSync(join(ROOT, 'lib/examSpine/sync/adapters/deviceViews.ts'), 'utf8');
+  const spread = ['deviceStatementReviewView', 'deviceSelfPrView',
+    'deviceInterviewRecordView', 'deviceEssayView'].filter((fn) => {
+    const i = deviceViews.indexOf(`export function ${fn}(`);
+    return i !== -1 && deviceViews.slice(i, i + 400).includes('selectDeviceSyncWindow');
+  });
+  eq('T7 device window primitive は self_analysis のみ', spread, []);
+
+  // (f) tutor の claim kind は 5.1-5.4 の 4 つのまま（5.6 の claim が入っていない）。
+  const claimFile = readFileSync(
+    join(ROOT, 'lib/examSpine/sync/claim/deviceBasicInfo.ts'), 'utf8');
+  const fnIdx = claimFile.indexOf('export function buildTutorDeviceClaimEntries(');
+  const kinds = Array.from(
+    claimFile.slice(Math.max(fnIdx, 0)).matchAll(/entries\.push\(\{\s*kind:\s*'([a-z_]+)'/g),
+  ).map((m) => m[1]).sort();
+  eq('T7 tutor の claim kind は 5.1-5.4 の 4 つのみ', kinds,
+    ['activity', 'basic_info', 'diagnosis', 'self_analysis']);
+
+  // (g) self_analysis の tutor-facing canonical block は依然として未追加（§11）。
+  const registry = readFileSync(join(ROOT, 'lib/examSpine/blocks/registry.ts'), 'utf8');
+  for (const forbidden of ['self_analysis_tutor', 'self_analysis_summary_line',
+    'self_analysis_strengths', 'interview_issue_line']) {
+    check(`T7 block \`${forbidden}\` は追加されていない`, !registry.includes(`${forbidden}:`));
+  }
+}
+
+// ── 8. T11 migration meta-guard ───────────────────────────────────────
+//
+//   ★ 「QA を通すために test を消す」を機械的に落とす ★
+//     Stage 5.5 の昇格で Stage 5.4 の旧 T11（行数 > cap → unreadable）は
+//     意図的に obsolete になった。しかし旧 T11 が守っていた invariant のうち
+//     以下は E-S43 後も生き続けるものであり、**移設先が存在すること**を固定する。
+//     移設せず削除した場合、ここが落ちる。
+function t8T11Migration(): void {
+  console.log('\n8. T11 migration meta-guard');
+  const s54 = readFileSync(join(ROOT, 'scripts/exam-spine-stage5-4-check.ts'), 'utf8');
+
+  check('T8 Stage 5.4 に overflow semantics section が存在する',
+    s54.includes('11. Overflow semantics'));
+  // (1) overflow が unreadable にならない（E-S43 の主要 regression）
+  check('T8 overflow → available が固定されている',
+    /行数 > cap でも unreadable にしない/.test(s54));
+  // (2) overflow の観測が失われていない（readStatus / truncated flag の両方）
+  check('T8 readStatus が truncated のまま固定されている',
+    /readStatus.*'truncated'|overflow の観測は readStatus に残る/.test(s54));
+  check('T8 truncated flag の保持が固定されている',
+    /truncated flag が provenance に残る/.test(s54));
+  check('T8 overflow を ok へ丸めない検査がある',
+    /overflow を ok へ丸めていない/.test(s54));
+  // (3) 実際の失敗は依然 unreadable / sync 判定に進まない / origin bridge
+  check('T8 query failure が unreadable のまま固定されている',
+    /query failure は依然 unreadable/.test(s54));
+  check('T8 query failure で sync 判定に進まないことが固定されている',
+    /query failure では sync 判定に進まない/.test(s54));
+  check('T8 query failure で origin が bridge のままであることが固定されている',
+    /query failure の origin は bridge のまま/.test(s54));
+  // (4) false verified を作らない
+  check('T8 overflow でも window 違いは verified にしない検査がある',
+    /overflow でも window が違えば verified にしない/.test(s54));
 }
 
 async function main(): Promise<void> {
@@ -307,6 +455,8 @@ async function main(): Promise<void> {
   await t4RealFailures();
   await t5Guards();
   await t6Invariants();
+  t7OptInScope();
+  t8T11Migration();
 
   if (fetchCallCount !== 0) {
     console.error(`\n[exam-spine-stage5.5] FAIL: 外部通信 ${fetchCallCount} 回`);
