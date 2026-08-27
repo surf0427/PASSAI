@@ -53,9 +53,9 @@ branch が存在すること自体は違反ではなく、canonical tip 数に�
 | `exam-spine-w45-production-verification` | `6501cd4` | **NON_CANONICAL_VERIFICATION_CANDIDATE** | 本番 read 前提の検証 script。実 DB 依存のため Stage 4 canonical の deterministic QA に含めない |
 | `exam-spine-w5-r5-evidence` | `398e7f4` | **PROMOTED（S5-P2 で昇格済み）** | 唯一の unique commit を cherry-pick で canonical へ取り込み、**E-S41** として登録した（`8b0cbc8` + `90fff84`）。cherry-pick のため commit ancestry には入らないが内容は canonical に存在する。**branch は削除しない**（昇格元の記録として保持） |
 | `exam-spine-s5p1-transport-convergence` | `fb32d50` | **SUPERSEDED（内容は S5-P8 で canonical に到達済み）** | transport 収束（`ac1ef85` / signal.ts 撤去 + verdict の transport 非依存化）は s5p2 lineage 側で `299549e` として再実装されており、S5-P8 で s5p3 経由 merge されたときに canonical へ入った。`verdict.ts` / `signal.ts` は s5p1 と s5p3 で file 単位で同一、`E-H7` 節も byte 一致であることを実測したため **duplicate promotion しない**。decision は **E-S49**（人間裁定 / E-H7 = OPTION C。`E-S39` Decision 2 を supersede）。**branch は削除しない** |
-| `exam-spine-s5p2-lineage-convergence` | `6a017db` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | Packet E 統合・L1 server read layer の再配置・prompt 合成の抽出・loader / composition / canary characterization QA。s5p3 の ancestor なので controlled-switch lineage には入っているが、`exam-spine-stage4-stabilize` の tree には **存在しない**（S5-P11 で実測: `lib/contextBuilders/tutor/serverRead/reader.server.ts` / `lib/tutor/composeTutorPrompt.ts` いずれも ABSENT） |
-| `exam-spine-s5p3-basic-info-switch` | `c33bacd` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | tutor `basic_info` slot の切替（現行 **E-S56**）と transport 収束（現行 **E-S55**）。decision ID は canonical の前進に合わせて 3 度再採番している（E-S38-3。canonical 側の番号は 1 つも動かしていない）。`slotSwitchGate.server.ts` / `tutorBasicInfoSlot.ts` は canonical tree に **存在しない**（S5-P11 実測）。**branch は削除しない** |
-| `exam-spine-w1-packet-e` | `ea20e07` | **CONVERGED_ON_LINEAGE（canonical branch には未昇格）** | unique commit 13 本を列挙・審査のうえ merge。legacy read layer の退避先（`lib/contextBuilders/tutor/serverRead/**` 4 file）と shipping tutor runtime / QA を **controlled-switch lineage** へ合流させ single integration base を成立させた。canonical branch tree には未反映（S5-P11 実測）。**branch は削除しない** |
+| `exam-spine-s5p2-lineage-convergence` | `6a017db` | **PROMOTED（S5-P12 で canonical へ昇格）** | L1 server read layer の再配置・prompt 合成の抽出・loader / composition / canary characterization QA。**S5-P12 で canonical へ昇格**（`lib/contextBuilders/tutor/serverRead/reader.server.ts` / `lib/tutor/composeTutorPrompt.ts` が canonical tree に存在することを実測）。**branch は削除しない** |
+| `exam-spine-s5p3-basic-info-switch` | `c33bacd` | **PROMOTED（S5-P12 で canonical へ昇格）** | tutor `basic_info` slot の切替（現行 **E-S56**）と transport 収束（現行 **E-S55**）。decision ID は canonical の前進に合わせて 4 度再採番している（E-S38-3。canonical 側の番号は 1 つも動かしていない）。**S5-P12 で canonical へ昇格**（`slotSwitchGate.server.ts` / `tutorBasicInfoSlot.ts` が canonical tree に存在）。**branch は削除しない** |
+| `exam-spine-w1-packet-e` | `ea20e07` | **PROMOTED（S5-P12 で canonical へ昇格）** | unique commit 13 本を列挙・審査のうえ merge。legacy read layer の退避先（`lib/contextBuilders/tutor/serverRead/**` 4 file）と shipping tutor runtime / QA。**S5-P12 で canonical へ昇格**。**branch は削除しない** |
 
 ### S5-P8 — Packet 1/2/3 lineage の canonical 収束 + projection semantics の確定
 
@@ -147,7 +147,7 @@ target 選定（推測ではなく E-S40 の 4 条件を再測して決めた）
   以後、canonical 昇格の肯定は canonical branch tree の実測を伴う場合のみ書く
   （readiness R1 がこの語彙規約を機械検査する）。
 
-実測（S5-P11 時点 / canonical = exam-spine-stage4-stabilize @ 87867f3）:
+実測（**S5-P12 で昇格済み** / canonical = exam-spine-stage4-stabilize）:
   canonical tree に存在しない controlled-switch 資産
     lib/contextBuilders/tutor/serverRead/reader.server.ts     ABSENT
     lib/tutor/composeTutorPrompt.ts                           ABSENT
@@ -161,7 +161,47 @@ target 選定（推測ではなく E-S40 の 4 条件を再測して決めた）
   → canonical branch は Stage 5.x（claim / block / readiness）track を進めており、
     controlled consumer switch track は本 lineage 側にしか無い。**2 本の track が並行している。**
 
-promotion branch（本 packet の成果物）:
+## S5-P12 — controlled consumer lineage の canonical 昇格（完了）
+
+```text
+canonical HEAD（S5-P11 完了時）  2a8abce
+controlled lineage HEAD          1dc66b8
+merge-base                       87867f3（S5-P10 canonical head）
+                                 → canonical 側 9 commit / lineage 側 29 commit の 2 方向分岐
+
+再収束 branch  exam-spine-s5p12-reconvergence（1dc66b8 から分岐し canonical を merge）
+昇格方法      canonical を fast-forward（pointer の迂回操作なし）
+
+★ 解消した採番衝突 ★
+  auto-merge は DECISIONS.md を「両方追記」で通し、`## E-S54` が 2 つ存在していた。
+  canonical の E-S54（presentation / LOCKED）は動かさず、後発の lineage 側 4 件を再採番:
+    edc1 transport            E-S54 → E-S55
+    tutor.basic_info switch   E-S55 → E-S56
+    raw preferences fact      E-S56 → E-S57
+    tutor.activity switch     E-S57 → E-S58
+
+★ 解決した conflict は 2 ファイルだけ ★
+  lib/contextBuilders/tutorContext.ts
+    lineage の unit 構造（read の分割）と Phase 3.5 parity source を保持したまま、
+    presentation の正規化だけを共有 projector（tutorPresentationSection.ts）へ委譲。
+  app/api/tutor/route.ts
+    lineage の「canonical assembly を 1 回だけ組み立てて slot 切替と shadow で共用する」
+    構造を保持し、presentationResultSummary（shadow 比較の legacy 入力）だけを移植。
+
+★ Stage 5.9 は 1 つも巻き戻していない ★
+  presentation authority class = 2 / Source-Sync = N/A / device claim なし /
+  presentation_result_summary block / E-S50 の N/A 行 / stage5_9 QA / golden bytes
+  presentation は switchable slot に **入れていない**（AI-visible = NO のまま）。
+
+昇格後の canonical 実測:
+  switchable slots            ['tutor.basic_info', 'tutor.activity'] のみ
+  basic_info 同値             79 payload（canonical 64 / legacy 15）byte 一致
+  activity 同値               44 payload byte 一致 / golden pin 6 / divergent 0
+  canonical assembly          basic × activity × shadow の 8 通りで最大 1 本
+  AI double call              なし / shadow output mutation なし
+```
+
+promotion branch（S5-P6 packet 当時の記録。S5-P12 で昇格済み）:
   branch  exam-spine-s5p6-canonical-promotion
   base    canonical @ 87867f3 を取り込み済み（fast-forward 可能な状態）
   内容    Packet 1/2/3 + basic_info（E-S56 / E-S57）+ activity（E-S58）+ transport（E-S55）
@@ -169,7 +209,8 @@ promotion branch（本 packet の成果物）:
                    E-S55 / E-S56 / E-S57 / E-S58 へ再採番し、全参照を retarget した。
                    canonical 側の番号は 1 つも動かしていない（E-S38-3）。
 
-canonical branch pointer の移動は本 packet では **行っていない**。理由は §promotion 参照。
+canonical branch pointer の移動は S5-P6 packet では行っていない。
+**S5-P12 で fast-forward により昇格した**（上記 §S5-P12 参照）。
 ```
 
 ### Single Integration Base（S5-P2 で成立）

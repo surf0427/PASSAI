@@ -267,21 +267,73 @@ function r1Register(): void {
   //   controlled-switch lineage の行は CONVERGED_ON_LINEAGE を使い、
   //   canonical 昇格を断定する文字列を置かない。
   const stateSrc = readFileSync(join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STATE.md'), 'utf8');
-  for (const branchRow of [
-    'exam-spine-s5p2-lineage-convergence',
-    'exam-spine-s5p3-basic-info-switch',
-    'exam-spine-w1-packet-e',
-  ]) {
+  //
+  // ★ S5-P12 で向きが反転した ★
+  //   controlled consumer lineage は canonical branch へ昇格した。したがって
+  //   「まだ昇格していない」を pin し続けると **嘘を守る検査**になる。
+  //   語彙規約の趣旨は「STATE の主張と canonical tree の実測が一致すること」なので、
+  //   PROMOTED と書くなら **その成果物が実在すること**を検査する側へ切り替える。
+  const PROMOTED_ROWS: Array<[string, readonly string[]]> = [
+    ['exam-spine-s5p2-lineage-convergence',
+      ['lib/contextBuilders/tutor/serverRead/reader.server.ts', 'lib/tutor/composeTutorPrompt.ts']],
+    ['exam-spine-s5p3-basic-info-switch',
+      ['lib/examSpine/context/slotSwitchGate.server.ts', 'lib/examSpine/context/tutorBasicInfoSlot.ts']],
+    ['exam-spine-w1-packet-e',
+      ['lib/contextBuilders/tutor/serverRead/reader.server.ts']],
+  ];
+  const PROMOTED_ARTIFACTS = new Map<string, readonly string[]>(PROMOTED_ROWS);
+  for (const [branchRow, artifacts] of PROMOTED_ROWS) {
     const line = stateSrc.split('\n').find((l) => l.includes(branchRow) && l.startsWith('|')) ?? '';
     check(`R1 STATE: ${branchRow} の行がある`, line !== '');
-    if (line !== '') {
-      check(`R1 STATE: ${branchRow} は CONVERGED_ON_LINEAGE`,
-        line.includes('CONVERGED_ON_LINEAGE'), line.slice(0, 120));
+    if (line === '') continue;
+    const claimsPromoted = line.includes('PROMOTED');
+    const claimsConverged = line.includes('CONVERGED_ON_LINEAGE');
+    check(`R1 STATE: ${branchRow} の status が 1 つに定まっている`,
+      claimsPromoted !== claimsConverged, line.slice(0, 120));
+    // ★ PROMOTED を名乗るなら成果物が canonical tree に実在すること ★
+    if (claimsPromoted) {
+      for (const rel of artifacts) {
+        check(`R1 ${branchRow} が PROMOTED を名乗る根拠 ${rel} が実在する`,
+          existsSync(join(ROOT, rel)), rel);
+      }
     }
   }
-  check('R1 STATE が canonical 昇格を断定していない',
-    !/CANONICAL_PROMOTED\s*=\s*YES/.test(stateSrc),
-    'controlled-switch lineage は canonical branch tree にまだ存在しない');
+
+  // ★ 列挙されていない行が PROMOTED を名乗れないこと（negative control N11a）★
+  //   上の loop は「知っている 3 行」しか見ないため、**別の branch 行**に
+  //   PROMOTED と書けば無検査で通ってしまった。branch 表を全走査し、
+  //   PROMOTED を名乗る行は必ず根拠（実在する成果物）を宣言していることを要求する。
+  //   cherry-pick 昇格のように file が増えない場合も、
+  //   canonical に実在する成果物（decision 登録など）を 1 つ挙げること。
+  const CHERRY_PICK_PROMOTED = new Map<string, string>([
+    // ancestry には入らないが内容は canonical に存在する（E-S41 として登録済み）。
+    ['exam-spine-w5-r5-evidence', 'E-S41'],
+  ]);
+  for (const line of stateSrc.split('\n')) {
+    const m = /^\|\s*`(exam-spine-[\w.-]+)`\s*\|/.exec(line);
+    if (!m || !line.includes('PROMOTED')) continue;
+    const row = m[1];
+    const known = PROMOTED_ARTIFACTS.has(row) || CHERRY_PICK_PROMOTED.has(row);
+    check(`R1 PROMOTED を名乗る ${row} は根拠が登録されている`, known,
+      'PROMOTED_ROWS / CHERRY_PICK_PROMOTED のどちらにも無い');
+    const decId = CHERRY_PICK_PROMOTED.get(row);
+    if (decId) {
+      check(`R1 ${row} の昇格根拠 ${decId} が canonical Register に実在する`, seen.has(decId));
+    }
+  }
+  // controlled consumer switch の 2 slot が canonical tree で実際に配線されていること。
+  const promotedRoute = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
+  for (const slot of ['tutor.basic_info', 'tutor.activity']) {
+    check(`R1 canonical route が ${slot} の gate を評価している`,
+      promotedRoute.includes(`isExamSpineSlotSwitchEnabled('${slot}'`));
+  }
+  // ★ Stage 5.9 を巻き戻していないこと（合流で最も壊れやすい点）★
+  check('R1 canonical tree に presentation の canonical 射影が存在する',
+    existsSync(join(ROOT, 'lib/examSpine/context/presentationProjection.ts')));
+  check('R1 canonical tree に presentation 正規化の共有正本が存在する',
+    existsSync(join(ROOT, 'lib/contextBuilders/tutorPresentationSection.ts')));
+  check('R1 E-S54 は presentation のまま（controlled lineage が奪っていない）',
+    /^## E-S54 — `presentation`/m.test(text));
 
   // Wave 2 で登録した decision が実在すること。
   for (const id of ['E-S23', 'E-S24', 'E-S25', 'E-S26', 'E-S27', 'E-S28', 'E-P9']) {
