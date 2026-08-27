@@ -110,9 +110,65 @@ function r1Register(): void {
     headerBound.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     headerBound.join(', '),
   );
+  // ★ E-S48（human ruling / E-S39 を一部 supersede）★
+  //   「header に束縛されていない」だけでは足りない。header を持たない **wire codec** が
+  //   もう 1 本あるだけで、旧 client の hex を新 schema として誤解釈する経路が開く。
+  //   したがって「active な device-claim wire codec は sync/claim/** だけ」を検査する。
+  const wireCodecs = spineFiles
+    .filter((f) => {
+      const t = readFileSync(f, 'utf8');
+      // wire version 定数を宣言し、かつ serialize / parse を export する module
+      const declaresWireVersion = /_(?:CLAIM|SIGNAL)_VERSION\s*=\s*'/.test(t);
+      const exportsCodec = /export function (?:serialize|parse)[A-Za-z]*\s*\(/.test(t);
+      return declaresWireVersion && exportsCodec;
+    })
+    .map((f) => relative(ROOT, f))
+    .sort();
   check(
-    'sync/signal.ts は transport に束縛されていない',
-    !headerBound.includes('lib/examSpine/sync/signal.ts'),
+    'active な device-claim wire codec は sync/claim/** だけ（E-S48）',
+    wireCodecs.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
+    wireCodecs.join(', '),
+  );
+
+  // ★ E-S33 が固定した wire 定数の **値** を pin する ★
+  //   宣言の場所だけを見ていると、値の rename を検出できない。header 名や wire version を
+  //   黙って変えると、既にデプロイ済みの client は旧 header を送り続け、server は
+  //   1 件も claim を受け取らない。結果は全 kind `unclaimed` という **正常な状態**なので
+  //   runtime では観測できない（fail-open が吸収する）。したがって値を契約として固定する。
+  const claimTypes = readFileSync(join(ROOT, 'lib/examSpine/sync/claim/types.ts'), 'utf8');
+  check(
+    "E-S33: claim header 名が 'x-exam-spine-device-claim' で固定されている",
+    /EXAM_DEVICE_CLAIM_HEADER\s*=\s*'x-exam-spine-device-claim'/.test(claimTypes),
+  );
+  check(
+    "E-S33: wire version が 'edc1' で固定されている",
+    /EXAM_DEVICE_CLAIM_VERSION\s*=\s*'edc1'/.test(claimTypes),
+  );
+  check(
+    'E-S33: token pattern が efp1 の 64 hex で固定されている',
+    /EXAM_DEVICE_CLAIM_TOKEN_PATTERN\s*=\s*\/\^efp1:\[0-9a-f\]\{64\}\$\//.test(claimTypes),
+  );
+
+  // ★ 退役した wire format が active code に残っていないこと（E-S48）★
+  //   docs の歴史記述は許す。active code に残ることは許さない。
+  const retiredWire: string[] = [];
+  for (const dir of ['app', 'lib']) {
+    const base = join(ROOT, dir);
+    if (!existsSync(base)) continue;
+    (function walk(d: string): void {
+      for (const name of readdirSync(d)) {
+        const full = join(d, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(full) && readFileSync(full, 'utf8').includes('esy1')) {
+          retiredWire.push(relative(ROOT, full));
+        }
+      }
+    })(base);
+  }
+  check(
+    'active code に退役 wire format（esy1）が 0 箇所（E-S48）',
+    retiredWire.length === 0,
+    retiredWire.join(', '),
   );
 
   // ★ Stage 5 の最初の切替対象が動いていないこと（E-S40）★

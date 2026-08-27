@@ -106,12 +106,11 @@ const SYNC_DIR = join(REPO_ROOT, 'lib', 'examSpine', 'sync');
 const CORE_FILES = ['hash.ts', 'fingerprint.ts', 'revision.ts', 'verification.ts'] as const;
 
 // Wave 4 で sync/ 直下へ加わった contract layer（core ではない）。
-//   signal.ts  … wire の serialize / parse（untrusted 入力の境界）
 //   verdict.ts … 内部 5 値 → E-S2 の外部 4 値
 //   enable.ts  … fail-closed usability decision
 // core の guard（相対 import のみ / forbidden token / DB 動詞）は **core 4 file にだけ**
 // 当て続ける。これら 3 file の境界は scripts/exam-spine-sync-signal-check.ts が検査する。
-const SYNC_CONTRACT_FILES = ['signal.ts', 'verdict.ts', 'enable.ts'] as const;
+const SYNC_CONTRACT_FILES = ['verdict.ts', 'enable.ts'] as const;
 
 // ── 2. 非決定性 trap（clock / random を実行時に捕まえる）───────────
 //

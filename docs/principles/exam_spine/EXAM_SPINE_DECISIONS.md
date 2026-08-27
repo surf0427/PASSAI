@@ -12,6 +12,7 @@
 |---|---|
 | `LOCKED` | 確定。変更には本ファイルの更新（＝明示的な決定）が要る |
 | `PENDING_HUMAN` | Human の判断が必要。Claude Code が勝手に決めてはならない |
+| `RESOLVED` | `PENDING_HUMAN` だった項目が決定され、対応が完了・検証済み（判断内容と実測を本文に残す） |
 | `SUPERSEDED` | 後続 Decision に置き換えられた（履歴として残す） |
 
 # 2. ID 体系
@@ -887,7 +888,16 @@ Exam-specific differences / Rollback implications
 
 ## E-S39 — device claim の request transport は 1 本だけとし、`signal.ts` を transport にしない
 
-- **Status:** `LOCKED`（Stage 5 entry gate で制定。E-H7 を解決する）
+- **Status:** `SUPERSEDED_IN_PART`（2026-08-26。**人間の裁定**により Decision 2 を `E-S45` が置換）
+- **★ 置換された範囲（`E-S45` を正本とする）★**
+  ```text
+  旧 Decision 2  signal.ts は transport ではない。内部 codec / verdict 入力として維持する。
+  新（E-S45）    signal.ts は transport codec としても廃止する。
+                 runtime serialization / parsing authority を持ってはならない。
+                 必要なら type-only module としてのみ維持してよい。
+  ```
+  **Decision 1 / 3 / 4 は有効なまま**である（request transport は `sync/claim/**` 1 本 /
+  header 束縛の追加禁止 / QA による機械固定）。本 decision 全体を破棄していない。
 - **背景:** `sync/claim/**`（wire `edc1`）と `sync/signal.ts`（wire `esy1`）が
   「同じ payload（kind → fingerprint）を bounded 文字列へ直列化する」ため、
   **request transport が 2 本あるように見えていた**（E-H7 / `PENDING_HUMAN`）。
@@ -917,8 +927,11 @@ Exam-specific differences / Rollback implications
   1. device claim の **request transport は sync/claim/**（edc1）1 本**とする。
      canonical namespace で HTTP header に束縛してよい device-claim module はこれだけ。
 
-  2. sync/signal.ts は **transport ではない**。内部 codec / verdict 入力として維持する。
-     verdict / enable の semantics は有用なので削除しない。
+  2. 〔SUPERSEDED by E-S42〕sync/signal.ts は **transport ではない**。
+     内部 codec / verdict 入力として維持する。verdict / enable の semantics は有用なので削除しない。
+     → E-S45 により「transport codec としても廃止。type-only なら可」へ置換。
+       verdict / enable の semantics は E-S45 の実装で **失われていない**
+       （verdict の入力を transport 非依存 interface へ narrow したため）。
 
   3. signal.ts に header 定数・`Headers` 依存・request 束縛を **追加してはならない**。
      追加が必要になった場合は、それは transport の二重化なので新しい Decision を要する。
@@ -1373,6 +1386,104 @@ Exam-specific differences / Rollback implications
 
 # 5. Policy / persistence decisions
 
+## E-S48 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+
+- **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
+- **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
+  `E-S45` → `E-S46` として採番していたが、canonical はその後 `E-S46` を Stage 5.4
+  （self_analysis 比較元）へ割り当てた（S5-P6）。canonical の番号は動かさず、
+  後発である本 Decision を **E-S48** へ再採番した（E-S38-3 の手順）。内容は無変更。
+- **HUMAN RULING（本 decision の権威）:**
+  ```text
+  E-H7 = OPTION C
+
+  edc1        唯一の active device claim wire format / transport authority
+  esy1        active wire format ではない。serialize / parse transport codec としては廃止
+  signal.ts   必要なら型定義のみ残してよい。
+              runtime serialization / parsing authority を持ってはいけない
+  verdict.ts  ExamSyncSignal / esy1 codec への依存を除去し、最小 claim interface へ narrow
+
+  DEVICE_CLAIM_TRANSPORT_AUTHORITIES = 1
+  ACTIVE_DEVICE_CLAIM_WIRE_FORMATS   = 1
+  ACTIVE_DEVICE_CLAIM_WIRE_FORMAT    = edc1
+  ```
+- **なぜ `E-S39` の layer 分離だけでは足りないか:** `E-S39` は「header に束縛された module が
+  1 つだけ」であることを根拠に `DIFFERENT_LAYER` と判定した。これは観測として正しいが、
+  **header を持たない wire codec がもう 1 本あること自体**が残る。`esy1` は独自の version /
+  上限 / 区切りを持つ第 2 の wire schema であり、将来 header を足さなくても
+  「どちらの schema として hex を解釈するか」という曖昧さを Spine 内部に残す。
+  人間の裁定はこの残余を許容しないという判断である。
+- **`E-S39` の削除懸念に対する実測回答:** `E-S39` は「signal.ts を消すと `verdict.ts`（E-S35）の
+  入力型と Wave 4 の QA 資産を失う」ことを削除しない理由に挙げていた。実装で確認したところ
+  **どちらも失われない**:
+  ```text
+  verdict.ts   入力を ExamSyncClaimSet（transport 非依存）へ narrow。
+               この型は E-S33 の toDeviceClaims 戻り値と構造的に一致するため adapter 0 本、
+               header の parse も E-S33 の parser 1 回だけ（同じ wire を 2 回 parse しない）。
+  QA 資産      verdict の 4 値 / 優先順位 / incomparable の fail-closed fold /
+               enable の判定順 / canary default deny / PII containment をすべて保持し、
+               malformed matrix は E-S33 の実 parser を通す形へ移植した。
+  ```
+- **保持したもの（transport 収束を理由に 1 つも弱めていない）:** 外部 verdict の 4 値（`E-S35`）/
+  `incomparable → unreadable` の fold と `unexpectedInternalStatus` / `enable.ts` の判定順（`E-S36`）/
+  canary default deny（`E-S11`）/ PII containment。claim は引き続き kind + content fingerprint のみで
+  revision 軸を追加していない（`E-S2`）。
+- **機械検証（`scripts/exam-spine-readiness-check.ts` / `exam-spine-sync-signal-check.ts`）:**
+  ```text
+  active な device-claim wire codec は sync/claim/** だけ
+  active code（app/** + lib/**）に 'esy1' が 0 箇所   ※ docs の歴史記述は対象外
+  claim header の宣言が 1 箇所 / 別 file での直書き 0
+  wire version の宣言が 1 箇所 / canonical は 'edc1'
+  verdict.ts / enable.ts が transport module を import せず、実コードに wire literal を持たない
+  E-S33 transport の production importer > 0
+  ```
+- **Alternatives rejected:** `E-S39` の原案（内部 codec として維持）— 上記のとおり第 2 wire schema が
+  Spine 内部に残る。人間裁定により不採用。
+- **Rollback implications:** `verdict.ts` の入力型を戻せば復帰できるが、`esy1` codec を復活させる
+  意味は無い（production importer 0 のまま廃止された）。
+
+## E-S49 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
+
+- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet 3。`E-S40` が開けた最初の consumer 切替の実装判断）
+- **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
+  `E-S47` として採番していたが、canonical はその後 `E-S47` を Stage 5.5 の
+  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S49** へ
+  再採番した（E-S38-3 の手順）。内容は無変更。参照していた `E-S48`（transport）は
+  再採番後の `E-S48` を指す。
+- **決定:**
+  ```text
+  切替対象   tutor purpose の basic_info slot のみ（E-S40）
+  採用条件   Source-Sync verified ＋ canary 許可 ＋ canonical slot が legacy と完全一致
+  不一致時   legacy を維持し、理由を enum（divergent_projection / would_reduce_context /
+             canonical_absent / not_usable）として観測へ残す
+  承認 slot  EXAM_SPINE_SWITCHABLE_SLOTS = ['tutor.basic_info'] の 1 件のみ
+  ```
+- **なぜ「完全一致」を採用条件にしたか:** Packet 3 の制約は「consumer authority を切り替えるが、
+  AI が見る文字列は変えない」である。行が増えるのも減るのも AI-visible の変化なので、
+  同値を採用条件に据えるのが制約の機械的な強制になる。これは切替を骨抜きにする妥協ではなく、
+  **切替は provenance（authority of record）に対して起き、出力には起きない**という宣言である。
+  実測では 34 payload 中 25 件で canonical が authority を取り、切替は空回りしていない。
+- **一致しない構造差（本 packet で解消できないもの）:**
+  ```text
+  legacy      preferences を 生のまま 3 件へ切ってから 非 record を捨てる
+  canonical   read mapper が 非 record を捨てながら 10 件へ詰める
+  ```
+  壊れた entry が 3 件境界より前にあると採用件数がずれる。ずれの原因である
+  「どの生 slot が壊れた entry に消費されたか」は mapper 通過後の row に残らないため、
+  **row だけから legacy を再現することは原理的にできない**。read layer（Stage 3 / 全 consumer 共有）
+  を本 packet で変えるのは scope 外なので fail-closed に倒し、`divergent_projection` として
+  観測可能にした。壊れた entry は writer の型上は発生せず、localStorage 破損時のみ現れる。
+  **read layer 側を legacy 順序へ寄せるかどうかは、consumer を広げる前に人間が決める論点である。**
+- **cap の扱い:** legacy tutor は 40 字 / 3 件、canonical read layer は 200 字 / 10 件で切る。
+  40 ≤ 200 / 3 ≤ 10 なので legacy cap を後段でかけ直せば二段切りは 1 段切りと等価。
+  cap 値は `tutorBasicInfoSlot.ts` に宣言し、QA が `tutorContext.ts` の実値と突き合わせる
+  （adapter が `BASIC_INFO_SCHEMA_VERSION` に対して採った宣言 + pin と同じ pattern）。
+- **保持したもの:** legacy serverRead は削除しない（切替の土台であり、同値検査の相手でもある）/
+  transport は `edc1` 1 本のまま（`E-S48`）/ shadow は observer のまま（`E-S42` / `E-S43`）/
+  canary は default deny の連言（`E-S11`）/ 評定・氏名は slot に載せない（`E-P5` / `E-P8`）。
+- **query 本数:** slot 切替と shadow は同じ canonical context を 1 回だけ組み立てて共用する。
+  どちらも OFF の user では canonical assembly を 1 本も発行しない。
+
 ## E-P1 — 3 層のみ採用する（Layer 3/4/5 を持ち込まない）
 
 - **Status:** `LOCKED`
@@ -1508,9 +1619,9 @@ Exam-specific differences / Rollback implications
 
 ---
 
-# 6. Human decisions（`PENDING_HUMAN`）
+# 6. Human decisions（`PENDING_HUMAN` / `RESOLVED`）
 
-Claude Code はこれらを勝手に決めてはならない。
+Claude Code はこれらを勝手に決めてはならない。決定済みのものは `RESOLVED` として、判断内容と実測を残したまま本節に置く。
 
 ## E-H1 — 本番 DDL の完全検証（U1 の残り）
 

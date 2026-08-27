@@ -1,16 +1,23 @@
-// Exam Spine — Stage 4 Wave 4 / signal・verdict・enable contract check。
+// Exam Spine — Stage 5 Packet 1 / claim → verdict → enable contract check。
 //
-// 証明したいこと:
+// ★ E-H7 human ruling（OPTION 1）適用後の姿 ★
 //
-//   untrusted device claim
-//        ↓ strict bounded parser（default deny / never-throw）
-//   canonical claim
-//        ↓ trusted server observation
+//   E-S33 / sync/claim/**  （wire `edc1` / header x-exam-spine-device-claim）
+//        ↓ parse（1 回だけ。transport parsing authority は E-S33 に一元化）
+//   validated claim set（transport 非依存の最小 interface）
+//        ↓
 //   E-S2 の **4 値** verdict（unreadable > unclaimed > mismatch > verified）
 //        ↓ default-deny usability decision（E-S11 / runtime block）
 //   usable / veto
 //
-//   を PII 0 / authority decision 0 / runtime wiring 0 / 第 5 の外部 verdict 0 で成立させる。
+//   を PII 0 / authority decision 0 / runtime consumption 0 /
+//   第 5 の外部 verdict 0 / **transport authority 1 本** で成立させる。
+//
+// ★ 旧 `esy1`（sync/signal.ts）は transport authority として廃止済み ★
+//   本 script は `edc1` を正本として検証する。esy1 固有の serialize / 上限 /
+//   区切り / version parse の検査は E-S33 側（stage5-check）へ責務が移っている。
+//   ここに残したのは **transport 非依存**の verification 契約と、
+//   「transport authority が 1 本であること」の構造検査である。
 //
 // 厳守: 実ネットワーク 0 / 実 DB 0 / AI 0 / clock 0 / random 0 / production 変更 0
 //
@@ -29,46 +36,55 @@ globalThis.fetch = ((...args: unknown[]) => {
 void originalFetch;
 
 import { EXAM_SOURCE_KINDS } from '@/lib/examSpine/sourceData/types';
-import type { ExamSourceReadStatus } from '@/lib/examSpine/sourceData/types';
-import { EXAM_FINGERPRINT_VERSION, isExamFingerprint } from '@/lib/examSpine/sync/fingerprint';
+import type { ExamSourceKind, ExamSourceReadStatus } from '@/lib/examSpine/sourceData/types';
+import { EXAM_FINGERPRINT_VERSION } from '@/lib/examSpine/sync/fingerprint';
 import type { ExamFingerprint } from '@/lib/examSpine/sync/fingerprint';
 import { EXAM_SYNC_SUPPORTED_KINDS } from '@/lib/examSpine/sync/adapters/registry';
 import type { ExamSyncSupportedKind } from '@/lib/examSpine/sync/adapters/registry';
 import { examSyncObservation } from '@/lib/examSpine/sync/adapters/views';
 import type { ExamSyncObservation } from '@/lib/examSpine/sync/adapters/types';
+import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 
-import * as SignalMod from '@/lib/examSpine/sync/signal';
 import * as VerdictMod from '@/lib/examSpine/sync/verdict';
 import * as EnableMod from '@/lib/examSpine/sync/enable';
 
+// ★ transport は E-S33 の 1 本だけを使う（重複 parser を作らない / §9）
 import {
-  EMPTY_EXAM_SYNC_SIGNAL,
-  EXAM_SYNC_SIGNAL_FINGERPRINT_VERSION,
-  EXAM_SYNC_SIGNAL_MAX_CLAIMS,
-  EXAM_SYNC_SIGNAL_MAX_LENGTH,
-  EXAM_SYNC_SIGNAL_VERSION,
-  claimedFingerprint,
-  isExamSyncSignalSchemaConsistent,
-  parseExamSyncSignal,
-  serializeExamSyncSignal,
-} from '@/lib/examSpine/sync/signal';
+  EXAM_DEVICE_CLAIM_HEADER,
+  EXAM_DEVICE_CLAIM_MAX_BYTES,
+  EXAM_DEVICE_CLAIM_MAX_ENTRIES,
+  EXAM_DEVICE_CLAIM_VERSION,
+} from '@/lib/examSpine/sync/claim/types';
+import { serializeDeviceClaim } from '@/lib/examSpine/sync/claim/serialize';
 import {
+  parseDeviceClaimHeader,
+  parseDeviceClaimValue,
+  summarizeDeviceClaim,
+  toDeviceClaims,
+} from '@/lib/examSpine/sync/claim/parse';
+
+import {
+  EMPTY_EXAM_SYNC_CLAIM_SET,
   EXAM_SYNC_EXTERNAL_VERDICTS,
   allExamSyncVerified,
+  claimedFingerprint,
   foldExamSyncInternalStatus,
   examSyncVerdict,
   examSyncVerdicts,
   isExamSyncUsableVerdict,
   summarizeExamSyncVeto,
 } from '@/lib/examSpine/sync/verdict';
-import type { ExamSyncExternalVerdict, ExamSyncVerdictMap } from '@/lib/examSpine/sync/verdict';
+import type {
+  ExamSyncClaimSet,
+  ExamSyncExternalVerdict,
+  ExamSyncVerdictMap,
+} from '@/lib/examSpine/sync/verdict';
 import {
   examSyncUsability,
   examSyncUsableKinds,
   isExamSyncRuntimeBlocked,
   summarizeExamSyncEnable,
 } from '@/lib/examSpine/sync/enable';
-
 // ── assertion helper ──────────────────────────────────────────────
 let passed = 0;
 const failures: string[] = [];
@@ -89,7 +105,7 @@ function eq<T>(label: string, actual: T, expected: T): void {
 
 const REPO_ROOT = process.cwd();
 const SYNC_DIR = join(REPO_ROOT, 'lib', 'examSpine', 'sync');
-const CONTRACT_FILES = ['signal.ts', 'verdict.ts', 'enable.ts'];
+const CONTRACT_FILES = ['verdict.ts', 'enable.ts'];
 /** 制御文字を source に直接置かないため code point から作る。 */
 const NUL = String.fromCharCode(0);
 
@@ -148,203 +164,303 @@ const FP: Record<ExamSyncSupportedKind, ExamFingerprint> = (() => {
   return out;
 })();
 
-const FP_OTHER = obs('self_pr', { seed: 'other' }).fingerprint;
-const HEX_OF = (fp: ExamFingerprint): string => fp.slice(`${EXAM_FINGERPRINT_VERSION}:`.length);
+// ── 1. transport authority が 1 本であること ──────────────────────
+//
+// ★ E-H7 の中心的な不変条件 ★
+//   「device claim を wire で運ぶ」責務の実装が canonical namespace に 1 本しか無く、
+//   production から到達できる transport も 1 本であることを構造で固定する。
+//   docs に歴史的経緯として `esy1` が残ることは許すが、**active code に残ることは許さない**。
 
-// ── 1. schema / bounds ────────────────────────────────────────────
+const RUNTIME_DIRS = ['app', 'lib'] as const;
 
-function schemaContract(): void {
-  check('signal version が fingerprint version に束縛されている',
-    isExamSyncSignalSchemaConsistent() &&
-      EXAM_SYNC_SIGNAL_FINGERPRINT_VERSION === EXAM_FINGERPRINT_VERSION);
-  eq('signal version', EXAM_SYNC_SIGNAL_VERSION, 'esy1');
-  eq('claim 数上限 = Source-Sync 対象 kind 数', EXAM_SYNC_SIGNAL_MAX_CLAIMS,
-    EXAM_SYNC_SUPPORTED_KINDS.length);
-
-  // 上限が worst case から導出されていること（恣意的な値でないことの検査）
-  const longestKind = EXAM_SYNC_SUPPORTED_KINDS.reduce((a, b) => (a.length >= b.length ? a : b));
-  const worst =
-    `${EXAM_SYNC_SIGNAL_VERSION}:`.length +
-    EXAM_SYNC_SUPPORTED_KINDS.length * (longestKind.length + 1 + 64) +
-    (EXAM_SYNC_SUPPORTED_KINDS.length - 1);
-  check(`最大長 ${EXAM_SYNC_SIGNAL_MAX_LENGTH} が worst case ${worst} を上回る`,
-    EXAM_SYNC_SIGNAL_MAX_LENGTH > worst);
-  check('最大長が非現実的に大きくない（parser abuse の上限として機能する）',
-    EXAM_SYNC_SIGNAL_MAX_LENGTH <= worst * 4);
-
-  const full = serializeExamSyncSignal(FP);
-  check(`全 kind signal が上限内（実測 ${full.length} bytes）`,
-    full.length <= EXAM_SYNC_SIGNAL_MAX_LENGTH, `${full.length}`);
-  check('全 kind signal が worst case を超えない', full.length <= worst);
+function activeCodeFiles(): string[] {
+  const out: string[] = [];
+  for (const dir of RUNTIME_DIRS) out.push(...listFiles(join(REPO_ROOT, dir)));
+  return out;
 }
 
-// ── 2. round-trip（8/8）─────────────────────────────────────────
+function transportAuthority(): void {
+  // 1-a. retired transport module が存在しない
+  check('E-H7: sync/signal.ts（esy1）が存在しない',
+    !statSyncSafe(join(SYNC_DIR, 'signal.ts')));
 
-function roundTrip(): void {
-  for (const kind of EXAM_SYNC_SUPPORTED_KINDS) {
-    const wire = serializeExamSyncSignal({ [kind]: FP[kind] });
-    const parsed = parseExamSyncSignal(wire);
-    eq(`round-trip ${kind}: version`, parsed.version, EXAM_SYNC_SIGNAL_VERSION);
-    eq(`round-trip ${kind}: claim が復元される`, claimedFingerprint(parsed, kind), FP[kind]);
-    eq(`round-trip ${kind}: rejection 0`, parsed.rejections.length, 0);
+  // 1-b. active code に esy1 が 1 箇所も無い（docs は対象外 = 歴史記述は許す）
+  const esy1: string[] = [];
+  for (const file of activeCodeFiles()) {
+    if (readFileSync(file, 'utf8').includes('esy1')) esy1.push(relative(REPO_ROOT, file));
+  }
+  check('E-H7: active code に esy1 が 0 箇所', esy1.length === 0, esy1.join(', '));
+
+  // 1-c. claim header 名の定数宣言が 1 箇所だけ
+  const headerDecls: string[] = [];
+  const headerLiterals: string[] = [];
+  for (const file of activeCodeFiles()) {
+    const src = readFileSync(file, 'utf8');
+    if (/EXAM_DEVICE_CLAIM_HEADER\s*=\s*'/.test(src)) headerDecls.push(relative(REPO_ROOT, file));
+    if (src.includes("'x-exam-spine-device-claim'") &&
+        !/EXAM_DEVICE_CLAIM_HEADER\s*=\s*'/.test(src)) {
+      headerLiterals.push(relative(REPO_ROOT, file));
+    }
+  }
+  eq('E-H7: claim header の宣言は 1 箇所だけ', headerDecls,
+    [join('lib', 'examSpine', 'sync', 'claim', 'types.ts')]);
+  check('E-H7: header 名を別 file で直書きしていない',
+    headerLiterals.length === 0, headerLiterals.join(', '));
+
+  // 1-d. wire version literal の宣言も 1 箇所だけ
+  const versionDecls: string[] = [];
+  for (const file of activeCodeFiles()) {
+    if (/EXAM_DEVICE_CLAIM_VERSION\s*=\s*'/.test(readFileSync(file, 'utf8'))) {
+      versionDecls.push(relative(REPO_ROOT, file));
+    }
+  }
+  eq('E-H7: wire version の宣言は 1 箇所だけ', versionDecls,
+    [join('lib', 'examSpine', 'sync', 'claim', 'types.ts')]);
+  eq('E-H7: canonical wire version は edc1', EXAM_DEVICE_CLAIM_VERSION, 'edc1');
+
+  // 1-e. verification 層が transport module を import しない（transport independence）
+  //   ★ 判定は **実コード行**に対して行う（comment の説明文は対象外）★
+  //     verdict.ts は E-H7 の経緯を doc に書くため 'edc1' の語を含むが、
+  //     それは transport への依存ではない。§20 の「歴史記述と active code を区別する」。
+  for (const name of ['verdict.ts', 'enable.ts'] as const) {
+    const full = readFileSync(join(SYNC_DIR, name), 'utf8');
+    const code = codeLines(join(SYNC_DIR, name)).join('\n');
+    check(`E-H7: ${name} が transport module を import しない`,
+      !/from\s+'\.\/claim\//.test(full) && !/from\s+'\.\/signal'/.test(full));
+    check(`E-H7: ${name} の実コードに wire literal が無い`,
+      !code.includes('edc1') && !code.includes('esy1') && !code.includes('x-exam-spine'),
+      code.split('\n').filter((l) => /edc1|esy1|x-exam-spine/.test(l)).join(' | '));
   }
 
-  const all = serializeExamSyncSignal(FP);
-  const parsedAll = parseExamSyncSignal(all);
-  eq('round-trip 全 kind: claim 数', Object.keys(parsedAll.claims).length,
-    EXAM_SYNC_SUPPORTED_KINDS.length);
-  const mismatched = EXAM_SYNC_SUPPORTED_KINDS.filter(
-    (k) => claimedFingerprint(parsedAll, k) !== FP[k],
-  );
-  check('round-trip 全 kind: 全 claim が一致', mismatched.length === 0, mismatched.join(', '));
-  eq('round-trip 全 kind: 再 serialize で同一 byte', serializeExamSyncSignal(parsedAll.claims), all);
+  // 1-f. production importer: claim/** は > 0、他の transport は 0
+  const claimImporters: string[] = [];
+  for (const file of activeCodeFiles()) {
+    const rel = relative(REPO_ROOT, file);
+    if (rel.startsWith(join('lib', 'examSpine'))) continue;
+    if (/examSpine\/sync\/claim/.test(readFileSync(file, 'utf8'))) claimImporters.push(rel);
+  }
+  check(`E-H7: E-S33 transport の production importer > 0（実測 ${claimImporters.length}）`,
+    claimImporters.length > 0, claimImporters.join(', '));
 
-  // ★ byte 決定性: 入力の key 順が違っても同じ wire
-  const forward: Record<string, ExamFingerprint> = {};
-  const backward: Record<string, ExamFingerprint> = {};
-  for (const k of EXAM_SYNC_SUPPORTED_KINDS) forward[k] = FP[k];
-  for (const k of [...EXAM_SYNC_SUPPORTED_KINDS].reverse()) backward[k] = FP[k];
-  eq('serialize は入力 key 順に依存しない（byte 決定性）',
-    serializeExamSyncSignal(forward as never), serializeExamSyncSignal(backward as never));
-  check('serialize は宣言順に並ぶ',
-    all.startsWith(`${EXAM_SYNC_SIGNAL_VERSION}:${EXAM_SYNC_SUPPORTED_KINDS[0]}=`));
-
-  eq('不正 fingerprint は serialize しない',
-    serializeExamSyncSignal({ self_pr: 'deadbeef' as ExamFingerprint }), '');
-  eq('別 schema の fingerprint は serialize しない',
-    serializeExamSyncSignal({ self_pr: `efp9:${HEX_OF(FP.self_pr)}` as ExamFingerprint }), '');
-  eq('null / undefined claim は serialize しない',
-    serializeExamSyncSignal({ self_pr: null, activity: undefined }), '');
-  eq('claim 0 件は空文字', serializeExamSyncSignal({}), '');
-  eq('空文字は parse で empty 扱い', parseExamSyncSignal('').rejections[0]?.reason, 'empty');
-
-  check('wire は version / kind / 64hex / 区切りのみで構成される',
-    /^esy1:(?:[a-z_]+=[0-9a-f]{64})(?:,[a-z_]+=[0-9a-f]{64})*$/.test(all), all.slice(0, 40));
-  check('fingerprint 形式が Wave 1 の判定を通る',
-    EXAM_SYNC_SUPPORTED_KINDS.every((k) => isExamFingerprint(claimedFingerprint(parsedAll, k))));
+  // 1-g. header を読む / 書く場所が choke point に閉じている
+  const headerTouchers: string[] = [];
+  for (const file of activeCodeFiles()) {
+    const rel = relative(REPO_ROOT, file);
+    const src = readFileSync(file, 'utf8');
+    if (src.includes('EXAM_DEVICE_CLAIM_HEADER')) headerTouchers.push(rel);
+  }
+  const ALLOWED_HEADER_TOUCHERS = new Set([
+    join('lib', 'examSpine', 'sync', 'claim', 'types.ts'),
+    join('lib', 'examSpine', 'sync', 'claim', 'parse.ts'),
+    join('lib', 'examSpine', 'sync', 'claim', 'serialize.ts'),
+    join('app', 'tutor', 'page.tsx'),
+  ]);
+  const unexpected = headerTouchers.filter((f) => !ALLOWED_HEADER_TOUCHERS.has(f));
+  check('E-H7: header に触れる file が allowlist 内だけ',
+    unexpected.length === 0, unexpected.join(', '));
 }
 
-// ── 3. malformed input matrix ─────────────────────────────────────
+function statSyncSafe(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-function malformedMatrix(): void {
-  const hex = HEX_OF(FP.self_pr);
-  const V = EXAM_SYNC_SIGNAL_VERSION;
-  const cases: Array<[string, unknown, string | null]> = [
-    ['null', null, 'not_a_string'],
-    ['undefined', undefined, 'not_a_string'],
-    ['number', 12345, 'not_a_string'],
-    ['object', { self_pr: hex }, 'not_a_string'],
-    ['array', [`self_pr=${hex}`], 'not_a_string'],
-    ['空文字', '', 'empty'],
-    ['空白のみ', '   \t  ', 'empty'],
-    ['version 区切り無し', `self_pr=${hex}`, 'missing_version'],
-    ['先頭が区切り', `:self_pr=${hex}`, 'missing_version'],
-    ['未知 version', `v999:self_pr=${hex}`, 'unknown_version'],
-    ['旧 version', `esy0:self_pr=${hex}`, 'unknown_version'],
-    ['fingerprint version を version に使う', `efp1:self_pr=${hex}`, 'unknown_version'],
-    ['version のみ', `${V}:`, 'empty'],
-    ['oversize', `${V}:${'a'.repeat(EXAM_SYNC_SIGNAL_MAX_LENGTH)}`, 'oversize'],
-    ['claim 数超過', `${V}:${Array.from({ length: EXAM_SYNC_SIGNAL_MAX_CLAIMS + 1 }, () => `self_pr=${hex}`).join(',')}`, 'too_many_claims'],
-    ['未知 kind', `${V}:unknown_kind=${hex}`, null],
-    ['__proto__', `${V}:__proto__=${hex}`, null],
-    ['constructor', `${V}:constructor=${hex}`, null],
-    ['prototype', `${V}:prototype=${hex}`, null],
-    ['class 2 kind（interview_ai）', `${V}:interview_ai=${hex}`, null],
-    ['class 2 kind（presentation）', `${V}:presentation=${hex}`, null],
-    ['Unicode confusable kind', `${V}:sеlf_pr=${hex}`, null],
-    ['fingerprint 短い', `${V}:self_pr=${hex.slice(0, 63)}`, null],
-    ['fingerprint 長い', `${V}:self_pr=${hex}a`, null],
-    ['fingerprint 大文字', `${V}:self_pr=${hex.toUpperCase()}`, null],
-    ['fingerprint 非 hex', `${V}:self_pr=${'z'.repeat(64)}`, null],
-    ['fingerprint 空', `${V}:self_pr=`, 'malformed_entry'],
-    ['fingerprint に prefix 込み', `${V}:self_pr=${FP.self_pr}`, null],
-    ['= が無い', `${V}:self_pr`, 'malformed_entry'],
-    ['= で始まる', `${V}:=${hex}`, 'malformed_entry'],
-    ['空 entry', `${V}:,`, 'malformed_entry'],
-    ['末尾が切れている', `${V}:self_pr=${hex},activi`, 'malformed_entry'],
-    ['重複 kind（同値）', `${V}:self_pr=${hex},self_pr=${hex}`, null],
-    ['重複 kind（別値）', `${V}:self_pr=${hex},self_pr=${HEX_OF(FP_OTHER)}`, null],
-    ['埋め込み改行', `${V}:self_pr\n=${hex}`, null],
-    ['NUL', `${V}:self_pr${NUL}=${hex}`, null],
-    ['値に空白', `${V}:self_pr= ${hex}`, null],
-    ['kind に空白', `${V}: self_pr=${hex}`, null],
-    ['区切りが ;', `${V}:self_pr=${hex};activity=${HEX_OF(FP.activity)}`, null],
+// ── 2. E-S33 transport → validated claim set → verdict ────────────
+
+const ALL_ALLOWED: readonly ExamSourceKind[] = EXAM_SYNC_SUPPORTED_KINDS;
+const USER = '00000000-0000-4000-8000-0000000000a1';
+
+/** E-S33 の実 transport を往復させて validated claim set を得る（parse は 1 回だけ）。 */
+function claimSetVia(
+  entries: readonly { kind: ExamSourceKind; token: string }[],
+  allowed: readonly ExamSourceKind[] = ALL_ALLOWED,
+  userId: string | null = USER,
+): ExamSyncClaimSet {
+  const wire = serializeDeviceClaim(entries);
+  const parsed = parseDeviceClaimValue(wire);
+  return toDeviceClaims(parsed, { authenticatedUserId: userId, allowedSources: allowed });
+}
+
+function claimRoundTrip(): void {
+  const entries = EXAM_SYNC_SUPPORTED_KINDS.map((kind) => ({ kind, token: FP[kind] as string }));
+  const wire = serializeDeviceClaim(entries);
+  check('T1 全 kind を 1 header に載せられる', typeof wire === 'string' && wire !== null);
+  check(`T1 header が上限内（実測 ${wire?.length ?? -1} / 上限 ${EXAM_DEVICE_CLAIM_MAX_BYTES}）`,
+    (wire?.length ?? Number.MAX_SAFE_INTEGER) <= EXAM_DEVICE_CLAIM_MAX_BYTES);
+  check('T1 entry 数が上限内',
+    EXAM_SYNC_SUPPORTED_KINDS.length <= EXAM_DEVICE_CLAIM_MAX_ENTRIES);
+
+  const claims = claimSetVia(entries);
+  const missing = EXAM_SYNC_SUPPORTED_KINDS.filter((k) => claimedFingerprint(claims, k) !== FP[k]);
+  check('T1 8 kind すべてが claim set へ復元される', missing.length === 0, missing.join(', '));
+
+  // Headers 経由でも同じ
+  const h = new Headers({ [EXAM_DEVICE_CLAIM_HEADER]: wire ?? '' });
+  const viaHeaders = toDeviceClaims(parseDeviceClaimHeader(h),
+    { authenticatedUserId: USER, allowedSources: ALL_ALLOWED });
+  eq('T1 Headers 経由でも同じ claim set',
+    Object.keys(viaHeaders).sort(), Object.keys(claims).sort());
+
+  // 空 claim set
+  eq('T1 空 claim set は全 kind unclaimed',
+    EXAM_SYNC_SUPPORTED_KINDS.filter((k) => claimedFingerprint(EMPTY_EXAM_SYNC_CLAIM_SET, k) !== null),
+    []);
+
+  // purpose gate は広がらない（E-S28）
+  const narrow = claimSetVia(entries, sourcesForPurpose('tutor'));
+  const outside = Object.keys(narrow).filter(
+    (k) => !(sourcesForPurpose('tutor') as readonly string[]).includes(k));
+  check('T1 purpose が許可しない kind は claim set に入らない',
+    outside.length === 0, outside.join(', '));
+
+  // 未認証では 1 件も採用しない（E-L3）
+  eq('T1 未認証の申告は 0 件', Object.keys(claimSetVia(entries, ALL_ALLOWED, null)), []);
+}
+
+// ── 3. malformed transport から verified が生まれない ─────────────
+
+function malformedClaimMatrix(): void {
+  const tok = FP.basic_info;
+  const V = EXAM_DEVICE_CLAIM_VERSION;
+  const cases: Array<[string, string | null]> = [
+    ['absent', null],
+    ['空文字', ''],
+    ['壊れた JSON', '{not json'],
+    ['非 object', '"str"'],
+    ['未知 version', JSON.stringify({ v: 'zzz', c: [{ kind: 'basic_info', token: tok }] })],
+    ['esy1 形式（旧 transport）', `esy1:basic_info=${tok.slice('efp1:'.length)}`],
+    ['base64 風', Buffer.from(JSON.stringify({ v: V, c: [] })).toString('base64')],
+    ['c が配列でない', JSON.stringify({ v: V, c: 1 })],
+    ['oversize', JSON.stringify({ v: V, c: [] }) + 'x'.repeat(EXAM_DEVICE_CLAIM_MAX_BYTES)],
+    ['entry 数超過', JSON.stringify({
+      v: V,
+      c: Array.from({ length: EXAM_DEVICE_CLAIM_MAX_ENTRIES + 2 },
+        () => ({ kind: 'basic_info', token: tok })),
+    })],
+    ['未知 kind', JSON.stringify({ v: V, c: [{ kind: 'zzz', token: tok }] })],
+    ['__proto__ kind', JSON.stringify({ v: V, c: [{ kind: '__proto__', token: tok }] })],
+    ['class 2（interview_ai）', JSON.stringify({ v: V, c: [{ kind: 'interview_ai', token: tok }] })],
+    ['class 2（presentation）', JSON.stringify({ v: V, c: [{ kind: 'presentation', token: tok }] })],
+    ['token が短い', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: tok.slice(0, -1) }] })],
+    ['token が大文字', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: tok.toUpperCase() }] })],
+    ['token が非 hex', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: 'efp1:' + 'z'.repeat(64) }] })],
+    ['token が空', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: '' }] })],
+    ['token に改行', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: `${tok}\n` }] })],
+    ['token に NUL', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: `${tok}${NUL}` }] })],
   ];
 
   const threw: string[] = [];
   const leakedVerified: string[] = [];
-  const wrongReason: string[] = [];
-
-  for (const [label, input, expectedWhole] of cases) {
-    let parsed;
+  for (const [label, raw] of cases) {
+    let claims: ExamSyncClaimSet;
     try {
-      parsed = parseExamSyncSignal(input);
+      claims = toDeviceClaims(parseDeviceClaimValue(raw),
+        { authenticatedUserId: USER, allowedSources: ALL_ALLOWED });
     } catch {
       threw.push(label);
       continue;
     }
-    if (expectedWhole !== null) {
-      if (parsed.version !== '') wrongReason.push(`${label}: version が空でない`);
-      if (parsed.rejections[0]?.reason !== expectedWhole) {
-        wrongReason.push(`${label}: reason=${parsed.rejections[0]?.reason ?? 'なし'}（期待 ${expectedWhole}）`);
-      }
-      if (Object.keys(parsed.claims).length !== 0) wrongReason.push(`${label}: claim が残った`);
-    }
-    // ★ どの壊れた入力からも verified は生まれない
     for (const kind of EXAM_SYNC_SUPPORTED_KINDS) {
       const v = examSyncVerdict({
         kind,
         status: 'ok',
         mirror: obs(kind, { seed: kind }),
-        claim: claimedFingerprint(parsed, kind),
+        claim: claimedFingerprint(claims, kind),
       });
       if (v.verdict === 'verified') leakedVerified.push(`${label} / ${kind}`);
     }
   }
-
   check(`malformed ${cases.length} 種で throw しない`, threw.length === 0, threw.join(', '));
-  check('malformed の全体拒否理由が正しい', wrongReason.length === 0, wrongReason.join(' | '));
-  check('★ どの malformed 入力からも verified が生まれない',
+  check('★ どの malformed transport 入力からも verified が生まれない',
     leakedVerified.length === 0, leakedVerified.join(', '));
 
-  // ★ truncated signal の「生き残った前半」を採用しない
-  const truncated = parseExamSyncSignal(`${V}:self_pr=${hex},activi`);
-  eq('truncated signal は前半の claim も捨てる', claimedFingerprint(truncated, 'self_pr'), null);
-  eq('truncated signal は version を立てない', truncated.version, '');
+  // ★ parser 層で落ちていることを直接見る ★
+  //   下流には二重防御がある（toDeviceClaims の purpose filter / claimedFingerprint の
+  //   `isExamFingerprint`）。そのため「verified が出ない」だけを見ていると、
+  //   **parser 側の退行を下流が隠してしまう**。E-S33 は transport parsing authority なので、
+  //   ここで落ちていることを parse 結果に対して直接 assert する。
+  const parserCases: Array<[string, string]> = [
+    ['不正 token', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: 'x' }] })],
+    ['token が短い', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: tok.slice(0, -1) }] })],
+    ['token が大文字', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: tok.toUpperCase() }] })],
+    ['token が非 hex', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: 'efp1:' + 'z'.repeat(64) }] })],
+    ['token の prefix 違い', JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: 'efp9:' + 'a'.repeat(64) }] })],
+    ['未知 kind', JSON.stringify({ v: V, c: [{ kind: 'zzz', token: tok }] })],
+    ['__proto__ kind', JSON.stringify({ v: V, c: [{ kind: '__proto__', token: tok }] })],
+    ['class 2（interview_ai）', JSON.stringify({ v: V, c: [{ kind: 'interview_ai', token: tok }] })],
+    ['class 2（presentation）', JSON.stringify({ v: V, c: [{ kind: 'presentation', token: tok }] })],
+  ];
+  const parserLeaks: string[] = [];
+  for (const [label, raw] of parserCases) {
+    const keys = Object.keys(parseDeviceClaimValue(raw).claims);
+    if (keys.length !== 0) parserLeaks.push(`${label}: ${keys.join(',')}`);
+  }
+  check(`★ parser 層で落ちている（${parserCases.length} 種 / 下流の二重防御に隠させない）`,
+    parserLeaks.length === 0, parserLeaks.join(' | '));
 
-  const dup = parseExamSyncSignal(`${V}:self_pr=${hex},self_pr=${HEX_OF(FP_OTHER)}`);
-  eq('重複 kind は claim を残さない（first/last-wins しない）',
-    claimedFingerprint(dup, 'self_pr'), null);
-  check('重複 kind が rejection として記録される',
-    dup.rejections.some((r) => r.reason === 'duplicate_kind' && r.kind === 'self_pr'));
+  // ★ 拒否理由も pin する ★
+  //   parser には kind の gate が 2 段ある（`isExamSourceKind` → `isExamSyncSupportedKind`）。
+  //   claims の中身だけを見ていると、前段を外しても後段が拾うため退行が観測できない。
+  //   理由 enum まで固定して、どちらの段が落としたのかを機械的に見分ける。
+  const reasonCases: Array<[string, string, string]> = [
+    ['ExamSourceKind ですらない kind',
+      JSON.stringify({ v: V, c: [{ kind: 'zzz', token: tok }] }), 'unknown_kind'],
+    ['__proto__',
+      JSON.stringify({ v: V, c: [{ kind: '__proto__', token: tok }] }), 'unknown_kind'],
+    ['class 2（既知だが非対象）',
+      JSON.stringify({ v: V, c: [{ kind: 'interview_ai', token: tok }] }), 'not_syncable'],
+    ['不正 token',
+      JSON.stringify({ v: V, c: [{ kind: 'basic_info', token: 'x' }] }), 'invalid_token'],
+  ];
+  const wrongReason: string[] = [];
+  for (const [label, raw, reason] of reasonCases) {
+    const reasons = parseDeviceClaimValue(raw).rejected.map((r) => r.reason);
+    if (!reasons.includes(reason as never)) {
+      wrongReason.push(`${label}: ${reasons.join(',') || 'なし'}（期待 ${reason}）`);
+    }
+  }
+  check('★ parser の拒否理由が段ごとに正しい（gate の前段を外すと落ちる）',
+    wrongReason.length === 0, wrongReason.join(' | '));
 
-  const mixed = parseExamSyncSignal(
-    `${V}:self_pr=${hex},unknown_kind=${hex},activity=${HEX_OF(FP.activity)}`,
-  );
-  eq('部分拒否: 正しい claim は残る', claimedFingerprint(mixed, 'activity'), FP.activity);
-  check('部分拒否: 未知 kind は rejection に enum だけで記録される',
-    mixed.rejections.some((r) => r.reason === 'unknown_kind' && r.kind === undefined));
+  // positive control: 正しい claim は parser を通る（上の assertion が vacuous でないこと）
+  eq('parser: 正しい claim は通る',
+    Object.keys(parseDeviceClaimValue(
+      serializeDeviceClaim([{ kind: 'basic_info', token: tok }]))
+      .claims),
+    ['basic_info']);
+
+  // 旧 transport 形式は 1 件も通らない
+  const esy1Claims = toDeviceClaims(
+    parseDeviceClaimValue(`esy1:basic_info=${tok.slice('efp1:'.length)}`),
+    { authenticatedUserId: USER, allowedSources: ALL_ALLOWED });
+  eq('★ esy1 形式の header は 1 件も claim にならない', Object.keys(esy1Claims), []);
+
+  // class 2 は claim set に入らない（E-S3）
   for (const k of ['interview_ai', 'presentation'] as const) {
-    const c2 = parseExamSyncSignal(`${V}:${k}=${hex}`);
-    check(`部分拒否: ${k} は not_syncable_kind として記録される（E-S3）`,
-      c2.rejections.some((r) => r.reason === 'not_syncable_kind' && r.kind === k));
-    eq(`部分拒否: ${k} の claim は 1 件も残らない`, Object.keys(c2.claims).length, 0);
+    const c2 = toDeviceClaims(
+      parseDeviceClaimValue(JSON.stringify({ v: V, c: [{ kind: k, token: tok }] })),
+      { authenticatedUserId: USER, allowedSources: EXAM_SOURCE_KINDS });
+    eq(`${k} の申告は claim set に入らない（E-S3）`, Object.keys(c2), []);
   }
 
-  const polluted = parseExamSyncSignal(`${V}:__proto__=${hex}`);
+  // prototype pollution
+  const polluted = toDeviceClaims(
+    parseDeviceClaimValue(JSON.stringify({ v: V, c: [{ kind: '__proto__', token: tok }] })),
+    { authenticatedUserId: USER, allowedSources: ALL_ALLOWED });
   check('prototype pollution: Object.prototype が汚染されない',
-    ({} as Record<string, unknown>).self_pr === undefined &&
-      (Object.prototype as unknown as Record<string, unknown>).self_pr === undefined);
-  check('prototype pollution: claims に __proto__ の own property が無い',
-    !Object.prototype.hasOwnProperty.call(polluted.claims, '__proto__'));
+    ({} as Record<string, unknown>).basic_info === undefined);
+  check('prototype pollution: claim set に __proto__ の own property が無い',
+    !Object.prototype.hasOwnProperty.call(polluted, '__proto__'));
 
-  const canaryKind = 'CANARY_UNKNOWN_KIND_7d3e';
-  const leaky = parseExamSyncSignal(`${V}:${canaryKind}=${hex}`);
-  check('rejection に未知 kind 名が載らない',
-    !JSON.stringify(leaky).includes(canaryKind), JSON.stringify(leaky).slice(0, 120));
-  check('rejection に fingerprint hex が載らない', !JSON.stringify(leaky).includes(hex));
+  // 観測要約に token / 本文が出ない（E-S12 / E-S13）
+  const summary = summarizeDeviceClaim(parseDeviceClaimValue(
+    serializeDeviceClaim([{ kind: 'basic_info', token: tok }])));
+  check('観測要約に token が出ない', !JSON.stringify(summary).includes('efp1:'));
 }
-
 // ── 4. verdict truth table ────────────────────────────────────────
 
 function verdictTruthTable(): void {
@@ -448,8 +564,9 @@ function verdictMap(): void {
   for (const kind of EXAM_SYNC_SUPPORTED_KINDS) {
     mirrors[kind] = { status: 'ok', observation: obs(kind, { seed: kind }) };
   }
-  const signal = parseExamSyncSignal(serializeExamSyncSignal(FP));
-  const { verdicts, unexpectedInternalStatus } = examSyncVerdicts({ signal, mirrors });
+  const claims = claimSetVia(
+    EXAM_SYNC_SUPPORTED_KINDS.map((kind) => ({ kind, token: FP[kind] as string })));
+  const { verdicts, unexpectedInternalStatus } = examSyncVerdicts({ claims, mirrors });
 
   eq('verdict map が 8 kind をちょうど覆う',
     Object.keys(verdicts).sort(), [...EXAM_SYNC_SUPPORTED_KINDS].sort());
@@ -460,7 +577,7 @@ function verdictMap(): void {
   eq('全 verified なら veto 理由なし',
     summarizeExamSyncVeto(verdicts, [...EXAM_SYNC_SUPPORTED_KINDS]), null);
 
-  const partial = examSyncVerdicts({ signal, mirrors: { self_pr: mirrors.self_pr } });
+  const partial = examSyncVerdicts({ claims, mirrors: { self_pr: mirrors.self_pr } });
   eq('mirror 未提供の kind は unreadable', partial.verdicts.activity, 'unreadable');
   eq('mirror 提供済みは verified', partial.verdicts.self_pr, 'verified');
 
@@ -546,12 +663,14 @@ function privacyContract(): void {
   const CANARY = 'CANARY_ESSAY_BODY_2f8c';
   const view = { body: CANARY, notes: [CANARY] };
   const observation = examSyncObservation({ kind: 'self_pr', source: 'server_mirror', view });
-  const wire = serializeExamSyncSignal({ self_pr: observation.fingerprint });
-  check('signal に本文が現れない', !wire.includes(CANARY));
-  check('signal は hex しか含まない', /^esy1:self_pr=[0-9a-f]{64}$/.test(wire));
+  const wire = serializeDeviceClaim([{ kind: 'self_pr', token: observation.fingerprint }]);
+  check('claim header に本文が現れない', wire !== null && !wire.includes(CANARY));
+  check('claim header は fingerprint token しか含まない',
+    wire !== null && /"token":"efp1:[0-9a-f]{64}"/.test(wire) && !wire.includes(CANARY));
 
-  const parsed = parseExamSyncSignal(wire);
-  check('parse 結果に本文が現れない', !JSON.stringify(parsed).includes(CANARY));
+  const parsed = toDeviceClaims(parseDeviceClaimValue(wire),
+    { authenticatedUserId: USER, allowedSources: ALL_ALLOWED });
+  check('claim set に本文が現れない', !JSON.stringify(parsed).includes(CANARY));
 
   const r = examSyncVerdict({ kind: 'self_pr', status: 'ok', mirror: observation, claim: observation.fingerprint });
   check('verdict 結果に本文 / fingerprint が現れない',
@@ -625,7 +744,6 @@ function staticBoundaries(): void {
   const banned = /adopt|winner|prefer|choose|selectSource|merge|repair|reconcile|newerWins/i;
   const nameOffenders: string[] = [];
   const surfaces: Array<[string, Record<string, unknown>]> = [
-    ['signal.ts', SignalMod as unknown as Record<string, unknown>],
     ['verdict.ts', VerdictMod as unknown as Record<string, unknown>],
     ['enable.ts', EnableMod as unknown as Record<string, unknown>],
   ];
@@ -693,25 +811,87 @@ function staticBoundaries(): void {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
-  const shadowStart = routeCode.indexOf('isExamSpineShadowEnabled(');
-  const promptStart = routeCode.indexOf('= buildTutorUserPrompt(');
-  check('shadow ブロックが prompt 組み立てより前にある',
-    shadowStart >= 0 && promptStart > shadowStart);
-  if (shadowStart >= 0 && promptStart > shadowStart) {
-    const afterPrompt = routeCode.slice(promptStart);
-    for (const leaked of ['shadowResolvedInput', 'compareTutorShadow', '.context.blocks']) {
-      check(`prompt 以降に ${leaked} が現れない`, !afterPrompt.includes(leaked));
+  //      ★ S5-P3 で **位置ではなく脱出面**へ再 retarget ★
+  //        直前の版は「shadow block と prompt 組み立ての前後関係」で region を割り、
+  //        その region に leak identifier が無いことを見ていた。
+  //        Packet 3 で canonical assembly は prompt より**前**へ移り（slot 切替が
+  //        prompt 前に canonical を必要とするため）、comparison は prompt より**後**に残った。
+  //        両者が prompt を挟むため、どちら向きの region 分割でも誤検知する。
+  //
+  //        位置は不変条件ではない。不変条件は「shadow 由来の値が prompt / response へ
+  //        入らないこと」なので、**呼び出しの実引数そのもの**を検査する形へ変える。
+  //        これは region 検査より強い（間に何行あっても、引数に無ければ渡っていない）。
+  const lastImport = routeCode.lastIndexOf('\nimport ');
+  const bodyStart = lastImport >= 0
+    ? routeCode.indexOf('\n', routeCode.indexOf(';', lastImport)) + 1
+    : 0;
+  const body = routeCode.slice(bodyStart);
+
+  /** `name(` の実引数テキストを括弧の対応で切り出す。 */
+  const callArgs = (source: string, name: string): string | null => {
+    const at = source.indexOf(`${name}(`);
+    if (at < 0) return null;
+    let depth = 0;
+    for (let i = at + name.length; i < source.length; i += 1) {
+      const ch = source[i];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) return source.slice(at + name.length + 1, i);
+      }
+    }
+    return null;
+  };
+
+  const SHADOW_LEAKS = ['shadowResolvedInput', 'compareTutorShadow', 'comparison', '.context.blocks'];
+  const PROMPT_CALLS = ['composeTutorPrompt', 'buildTutorUserPrompt'];
+  let promptCallsFound = 0;
+  for (const name of PROMPT_CALLS) {
+    const argText = callArgs(body, name);
+    if (argText === null) continue;
+    promptCallsFound += 1;
+    for (const leaked of SHADOW_LEAKS) {
+      check(`${name}() の実引数に ${leaked} が現れない`, !argText.includes(leaked),
+        `args=${argText.slice(0, 200)}`);
     }
   }
+  check('prompt 組み立ての呼び出しが route に存在する', promptCallsFound > 0);
+
+  //      canonical assembly は default-deny gate の内側だけで走る。
+  //      （Packet 3 で gate は shadow 単独から「shadow OR slot 切替」の連言集合になった。
+  //        どちらも allowlist 方式の default deny なので、無指定 user では 1 本も読まない。）
+  const buildIdx = body.indexOf('buildCanonicalExamContext(');
+  check('canonical assembly が route に存在する', buildIdx >= 0);
+  if (buildIdx >= 0) {
+    const before = body.slice(0, buildIdx);
+    const gates = ['isExamSpineShadowEnabled', 'isExamSpineSlotSwitchEnabled'];
+    const present = gates.filter((g) => before.includes(g));
+    check('canonical assembly は canary gate の内側にある', present.length > 0,
+      `検出 gate=${present.join(',')}`);
+    // gate 変数が同じ if 条件に現れること（gate を読むだけで使っていない事故を防ぐ）。
+    const guard = /if\s*\(([^)]*(?:Enabled|enabled)[^)]*)\)\s*\{[\s\S]{0,2000}?buildCanonicalExamContext\(/.exec(body);
+    check('canonical assembly は gate 変数を条件に使っている', guard !== null,
+      guard ? guard[1] : '(条件が見つからない)');
+  }
+
   //      観測へ出る値は enum（string）と件数（number）に限る。
   check('shadow の観測値は enum（string）として宣言されている',
     /\bshadowOverall\s*:\s*string \| undefined/.test(routeCode));
   check('shadow の観測値は件数（number）として宣言されている',
     /\bshadowMismatchCount\s*:\s*number \| undefined/.test(routeCode));
 
-  //   2. shadow は default deny gate の内側だけで動く。
-  check('shadow 組み立ては canary gate の内側にある',
-    /isExamSpineShadowEnabled\(/.test(routeSrc) && /if \(shadowEnabled\)/.test(routeSrc));
+  //   2. shadow **比較** は shadow canary の内側だけで動く。
+  //      ★ S5-P3 で literal `if (shadowEnabled)` 依存をやめた ★
+  //        canonical assembly の guard は slot 切替との連言（`slotSwitchEnabled || shadowEnabled`）
+  //        になったため、条件式の字面を pin すると正当な変更で落ちる。
+  //        assembly 側の gate は上で検査済みなので、ここは
+  //        「compareTutorShadow を含む block の guard に shadowEnabled があること」だけを見る
+  //        = shadow 比較が shadow canary 単独で守られていること。
+  check('shadow gate が route に存在する', /isExamSpineShadowEnabled\(/.test(routeSrc));
+  const cmpGuard =
+    /if\s*\(([^)]*shadowEnabled[^)]*)\)\s*\{[\s\S]{0,3000}?compareTutorShadow\(/.exec(routeCode);
+  check('shadow 比較は shadow canary の内側にある', cmpGuard !== null,
+    cmpGuard ? cmpGuard[1] : '(compareTutorShadow を守る shadowEnabled 条件が無い)');
 
   //   3. Spine 由来の値が prompt / response の組み立てに現れない。
   const promptLines = routeSrc
@@ -735,15 +915,15 @@ function aiSdkLoaded(): boolean {
 }
 
 function main(): void {
-  console.log('[exam-spine-sync-signal] Stage 4 Wave 4 signal / verdict / enable contract check');
-  console.log(`[exam-spine-sync-signal] signal=${EXAM_SYNC_SIGNAL_VERSION} fingerprint=${EXAM_FINGERPRINT_VERSION} maxLen=${EXAM_SYNC_SIGNAL_MAX_LENGTH} maxClaims=${EXAM_SYNC_SIGNAL_MAX_CLAIMS}`);
+  console.log('[exam-spine-sync-signal] Stage 5 Packet 1 claim / verdict / enable contract check（transport = E-S33 edc1）');
+  console.log(`[exam-spine-sync-signal] transport=${EXAM_DEVICE_CLAIM_VERSION}（E-S33）fingerprint=${EXAM_FINGERPRINT_VERSION} maxBytes=${EXAM_DEVICE_CLAIM_MAX_BYTES} maxEntries=${EXAM_DEVICE_CLAIM_MAX_ENTRIES}`);
 
   staticBoundaries();
 
   const nondet = withNondeterminismTrap(() => {
-    schemaContract();
-    roundTrip();
-    malformedMatrix();
+    transportAuthority();
+    claimRoundTrip();
+    malformedClaimMatrix();
     verdictTruthTable();
     verdictMap();
     enableContract();
@@ -752,8 +932,8 @@ function main(): void {
 
   check(`clock 呼び出し = 0（実測 ${nondet.dateCalls}）`, nondet.dateCalls === 0);
   check(`random 呼び出し = 0（実測 ${nondet.randomCalls}）`, nondet.randomCalls === 0);
-  check('EMPTY_EXAM_SYNC_SIGNAL は claim を持たない',
-    Object.keys(EMPTY_EXAM_SYNC_SIGNAL.claims).length === 0);
+  check('EMPTY_EXAM_SYNC_CLAIM_SET は claim を持たない',
+    Object.keys(EMPTY_EXAM_SYNC_CLAIM_SET).length === 0);
 
   if (fetchCallCount !== 0) {
     console.error(`\n[exam-spine-sync-signal] FAIL: 外部通信が ${fetchCallCount} 回発生しました`);

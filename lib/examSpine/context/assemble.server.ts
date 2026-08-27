@@ -89,6 +89,7 @@ import {
   computeSubjectFingerprint,
 } from './identity';
 import { evaluateContextVeto } from './veto';
+import { projectTutorBasicInfoSlot, type TutorBasicInfoSlot } from './tutorBasicInfoSlot';
 import {
   projectActivity,
   projectBasicInfo,
@@ -283,7 +284,12 @@ export async function buildCanonicalExamContext(
   });
 
   // ★ shadow 用に解決済み入力を返す（context には入れない / E-S29）★
-  return { ok: true, context, shadowResolvedInput: resolved.input };
+  return {
+    ok: true,
+    context,
+    shadowResolvedInput: resolved.input,
+    tutorBasicInfoSlot: resolved.tutorBasicInfoSlot,
+  };
 }
 
 // ── executor ──────────────────────────────────────────────────────────
@@ -480,6 +486,14 @@ type ResolvedInput = {
   readonly input: ExamContextInput;
   readonly origins: Readonly<Partial<Record<ExamSourceKind, ExamContextOrigin>>>;
   readonly bridgeFields: Readonly<Partial<Record<ExamSourceKind, readonly string[]>>>;
+  /**
+   * ★ Stage 5 Packet 3 / E-S40 ★
+   *   tutor consumer が `basic_info` slot を canonical から取るための narrow 値。
+   *   `usable('basic_info')` が真のときだけ入る。つまり Source-Sync が verified で、
+   *   canary が許し、veto も無いときに限られる（判定は既存 gate の再利用で、新設しない）。
+   *   採用するかどうかは consumer 側の `decideTutorBasicInfoSlot` が決める。
+   */
+  readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
 };
 
 /**
@@ -511,13 +525,20 @@ function resolveContextInput(args: {
   };
 
   // basic_info（E-P8: name は server に無い）
+  let tutorBasicInfoSlot: TutorBasicInfoSlot | null = null;
   if (usable('basic_info')) {
-    const p = projectBasicInfo(snapshotRow<ExamBasicInfoServerRow>('basic_info'), args.bridge.basicInfo ?? null);
+    const basicInfoRow = snapshotRow<ExamBasicInfoServerRow>('basic_info');
+    const p = projectBasicInfo(basicInfoRow, args.bridge.basicInfo ?? null);
     if (p.value) {
       next.basicInfo = p.value;
       origins.basic_info = 'server';
       bridgeFields.basic_info = p.bridgeFields;
     }
+    // ★ E-S40: tutor の basic_info slot だけを別途 project する ★
+    //   上の `projectBasicInfo` は bridge の name が無いと NONE を返す（E-P8）。
+    //   tutor が prompt に出すのは学年・受験方式・志望校/分野だけで name を読まないため、
+    //   name の有無に slot 供給を巻き込ませない。row から直接 project する。
+    tutorBasicInfoSlot = projectTutorBasicInfoSlot(basicInfoRow);
   }
 
   // activity
@@ -580,7 +601,7 @@ function resolveContextInput(args: {
   // durable source を持たない slot は構造的 bridge のまま（E-P3 / E-S9）。
   next.notServerCapableSlots = args.bridge.notServerCapableSlots ?? ['statementDraft'];
 
-  return { input: next, origins, bridgeFields };
+  return { input: next, origins, bridgeFields, tutorBasicInfoSlot };
 }
 
 // ── provenance ────────────────────────────────────────────────────────

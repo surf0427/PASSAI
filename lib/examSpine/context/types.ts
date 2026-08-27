@@ -195,6 +195,8 @@ export type CanonicalExamContext = {
   };
 };
 
+import type { TutorBasicInfoSlot } from './tutorBasicInfoSlot';
+
 /** veto されたときに consumer が受け取る形。blocks は空で返す（渡さない）。 */
 export type CanonicalExamContextResult =
   | {
@@ -210,6 +212,14 @@ export type CanonicalExamContextResult =
        *   consumer が prompt に使ってよいのは `context.blocks` のみである。
        */
       readonly shadowResolvedInput: ExamContextInputSnapshot;
+      /**
+       * ★ Stage 5 Packet 3 / E-S40 — tutor `basic_info` slot の canonical 供給 ★
+       *   Source-Sync が verified で canary が許した場合にのみ非 null。
+       *   **これを prompt へ直接載せてはいけない**。consumer 側の
+       *   `decideTutorBasicInfoSlot` が legacy と突き合わせ、完全一致した場合だけ採用する
+       *   （AI-visible 出力を変えないため）。
+       */
+      readonly tutorBasicInfoSlot: TutorBasicInfoSlot | null;
     }
   | {
       readonly ok: false;

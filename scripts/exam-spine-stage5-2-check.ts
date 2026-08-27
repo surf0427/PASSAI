@@ -7,7 +7,7 @@
 //
 // 実 Supabase / 実 AI を使わない（fake executor のみ）。
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 let fetchCallCount = 0;
@@ -253,9 +253,24 @@ function t7Static(): void {
   eq('T7 derivation は deterministic', spec.derivation, 'deterministic');
   eq('T7 heading を持たない', spec.headingOwner, 'none');
 
+  // ★ S5-P3 lineage convergence で retarget（条件は弱めていない）★
+  //   canonical lineage では prompt 合成が route.ts に inline されていたため、
+  //   legacy marker（buildTutorSupabaseContextSection）と prompt marker
+  //   （buildTutorUserPrompt）を route.ts の中だけで探していた。
+  //   shipping（Packet E）合流後は prompt 合成が lib/tutor/composeTutorPrompt.ts へ
+  //   抽出され、legacy section builder は lib/contextBuilders/tutorContext.ts が持つ。
+  //   file の所在は不変条件ではないので、**consumer path 全体**を対象に同じことを見る。
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
-  // legacy diagnosis path が残っている
-  check('T7 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
+  const composePath = join(ROOT, 'lib/tutor/composeTutorPrompt.ts');
+  const compose = existsSync(composePath) ? readFileSync(composePath, 'utf8') : '';
+  const legacySrc = readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8');
+  const consumerPath = `${route}\n${compose}`;
+
+  check('T7 legacy の Supabase section builder が実在する',
+    legacySrc.includes('export function buildTutorSupabaseContextSection'));
+  check('T7 legacy の Supabase section が consumer path から呼ばれている',
+    consumerPath.includes('buildTutorSupabaseContextSection'));
+
   // canonical block が prompt へ入っていない
   //
   // ★ 修正（S5-P4）★ 旧実装は route.indexOf('buildTutorUserPrompt') を使っていたが、
@@ -268,7 +283,40 @@ function t7Static(): void {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
-  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  // ★ S5-P3 追加: shadow 比較の legacy 側が全 field を渡していること ★
+  //   本 packet の merge 検証で発覚した穴 —— canonical（S5-P5）が legacy 側へ足した
+  //   `activityCategoryCounts` を route から **丸ごと削除しても** tsc も全 QA も素通りした。
+  //   optional field なので型検査は落ちず、どの suite も個々の field を見ていなかった。
+  //   これは merge / refactor で canonical の比較 coverage が静かに縮む経路になる。
+  //   そこで「型が宣言した field を route が全部渡している」ことを機械的に突き合わせる。
+  {
+    const cmpSrc = readFileSync(join(ROOT, 'lib/examSpine/context/shadow/compareTutor.ts'), 'utf8');
+    const typeBlock = /export type TutorLegacyInput = \{([\s\S]*?)\n\};/.exec(cmpSrc);
+    check('T7 TutorLegacyInput の宣言を読める', typeBlock !== null);
+    if (typeBlock) {
+      const declared = [...typeBlock[1].matchAll(/readonly (\w+)\??:/g)].map((m) => m[1]);
+      const legacyArg = /compareTutorShadow\(\{\s*legacy:\s*\{([\s\S]*?)\n\s*\},/.exec(route);
+      check('T7 shadow 比較の legacy 引数を読める', legacyArg !== null);
+      if (legacyArg) {
+        const passed = [...legacyArg[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+        const missing = declared.filter((f) => !passed.includes(f));
+        check('T7 legacy 側は宣言された field を全部渡している',
+          missing.length === 0, `未指定=${missing.join(',')}`);
+      }
+    }
+  }
+
+  // ★ S5-P3 で anchor を「最も早い prompt 組み立て」へ広げた ★
+  //   S5-P4 の anchor は `= buildTutorUserPrompt(` 固定だったが、合流後の route では
+  //   prompt 合成が `composeTutorPrompt`（純関数）へ抽出されており、この識別子は
+  //   route に現れない＝ anchor が消えて検査が空回りする。
+  //   不変条件は「prompt 組み立て以降に shadow / canonical 由来が現れない」なので、
+  //   **実在する組み立て呼び出しのうち最も早いもの**に anchor する。
+  //   これは S5-P4 の意図（範囲を広げる方向）をそのまま踏襲した retarget である。
+  const promptAnchors = ['= composeTutorPrompt(', '= buildTutorUserPrompt(']
+    .map((a) => routeCode.indexOf(a))
+    .filter((i) => i !== -1);
+  const promptIdx = promptAnchors.length > 0 ? Math.min(...promptAnchors) : -1;
   check('T7 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
     const afterPrompt = routeCode.slice(promptIdx);

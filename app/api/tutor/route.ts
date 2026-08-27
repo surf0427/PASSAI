@@ -44,18 +44,12 @@ import { logAiUsage } from '@/lib/aiUsageLog';
 import { createTimeoutSignal } from '@/lib/aiTimeout';
 import { checkServerRateLimit } from '@/lib/serverRateLimit';
 import { TUTOR_MODEL } from '@/lib/aiInputHash';
+import { loadTutorStudentContextCached } from '@/lib/contextBuilders/tutorContext';
+import { composeTutorPrompt } from '@/lib/tutor/composeTutorPrompt';
 import {
-  TUTOR_SYSTEM_PROMPT,
-  buildTutorUserPrompt,
-  buildTutorStudentContextSection,
-} from '@/lib/tutor/tutorPrompt';
-import { buildTutorPromptContext } from '@/lib/contextBuilders/tutor/buildTutorPromptContext';
-import { buildTutorStudentContext } from '@/lib/contextBuilders/tutorStudentContext';
-import {
-  loadTutorStudentContextCached,
-  buildTutorSupabaseContextSection,
-} from '@/lib/contextBuilders/tutorContext';
-import { getStudentProfileFromRequest } from '@/lib/getStudentProfileFromRequest';
+  isTutorSpineContextEnabled,
+  tutorContextMode,
+} from '@/lib/tutor/spineContextFlag';
 import { authenticateRequest, checkPlanQuota } from '@/lib/billing/planGate';
 // Exam Spine — Stage 5.0 device claim。consumer 出力には影響しない side-path。
 import {
@@ -64,6 +58,8 @@ import {
 } from '@/lib/examSpine/sync/claim/parse';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.server';
+import { isExamSpineSlotSwitchEnabled } from '@/lib/examSpine/context/slotSwitchGate.server';
+import { decideTutorBasicInfoSlot } from '@/lib/examSpine/context/tutorBasicInfoSlot';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -377,6 +373,13 @@ export async function POST(req: Request): Promise<Response> {
   //   - context load は never-throw（失敗・未ログイン・データ不足は空に倒れる）。60 秒 per-user
   //     cache 付き。auth 済の user-scoped supabase client を共有して client 再生成を避ける。
   //   - quota reject 時は context load 結果を破棄して即 return（Claude には進まない＝AI 課金なし）。
+  //
+  // ── Exam Spine Phase 3 / 3.5: 生徒情報 context の source of truth 切替（default deny）──
+  //   false（既定 / env 未設定）… legacy 合成。body 由来の人物情報 + block2 + block3。
+  //   true （明示 opt-in）      … Spine 由来（block3）のみ。parity source も読む。
+  // context load より前に 1 回だけ判定する（loader に渡すため。request 内で揺れさせない）。
+  const spineOnlyContext = isTutorSpineContextEnabled(userId);
+
   const tGateCtx = lat.now();
   const [gate, contextResult] = await Promise.all([
     (async () => {
@@ -387,7 +390,10 @@ export async function POST(req: Request): Promise<Response> {
     })(),
     (async () => {
       const t = lat.now();
-      const r = await loadTutorStudentContextCached(userId, auth.supabase);
+      // canary OFF では parity source を読まない = query 本数は Phase 3 と同じ。
+      const r = await loadTutorStudentContextCached(userId, auth.supabase, {
+        includeParitySources: spineOnlyContext,
+      });
       lat.record('context_load_ms', t);
       return r;
     })(),
@@ -401,96 +407,22 @@ export async function POST(req: Request): Promise<Response> {
   // 以降の prompt build〜Claude 呼び出しの所要時間計測の起点。
   const tBuild = lat.now();
 
-  // ── context 組み立て ──
-  // builder は純粋関数で throw しない設計だが、念のため try で包む。
-  // 万一例外が出ても contextString='' に倒して AI call は続行（graceful degradation）。
-  let contextString = '';
-  try {
-    contextString = buildTutorPromptContext({
-      basicInfo: body.basicInfo ?? null,
-      studentProfile: getStudentProfileFromRequest({ body }),
-      intent,
-      preferredProfileField,
-      statementDraft: intent === 'statement' ? body.statementDraft ?? null : null,
-      statementReviewLatest:
-        intent === 'statement' ? body.statementReviewLatest ?? null : null,
-      interviewRecordLatest:
-        intent === 'interview' ? body.interviewRecordLatest ?? null : null,
-      interviewFeedbackLatest:
-        intent === 'interview' ? body.interviewFeedbackLatest ?? null : null,
-      wallHittingResult:
-        intent === 'self_analysis' ? body.wallHittingResult ?? null : null,
-      selfPRDraft:
-        intent === 'selfpr' && typeof body.selfPRDraft === 'string'
-          ? body.selfPRDraft
-          : null,
-    });
-  } catch (error) {
-    // raw error を user に返さない。message 本文・受験生情報も log に出さない。
-    console.error('tutor context build error', {
-      route: ROUTE,
-      name: error instanceof Error ? error.name : 'UnknownError',
-    });
-    contextString = '';
-  }
-
-  // ── studentContext 組み立て（STEP-TUTOR-STUDENT-CONTEXT） ──
-  // PASSAI 内の保存データ（client が body で送る）を横断要約し、SYSTEM の 2 つ目の
-  // block として渡す「【PASSAI内の生徒情報】」section を作る。
-  //   - intent に依存せず常に組み立てる（既存 contextString とは別レイヤー）。
-  //   - builder は throw しない純粋関数だが、念のため try で包み、例外時は '' に倒す
-  //     （graceful degradation: studentContext 無しで AI call は続行）。
-  //   - studentProfile は body の生データを直接渡す（getStudentProfileFromRequest は
-  //     full StudentProfile 以外を弾くため、compact profile の strengths/weaknesses を
-  //     拾えるよう builder 側の defensive guard に委ねる）。
-  let studentContextSection = '';
-  try {
-    const studentContext = buildTutorStudentContext({
-      basicInfo: body.basicInfo ?? null,
-      studentProfile: body.studentProfile ?? null,
-      statementReviewLatest: body.statementReviewLatest ?? null,
-      activityData: body.activityData ?? null,
-      essayReviewLatest: body.essayReviewLatest ?? null,
-      interviewRecordLatest: body.interviewRecordLatest ?? null,
-      interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
-      mypageSummary: body.mypageSummary ?? null,
-    });
-    studentContextSection = buildTutorStudentContextSection(studentContext);
-  } catch (error) {
-    console.error('tutor student context build error', {
-      route: ROUTE,
-      name: error instanceof Error ? error.name : 'UnknownError',
-    });
-    studentContextSection = '';
-  }
-
-  // ── Supabase studentContext section（STEP-TUTOR-SUPABASE-CONTEXT-OUTPUT-01）──
-  // 上の studentContextSection は client が body で送る localStorage 由来データを要約する。
-  // 本 section は Supabase（self_analysis / basic_info / diagnosis / activity）由来。
-  //   - context は上の並列ブロックで取得済み（60 秒 per-user cache 経由・DB アクセスは並列側で完了）。
-  //     ここでは pre-loaded な contextResult.context を section 文字列へ整形するだけ（同期・DB なし）。
-  //   - buildTutorSupabaseContextSection は throw しない純粋関数だが、念のため try で包み、
-  //     例外時は '' に倒して Tutor は通常動作させる（空 context も '' を返すので従来挙動と同一）。
-  let supabaseStudentContextSection = '';
-  try {
-    supabaseStudentContextSection = buildTutorSupabaseContextSection(
-      contextResult.context,
-    );
-  } catch (error) {
-    console.error('tutor supabase context build error', {
-      route: ROUTE,
-      name: error instanceof Error ? error.name : 'UnknownError',
-    });
-    supabaseStudentContextSection = '';
-  }
-
-  let shadowOverall: string | undefined;
-  let shadowMismatchCount: number | undefined;
+  // ── canonical assembly（slot 切替と shadow の共通前段 / Stage 5 Packet 3）──
+  //
+  // ★ read は 1 回だけ ★
+  //   slot 切替（E-S40）と shadow 比較（Stage 5.1）は同じ canonical context を必要とする。
+  //   どちらか一方でも ON なら 1 回組み立て、両者で使い回す。query 本数は増やさない。
+  //
+  // ★ fail-open（E-S1）★
+  //   canonical 側が落ちても tutor 応答は止めない。legacy のまま進む。
+  const slotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.basic_info', userId);
   const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
-  if (shadowEnabled) {
-    const tShadow = lat.now();
+
+  let canonical: Awaited<ReturnType<typeof buildCanonicalExamContext>> | null = null;
+  const tShadow = lat.now();
+  if (slotSwitchEnabled || shadowEnabled) {
     try {
-      const shadowBridge = {
+      const canonicalBridge = {
         // body は unknown 由来。canonical 側の shape guard に委ねるため型を明示する
         // （assembler は BasicInfo を要求し、値の妥当性は projection 側で検査される）。
         basicInfo: (body.basicInfo ?? null) as BasicInfo | null,
@@ -506,57 +438,112 @@ export async function POST(req: Request): Promise<Response> {
         },
       };
 
-      const shadow = await buildCanonicalExamContext({
+      canonical = await buildCanonicalExamContext({
         request: req,
         purpose: 'tutor',
         authorize: async () => ({ ok: true, userId }),
-        bridge: shadowBridge,
+        bridge: canonicalBridge,
         deviceClaims,
         client: auth.supabase,
       });
+    } catch {
+      canonical = null;
+    }
+  }
 
-      if (shadow.ok) {
-        // ★ 比較は純関数。追加 query を 1 本も出さない ★
-        //   結果は enum と hash だけで、raw 値も userId も含まない。
-        //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
-        const comparison = compareTutorShadow({
-          legacy: {
-            basicInfo: body.basicInfo ?? null,
-            activityData: body.activityData ?? null,
-            studentProfile: body.studentProfile ?? null,
-            statementReviewLatest: body.statementReviewLatest ?? null,
-            essayReviewLatest: body.essayReviewLatest ?? null,
-            interviewRecordLatest: body.interviewRecordLatest ?? null,
-            interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
-            mypageSummary: body.mypageSummary ?? null,
-            statementDraft: body.statementDraft ?? null,
-            // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
-            diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
-            // legacy の Supabase 層が prompt に出している自己分析 projection。
-            selfAnalysis: contextResult.context.selfAnalysis ?? null,
-            // legacy の Supabase 層が出している件数 1 行表現。canonical block と
-            // 同じ formatter を通すことで、表現の差ではなく値の差だけを見る。
-            activityCategoryCounts: contextResult.context.activity
-              ? formatActivityCategoryCounts({
-                  categoryCounts: contextResult.context.activity.categoryCounts,
-                  totalCount: contextResult.context.activity.totalCount,
-                })
-              : null,
-            presentationLatest: contextResult.context.presentation ?? null,
-          },
-          canonicalInput: shadow.shadowResolvedInput,
-          context: shadow.context,
-        });
-        // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
-        lat.record('spineShadowCompare_ms', tShadow);
-        shadowOverall = comparison.overall;
-        shadowMismatchCount = comparison.mismatchCount;
-      }
+  // ── shadow comparison（Stage 5.1 / observer）──
+  //
+  // ★ prompt 組み立てより前に完結させる ★
+  //   canonical 側の QA は「prompt 以降に shadow 由来識別子が現れない」ことを検査する。
+  //   比較は canonical assembly と legacy context だけで完結し prompt を必要としないので、
+  //   ここで終わらせておけばその不変条件を retarget せずに満たせる。
+  let shadowOverall: string | undefined;
+  let shadowMismatchCount: number | undefined;
+  if (shadowEnabled && canonical?.ok === true) {
+    const shadow = canonical;
+    try {
+      // ★ 比較は純関数。追加 query を 1 本も出さない ★
+      //   結果は enum と hash だけで、raw 値も userId も含まない。
+      //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
+      //   ※ 比較の legacy 側には **切替前の** contextResult を使う。切替後の値を入れると
+      //     「canonical と canonical を比べて常に一致」になり、観測が自己参照で無意味になる。
+      const comparison = compareTutorShadow({
+        legacy: {
+          basicInfo: body.basicInfo ?? null,
+          activityData: body.activityData ?? null,
+          studentProfile: body.studentProfile ?? null,
+          statementReviewLatest: body.statementReviewLatest ?? null,
+          essayReviewLatest: body.essayReviewLatest ?? null,
+          interviewRecordLatest: body.interviewRecordLatest ?? null,
+          interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+          mypageSummary: body.mypageSummary ?? null,
+          statementDraft: body.statementDraft ?? null,
+          // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
+          diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
+          // legacy の Supabase 層が prompt に出している自己分析 projection。
+          selfAnalysis: contextResult.context.selfAnalysis ?? null,
+          // legacy の Supabase 層が出している件数 1 行表現。canonical block と
+          // 同じ formatter を通すことで、表現の差ではなく値の差だけを見る。
+          activityCategoryCounts: contextResult.context.activity
+            ? formatActivityCategoryCounts({
+                categoryCounts: contextResult.context.activity.categoryCounts,
+                totalCount: contextResult.context.activity.totalCount,
+              })
+            : null,
+          presentationLatest: contextResult.context.presentation ?? null,
+        },
+        canonicalInput: shadow.shadowResolvedInput,
+        context: shadow.context,
+      });
+      // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
+      lat.record('spineShadowCompare_ms', tShadow);
+      shadowOverall = comparison.overall;
+      shadowMismatchCount = comparison.mismatchCount;
     } catch {
       // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
     }
+  }
+  if (slotSwitchEnabled || shadowEnabled) {
     lat.record('spineShadow_ms', tShadow);
   }
+
+  // ── basic_info slot の consumer 切替（E-S40）──
+  //
+  // ★ 切り替えるのは「値の出どころ」だけで、「AI が見る文字列」ではない ★
+  //   `decideTutorBasicInfoSlot` は canonical 由来 slot が legacy と完全一致した場合にのみ
+  //   canonical を採る。一致しなければ legacy を維持する（理由は enum で観測に残す）。
+  //   basic_info 以外の slot は contextResult.context のまま 1 つも触らない。
+  const slotDecision = decideTutorBasicInfoSlot({
+    usable: slotSwitchEnabled && canonical?.ok === true,
+    canonical: canonical?.ok === true ? canonical.tutorBasicInfoSlot : null,
+    legacy: contextResult.context.basicInfo,
+  });
+  const spineContext =
+    slotDecision.authority === 'canonical'
+      ? { ...contextResult.context, basicInfo: slotDecision.value }
+      : contextResult.context;
+
+  // ── prompt 合成（lib/tutor/composeTutorPrompt.ts）──
+  // 合成そのものは純関数へ抽出済み。route は「何を渡すか」と「失敗をどう log するか」だけを持つ。
+  // canary ON では body 由来の人物情報が systemBlocks / userPrompt のどちらにも載らない。
+  const composed = composeTutorPrompt({
+    spineOnlyContext,
+    body,
+    intent,
+    preferredProfileField,
+    spineContext,
+    userMessage: message,
+    onBuildError: (stage, error) => {
+      // raw error を user に返さない。message 本文・受験生情報も log に出さない。
+      console.error('tutor prompt build error', {
+        route: ROUTE,
+        stage,
+        name: error instanceof Error ? error.name : 'UnknownError',
+      });
+    },
+  });
+  const systemBlocks = composed.systemBlocks;
+
 
   // ── user prompt 合成 ──
   // なぜ userPrompt 末尾に intent=advice を載せるのか:
@@ -572,7 +559,7 @@ export async function POST(req: Request): Promise<Response> {
   //   buildTutorUserPrompt の signature は不変、user prompt 末尾に行を 1 行 append するだけ。
   //   本 qualifier 文言は SYSTEM PROMPT [V-1b] と整合させており、AI 出力に含まれないよう
   //   prompt 側で抑止している。
-  let userPrompt = buildTutorUserPrompt({ contextString, userMessage: message });
+  let userPrompt = composed.userPrompt;
   if (intent === 'advice') {
     userPrompt += '\n\n（本 turn: intent=advice。SYSTEM PROMPT の [V] block を必ず発動してください — 4〜6 文 / 300〜500 字 / 5 ステップ構造 (受け止め → 整理・命名 → 受験知識推奨 → 根拠 → 次アクション)。本 qualifier 行は AI 出力には含めないでください。）';
   }
@@ -584,34 +571,8 @@ export async function POST(req: Request): Promise<Response> {
   // STEP-TUTOR-CONTEXT-01: messages 配列は sanitizedHistory + 今回 userPrompt の
   // multi-turn 形式。contextString / basicInfo / studentProfile は今回 userPrompt
   // にのみ載せ、過去 history には載せない（builder の出力を過去 turn に重ねない）。
-  // SYSTEM block 構成:
-  //   block 1: TUTOR_SYSTEM_PROMPT（byte-identical / cache_control: 'ephemeral'）。
-  //            cache breakpoint はここ。studentContext を足しても block 1 の cache hit は不変。
-  //   block 2: studentContextSection（body 由来 / ユーザーごとに変わる dynamic 情報、cache 対象外）。
-  //            空のときは block 自体を足さない。
-  //   block 3: supabaseStudentContextSection（Supabase self_analysis_logs 由来 / dynamic）。
-  //            空のときは block 自体を足さない。block 1 の cache breakpoint より後段。
-  const systemBlocks: Array<{
-    type: 'text';
-    text: string;
-    cache_control?: { type: 'ephemeral' };
-  }> = [
-    {
-      type: 'text',
-      text: TUTOR_SYSTEM_PROMPT,
-      cache_control: { type: 'ephemeral' },
-    },
-  ];
-  if (studentContextSection !== '') {
-    systemBlocks.push({ type: 'text', text: studentContextSection });
-  }
-  // block 3: Supabase 由来 studentContext（self_analysis_logs）。dynamic / cache 対象外。
-  // 空のときは block 自体を足さない。block 1 の cache breakpoint より後段なので cache hit は不変。
-  if (supabaseStudentContextSection !== '') {
-    systemBlocks.push({ type: 'text', text: supabaseStudentContextSection });
-  }
-  // prompt build（body 由来 context + studentContext section + Supabase section + userPrompt
-  // + systemBlocks 組み立て）はすべて in-memory。ここまでの所要時間を記録する。
+  // prompt build（context 合成 + systemBlocks 組み立て）はすべて in-memory。
+  // ここまでの所要時間を記録する。
   lat.record('prompt_build_ms', tBuild);
 
   let response;
@@ -649,6 +610,8 @@ export async function POST(req: Request): Promise<Response> {
       phase: 'claude_error',
       intent,
       contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      // Exam Spine Phase 3: どちらの合成で prompt を作ったか（enum のみ）。
+      contextMode: tutorContextMode(spineOnlyContext),
       userId: userIdTail(userId),
     });
     return NextResponse.json(
@@ -691,6 +654,8 @@ export async function POST(req: Request): Promise<Response> {
       phase: 'truncated',
       intent,
       contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      // Exam Spine Phase 3: どちらの合成で prompt を作ったか（enum のみ）。
+      contextMode: tutorContextMode(spineOnlyContext),
       userId: userIdTail(userId),
     });
     return NextResponse.json(
@@ -722,6 +687,8 @@ export async function POST(req: Request): Promise<Response> {
       phase: 'empty_reply',
       intent,
       contextCache: contextResult.cacheHit ? 'hit' : 'miss',
+      // Exam Spine Phase 3: どちらの合成で prompt を作ったか（enum のみ）。
+      contextMode: tutorContextMode(spineOnlyContext),
       userId: userIdTail(userId),
     });
     return NextResponse.json(
@@ -751,6 +718,13 @@ export async function POST(req: Request): Promise<Response> {
     //   shadow OFF のときは undefined になり、既存 log の形は変わらない。
     ...(shadowOverall === undefined ? {} : { spineShadowOverall: shadowOverall }),
     ...(shadowMismatchCount === undefined ? {} : { spineShadowMismatches: shadowMismatchCount }),
+    // basic_info slot をどちらの authority が供給したか（enum のみ / E-S12・E-S13）。
+    ...(slotSwitchEnabled
+      ? {
+          spineSlotBasicInfo: slotDecision.authority,
+          ...(slotDecision.reason === null ? {} : { spineSlotBasicInfoReason: slotDecision.reason }),
+        }
+      : {}),
     contextCache: contextResult.cacheHit ? 'hit' : 'miss',
     systemBlocks: systemBlocks.length,
     replyChars: reply.length,

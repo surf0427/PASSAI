@@ -1,6 +1,6 @@
 // PASSAI 受験版 Exam Spine — Stage 4 Wave 4 / external verdict（純関数）。
 //
-//   validated claim（signal.ts）
+//   validated claim（E-S33 / sync/claim/** の出力）
 //     ×
 //   server mirror observation（Wave 2 adapters）
 //     ×
@@ -24,7 +24,7 @@
 //
 // 非依存: I/O / clock / random / logging / network / DB / AI。
 
-import type { ExamSourceReadStatus } from '../sourceData/types';
+import type { ExamSourceKind, ExamSourceReadStatus } from '../sourceData/types';
 import type { ExamFingerprint } from './fingerprint';
 import { isExamFingerprint } from './fingerprint';
 import { ABSENT_REVISION } from './revision';
@@ -34,8 +34,51 @@ import type { ExamSyncObservation } from './adapters/types';
 import { deviceCanonicalCandidate, serverMirrorCandidate } from './adapters/types';
 import type { ExamSyncSupportedKind } from './adapters/registry';
 import { EXAM_SYNC_SUPPORTED_KINDS } from './adapters/registry';
-import type { ExamSyncSignal } from './signal';
-import { claimedFingerprint } from './signal';
+
+// ── 入力: transport から切り離した validated claim ────────────────────
+//
+// ★ E-H7 human ruling（OPTION 1）★
+//   canonical な device claim transport は **E-S33 / `sync/claim/**` / wire `edc1`** 1 本だけ。
+//   verification 層は transport 固有型に依存せず、下の最小 interface だけを受け取る。
+//   これにより「transport を 1 本に保ったまま verification contract を再利用できる」。
+//
+// ★ この型に増やしてよい field は無い ★
+//   kind + content fingerprint のみ。revision 軸を足さない（R1 未解決 / E-S2）。
+//   userId / authority / table / purpose / 時刻 / 本文 / 件数 を持たない。
+//   auth binding と purpose gate は **claim 側**（E-S33 の `toDeviceClaims`）で
+//   既に適用済みであり、ここで再評価も再拡大もしない。
+//
+// ★ 形は E-S33 の `toDeviceClaims` 戻り値と構造的に一致させてある ★
+//   したがって adapter コードは 0 本で、header の parse も 1 回だけ（E-S33 の parser）。
+
+export type ExamSyncClaimEntry = {
+  /** その kind の申告が **提示された**か。false / 欠落は unclaimed。 */
+  readonly presented: boolean;
+  /** content 由来 fingerprint（`efp1:<hex64>`）。形式不正は null に倒す。 */
+  readonly fingerprint: string | null;
+};
+
+/**
+ * transport 非依存の validated claim set。
+ * E-S33 の `toDeviceClaims(parsed, { authenticatedUserId, allowedSources })` の
+ * 戻り値がそのまま代入できる（構造的部分型）。
+ */
+export type ExamSyncClaimSet = Readonly<Partial<Record<ExamSourceKind, ExamSyncClaimEntry>>>;
+
+export const EMPTY_EXAM_SYNC_CLAIM_SET: ExamSyncClaimSet = {};
+
+/**
+ * claim set から 1 kind の fingerprint を取り出す（純関数 / fail-closed）。
+ * 未提示 / 形式不正はすべて `null`（= unclaimed）に倒し、verified を作らない。
+ */
+export function claimedFingerprint(
+  claims: ExamSyncClaimSet,
+  kind: ExamSyncSupportedKind,
+): ExamFingerprint | null {
+  const entry = claims[kind];
+  if (entry === undefined || entry.presented !== true) return null;
+  return isExamFingerprint(entry.fingerprint) ? entry.fingerprint : null;
+}
 
 // ── 外部 verdict ──────────────────────────────────────────────────────
 
@@ -115,7 +158,7 @@ export type ExamSyncVerdictInput = {
    *   device 側も claim を出さない（→ unclaimed）。どちらも fail-closed 側で一致する。
    */
   readonly mirror: ExamSyncObservation | null;
-  /** signal から取り出した claim。未申告は `null`。 */
+  /** validated claim set から取り出した fingerprint。未申告は `null`。 */
   readonly claim: ExamFingerprint | null;
 };
 
@@ -156,11 +199,11 @@ export type ExamSyncMirrorState = {
 };
 
 /**
- * signal × mirror 群 → kind ごとの外部 verdict。
+ * validated claim set × mirror 群 → kind ごとの外部 verdict。
  * 要求されなかった kind も `skipped` として `unreadable` に倒れる（E-S2 / E-S8）。
  */
 export function examSyncVerdicts(input: {
-  readonly signal: ExamSyncSignal;
+  readonly claims: ExamSyncClaimSet;
   readonly mirrors: Readonly<Partial<Record<ExamSyncSupportedKind, ExamSyncMirrorState>>>;
 }): { readonly verdicts: ExamSyncVerdictMap; readonly unexpectedInternalStatus: boolean } {
   const verdicts = {} as Record<ExamSyncSupportedKind, ExamSyncExternalVerdict>;
@@ -171,7 +214,7 @@ export function examSyncVerdicts(input: {
       kind,
       status: mirror.status,
       mirror: mirror.observation,
-      claim: claimedFingerprint(input.signal, kind),
+      claim: claimedFingerprint(input.claims, kind),
     });
     verdicts[kind] = result.verdict;
     if (result.unexpectedInternalStatus) unexpected = true;
@@ -186,7 +229,7 @@ export type ExamSyncVetoReason = Exclude<ExamSyncExternalVerdict, 'verified'>;
 /**
  * 「なぜ使えなかったか」を 1 つの enum へ畳む。
  * 優先順位は E-S2 と同じ（unreadable > unclaimed > mismatch）。
- * ★ 値は closed enum のみ。kind 名・fingerprint・本文・生の signal 文字列を返さない。
+ * ★ 値は closed enum のみ。kind 名・fingerprint・本文・生の header 文字列を返さない。
  */
 export function summarizeExamSyncVeto(
   verdicts: ExamSyncVerdictMap,

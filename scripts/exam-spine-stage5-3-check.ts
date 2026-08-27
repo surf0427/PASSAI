@@ -391,7 +391,21 @@ function t8Static(): void {
   eq('T8 heading を持たない', spec.headingOwner, 'none');
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
-  check('T8 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
+  // ★ S5-P3: consumer path 全体を見る ★
+  //   本 lineage では prompt 合成が `composeTutorPrompt`（純関数）へ抽出済みで、
+  //   section builder の呼び出しは route ではなくそちらにある。
+  //   不変条件は「legacy の Supabase section が今も組み立てられていること」なので、
+  //   route 単体ではなく consumer path（route + composeTutorPrompt）を対象にする。
+  //   ★ import 行を除いた本体で「呼ばれている」ことを見る ★
+  //     単なる出現検査は、呼び出しの差し替え（import だけ残る）を見逃す。
+  const consumerPath = [route, readFileSync(join(ROOT, 'lib/tutor/composeTutorPrompt.ts'), 'utf8')]
+    .map((src) => src.split('\n').filter((l) => !/^\s*import /.test(l)).join('\n'))
+    .join('\n');
+  check('T8 legacy の Supabase section が残っている',
+    /buildTutorSupabaseContextSection\s*\(/.test(consumerPath));
+  check('T8 legacy section builder が実体として存在する',
+    readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8')
+      .includes('export function buildTutorSupabaseContextSection'));
   // canonical block が prompt へ入っていない
   //
   // ★ 修正（S5-P5 promotion）★ source 側の実装は
@@ -405,7 +419,13 @@ function t8Static(): void {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
-  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  // ★ S5-P3: 実在する組み立て呼び出しのうち最も早いものへ anchor を広げた ★
+  //   `= buildTutorUserPrompt(` 固定では、prompt 合成が composeTutorPrompt へ
+  //   抽出された本 lineage で anchor が消えて検査が空回りする（stage5-2 と同一の retarget）。
+  const promptAnchors = ['= composeTutorPrompt(', '= buildTutorUserPrompt(']
+    .map((a) => routeCode.indexOf(a))
+    .filter((i) => i !== -1);
+  const promptIdx = promptAnchors.length > 0 ? Math.min(...promptAnchors) : -1;
   check('T8 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
     const afterPrompt = routeCode.slice(promptIdx);

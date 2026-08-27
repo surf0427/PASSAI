@@ -35,7 +35,15 @@
     "qa:examSpine:syncSignal": "npx tsx scripts/exam-spine-sync-signal-check.ts",
     "qa:examSpine:liveSchema": "npx tsx scripts/exam-spine-live-schema-check.ts",
     "qa:examSpine:readiness": "npx tsx scripts/exam-spine-readiness-check.ts",
-    "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
+    "qa:examSpine:tutorLoader": "npx tsx scripts/exam-spine-tutor-loader-qa.ts --check",
+    "qa:examSpine:tutorLoader:record": "npx tsx scripts/exam-spine-tutor-loader-qa.ts --record",
+    "qa:examSpine:tutorComposition": "npx tsx scripts/exam-spine-tutor-composition-qa.ts --check",
+    "qa:examSpine:tutorComposition:record": "npx tsx scripts/exam-spine-tutor-composition-qa.ts --record",
+    "qa:examSpine:liveSources": "npx tsx scripts/exam-spine-live-source-check.ts",
+    "qa:examSpine:tutorCanary": "npx tsx scripts/exam-spine-tutor-canary-qa.ts",
+    "qa:examSpine:packetE": "npx tsx scripts/exam-spine-packet-e-check.ts",
+    "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts",
+    "qa:examSpine:packet3": "npx tsx scripts/exam-spine-packet3-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",

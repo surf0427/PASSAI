@@ -404,7 +404,21 @@ function t9Static(): void {
     !item.slice(0, 400).includes('schemaVersion'));
 
   const route = readFileSync(join(ROOT, 'app/api/tutor/route.ts'), 'utf8');
-  check('T9 legacy の Supabase section が残っている', route.includes('buildTutorSupabaseContextSection'));
+  // ★ S5-P7: consumer path 全体を見る（stage5-2 / stage5-3 と同一の retarget）★
+  //   本 lineage では prompt 合成が `composeTutorPrompt`（純関数）へ抽出済みで、
+  //   section builder の呼び出しは route ではなくそちらにある。不変条件は
+  //   「legacy の Supabase section が今も組み立てられていること」なので、route 単体では
+  //   なく consumer path（route + composeTutorPrompt）を対象にする。
+  //   ★ import 行を除いた本体で「呼ばれている」ことを見る ★
+  //     単なる出現検査は、呼び出しの差し替え（import だけ残る）を見逃す。
+  const consumerPath = [route, readFileSync(join(ROOT, 'lib/tutor/composeTutorPrompt.ts'), 'utf8')]
+    .map((src) => src.split('\n').filter((l) => !/^\s*import /.test(l)).join('\n'))
+    .join('\n');
+  check('T9 legacy の Supabase section が残っている',
+    /buildTutorSupabaseContextSection\s*\(/.test(consumerPath));
+  check('T9 legacy section builder が実体として存在する',
+    readFileSync(join(ROOT, 'lib/contextBuilders/tutorContext.ts'), 'utf8')
+      .includes('export function buildTutorSupabaseContextSection'));
   // ★ 修正（S5-P6 promotion）★ source 側は route.indexOf('buildTutorUserPrompt') を
   //   anchor に ±1500 字 window を見ていた。この識別子は file 冒頭の見出しコメントにも
   //   現れるため window が file 先頭に張られ、実際の prompt 経路を検査できていない
@@ -415,7 +429,14 @@ function t9Static(): void {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
-  const promptIdx = routeCode.indexOf('= buildTutorUserPrompt(');
+  // ★ S5-P7: 実在する組み立て呼び出しのうち最も早いものへ anchor を広げた ★
+  //   `= buildTutorUserPrompt(` 固定では、prompt 合成が composeTutorPrompt へ
+  //   抽出された本 lineage で anchor が消えて検査が空回りする
+  //   （stage5-2 / stage5-3 に入れたものと同一の retarget。検査範囲は広がる方向）。
+  const promptAnchors = ['= composeTutorPrompt(', '= buildTutorUserPrompt(']
+    .map((a) => routeCode.indexOf(a))
+    .filter((i) => i !== -1);
+  const promptIdx = promptAnchors.length > 0 ? Math.min(...promptAnchors) : -1;
   check('T9 prompt 組み立て位置を特定できる', promptIdx !== -1);
   if (promptIdx !== -1) {
     const afterPrompt = routeCode.slice(promptIdx);
