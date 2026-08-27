@@ -49,6 +49,7 @@ import type {
   ExamActivityServerRow,
   ExamBasicInfoServerRow,
   ExamDiagnosisServerRow,
+  ExamInterviewRecordServerRow,
   ExamSelfAnalysisServerRow,
   ExamStatementReviewServerRow,
 } from '../read/rowMappers';
@@ -91,6 +92,7 @@ import {
 } from './identity';
 import { evaluateContextVeto } from './veto';
 import { projectStatementReviewLegacyLine } from './shadow/statementReviewProjection';
+import { projectInterviewIssueLine } from './interviewRecordProjection';
 import {
   projectActivity,
   projectBasicInfo,
@@ -616,6 +618,25 @@ function resolveContextInput(args: {
     //   `ExamContextInput` には載せない。shadow 側の別 slot に載せる。
     statementWeaknessLine = projectStatementReviewLegacyLine(rows);
     if (statementWeaknessLine !== null) origins.statement_review = 'server';
+  }
+
+  // interview_record → interviewIssueLine（Stage 5.7 / G5 / E-S46）
+  //
+  // ★ shadow 専用ではない ★
+  //   statement_review の legacy 相当射影と違い、canonical 側に競合する
+  //   projection が無いため `ExamContextInput` に載せて block を作る。
+  //   （block を持つことと consumer が使うことは別。prompt へは接続しない。）
+  //
+  // ★ 本文を持ち込まない ★
+  //   ここで取り出すのは課題 1 行だけで、mainQuestion / feedbackReceived /
+  //   selfNoted / practiceDate / 大学名は projection に現れない（E-P5）。
+  if (usable('interview_record')) {
+    const rows = slot<readonly ExamInterviewRecordServerRow[] | null>('interview_record');
+    const line = projectInterviewIssueLine(rows);
+    if (line) {
+      next.interviewIssueLine = line;
+      origins.interview_record = 'server';
+    }
   }
 
   // 申告の無い kind は補完しない（E-S26。暗黙的 Mixed-Origin を作らない）。

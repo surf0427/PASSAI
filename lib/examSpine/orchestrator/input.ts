@@ -100,6 +100,11 @@ export type ExamContextInput = {
    *   raw payload を Layer 2 へ持ち込むと不要な情報が block へ流れる（Canon §55 / E-P5）。
    */
   diagnosisTypeHint?: string | null;
+  /**
+   * 面接練習の課題 1 行（E-S46）。legacy の `buildInterviewLine` と同じ正規化を
+   * 通った値をそのまま入れる。ここで再整形しない。
+   */
+  interviewIssueLine?: string | null;
 
   /**
    * 活動整理のカテゴリ別件数（`formatActivityCategoryCounts` の出力）。

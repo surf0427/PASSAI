@@ -216,6 +216,24 @@ export const EXAM_CONTEXT_BLOCK_REGISTRY: Readonly<
       'buildTutorSupabaseContextSection の「・活動整理には、… が保存されています（計N件）。」1 行',
   },
 
+  // ── 面接 ──────────────────────────────────────────────────────────
+  interview_issue_line: {
+    sourceKind: 'interview_record',
+    // ★ mixed ではない ★
+    //   材料は「本人の自己記録」または「面接官/AI が返した改善点」で、
+    //   どちらが採用されたかは優先順位で決まる 1 択であり、1 行に融合していない。
+    //   ただし後者は生成物なので、安全側の ai_derived を宣言する。
+    provenance: 'ai_derived',
+    derivation: 'deterministic',
+    headingOwner: 'none',
+    meaning:
+      '直近 1 件の面接練習から抽出した課題の圧縮要約（先頭3件 / 各80字 / 全体500字）。' +
+      '面接本文・Q&A・スコア・日付は含まない',
+    legacySource:
+      'lib/contextBuilders/tutorStudentContext.ts:buildInterviewLine（正本を共有）＋ ' +
+      'app/tutor/page.tsx:423 の getInterviewRecords()[0] を材料とする「面接練習の課題」1 行',
+  },
+
   // ── 診断 ──────────────────────────────────────────────────────────
   diagnosis_type_hint: {
     sourceKind: 'diagnosis',

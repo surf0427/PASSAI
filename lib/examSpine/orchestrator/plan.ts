@@ -396,10 +396,18 @@ export const EXAM_PURPOSE_PLANS: Readonly<
     //   ★ Stage 5.3: activity_category_counts を追加（G6）★
     //     legacy の buildTutorSupabaseContextSection が出している
     //     「・活動整理には、… が保存されています（計N件）。」に対応する block。
+    //   ★ Stage 5.7: interview_issue_line を追加（G5 / E-S46）★
+    //     legacy の buildInterviewLine が出している「面接練習の課題」1 行に
+    //     対応する block。tutor_student_context の中にも同じ行が含まれるが、
+    //     あちらは bridge 由来の横断要約であり、こちらは interview_record を
+    //     source kind に持つ **server 由来の同等表現**である。
+    //     両方が plan にあるのは重複ではなく、移行時に前者を後者へ置き換える
+    //     ための対応関係を明示するためである（接続はまだしない）。
     blocks: [
       { id: 'tutor_student_context' },
       { id: 'diagnosis_type_hint' },
       { id: 'activity_category_counts' },
+      { id: 'interview_issue_line' },
     ],
     render: null,
     legacyBuilder: null,

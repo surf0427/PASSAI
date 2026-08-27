@@ -68,7 +68,10 @@ import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.serv
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
 import { formatActivityCategoryCounts } from '@/lib/activityCategories';
-import { buildStatementWeaknessLine } from '@/lib/contextBuilders/tutorStudentContext';
+import {
+  buildInterviewLine,
+  buildStatementWeaknessLine,
+} from '@/lib/contextBuilders/tutorStudentContext';
 import { recordUsage } from '@/lib/billing/usageLog';
 import { createLatencyTracker } from '@/lib/tutor/latencyLog';
 import { captureRouteException } from '@/lib/sentry/capture';
@@ -531,6 +534,15 @@ export async function POST(req: Request): Promise<Response> {
             interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
             mypageSummary: body.mypageSummary ?? null,
             statementDraft: body.statementDraft ?? null,
+            // legacy が prompt に出している「面接練習の課題」行。
+            // ★ 2 引数は同じ 1 レコード由来である（E-S46）★
+            //   client は getInterviewRecords()[0] から record 部と
+            //   feedbackJson 部を作って両方送っている。canonical 側と
+            //   同じ normalizer を通して比較する。
+            interviewIssueLine: buildInterviewLine(
+              body.interviewFeedbackLatest ?? null,
+              body.interviewRecordLatest ?? null,
+            ),
             // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
             diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
             // legacy の Supabase 層が prompt に出している自己分析 projection。
