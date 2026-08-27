@@ -40,7 +40,8 @@
     "qa:examSpine:liveSources": "npx tsx scripts/exam-spine-live-source-check.ts",
     "qa:examSpine:tutorCanary": "npx tsx scripts/exam-spine-tutor-canary-qa.ts",
     "qa:examSpine:packetE": "npx tsx scripts/exam-spine-packet-e-check.ts",
-    "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts"
+    "test:realtimeToken": "npx tsx --tsconfig tsconfig.realtime-test.json scripts/realtime-token.test.ts",
+    "qa:examSpine:packet3": "tsx scripts/exam-spine-packet3-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",

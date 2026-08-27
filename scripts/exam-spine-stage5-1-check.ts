@@ -328,17 +328,65 @@ function t7Static(): void {
 
   check('T7 shadow は gate 済み', route.includes('isExamSpineShadowEnabled'));
   check('T7 shadow は try/catch で囲まれている', /try\s*\{[\s\S]*compareTutorShadow[\s\S]*\}\s*catch/.test(route));
-  check('T7 bridge に実値を渡している', route.includes('shadowBridge'));
+  // ★ S5-P3: 変数名 pin をやめ、bridge の中身を検査する ★
+  //   Packet 3 で bridge は shadow 専用ではなくなり（slot 切替と共用）、
+  //   `shadowBridge` → `canonicalBridge` へ改名された。不変条件は名前ではなく
+  //   「stub ではなく body の実値を渡していること」なので、そちらを直接見る。
+  const bridgeArg = /bridge:\s*(\w+)/.exec(route);
+  check('T7 bridge を canonical assembly へ渡している', bridgeArg !== null);
+  if (bridgeArg) {
+    const decl = new RegExp(`const ${bridgeArg[1]} = \\{([\\s\\S]*?)\\n      \\};`).exec(route);
+    check('T7 bridge の宣言が読める', decl !== null, `name=${bridgeArg[1]}`);
+    if (decl) {
+      const text = decl[1];
+      check('T7 bridge に実値を渡している', text.includes('body.basicInfo'), text.slice(0, 160));
+      check('T7 bridge の tutorSources が body 由来',
+        (text.match(/body\./g) ?? []).length >= 8, `body 参照 ${(text.match(/body\./g) ?? []).length} 件`);
+    }
+  }
 
   // comparison / canonical の値が prompt 系へ渡っていない
-  const promptIdx = route.indexOf('buildTutorUserPrompt');
-  const sysIdx = route.indexOf('systemBlocks');
-  for (const [name, idx] of [['buildTutorUserPrompt', promptIdx], ['systemBlocks', sysIdx]] as const) {
-    if (idx === -1) continue;
-    const window = route.slice(Math.max(0, idx - 1500), idx + 1500);
-    check(`T7 ${name} 付近に comparison が現れない`, !window.includes('comparison'));
-    check(`T7 ${name} 付近に shadowResolvedInput が現れない`, !window.includes('shadowResolvedInput'));
+  //
+  // ★ S5-P3: 近接 window から **実引数検査** へ retarget ★
+  //   従来は prompt 識別子の ±1500 字に `comparison` が無いことを見ていた。
+  //   Packet 3 で canonical assembly が prompt の前へ移り、両者が近接するため
+  //   この proxy は誤検知する。位置は不変条件ではない。
+  //   不変条件は「shadow 由来の値が prompt に渡らないこと」なので実引数を見る。
+  //   ★ ただし slot 切替で canonical 由来の値が 1 つだけ prompt へ入る ★
+  //     それは `spineContext` に限られ、経路は `decideTutorBasicInfoSlot` のみ。
+  //     shadow 比較由来（comparison / shadowResolvedInput / context.blocks）は依然禁止。
+  const callArgsOf = (name: string): string | null => {
+    const at = route.indexOf(`${name}(`);
+    if (at < 0) return null;
+    let depth = 0;
+    for (let i = at + name.length; i < route.length; i += 1) {
+      const ch = route[i];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) return route.slice(at + name.length + 1, i);
+      }
+    }
+    return null;
+  };
+  const FORBIDDEN_IN_PROMPT = ['comparison', 'shadowResolvedInput', 'compareTutorShadow', '.context.blocks'];
+  for (const name of ['composeTutorPrompt', 'buildTutorUserPrompt'] as const) {
+    const argText = callArgsOf(name);
+    if (argText === null) continue;
+    for (const bad of FORBIDDEN_IN_PROMPT) {
+      check(`T7 ${name}() の実引数に ${bad} が現れない`, !argText.includes(bad), argText.slice(0, 200));
+    }
   }
+  // comparison の値が逃げてよい先は観測変数 2 つだけ。
+  const comparisonUses = route
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+    .filter((l) => /\bcomparison\b/.test(l));
+  const badUses = comparisonUses.filter(
+    (l) => !/const comparison =|shadowOverall = comparison\.|shadowMismatchCount = comparison\./.test(l),
+  );
+  check('T7 comparison は観測変数へしか代入されない', badUses.length === 0, badUses.join(' | '));
+  // shadowResolvedInput は compare 呼び出し 1 箇所にしか現れない。
   check('T7 shadowResolvedInput は shadow ブロック内だけ',
     (route.match(/shadowResolvedInput/g) ?? []).length <= 1);
 

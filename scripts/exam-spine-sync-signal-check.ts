@@ -811,49 +811,87 @@ function staticBoundaries(): void {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
-  //      ★ S5-P2 lineage convergence で layout 非依存へ retarget ★
-  //        canonical では shadow が prompt より **前**にあり、その前提で
-  //        「prompt 以降に leak が無いこと」を検査していた。Packet E の合流後、
-  //        route は `composeTutorPrompt(...)` に整理され shadow が prompt の **後**へ移った。
-  //        順序そのものは不変条件ではない。不変条件は「shadow 由来の値が prompt へ届かない」
-  //        ことなので、どちらの layout でも同じ強さで検査する形にする。
-  //      ★ import 行は「使用」ではないので region から外す ★
-  //        module を import しただけで leak にはならない。判定するのは関数本体だけ。
-  const lastImport = routeCode.lastIndexOf("' ;".replace(' ', '')) >= 0
-    ? routeCode.lastIndexOf('\nimport ')
-    : -1;
+  //      ★ S5-P3 で **位置ではなく脱出面**へ再 retarget ★
+  //        直前の版は「shadow block と prompt 組み立ての前後関係」で region を割り、
+  //        その region に leak identifier が無いことを見ていた。
+  //        Packet 3 で canonical assembly は prompt より**前**へ移り（slot 切替が
+  //        prompt 前に canonical を必要とするため）、comparison は prompt より**後**に残った。
+  //        両者が prompt を挟むため、どちら向きの region 分割でも誤検知する。
+  //
+  //        位置は不変条件ではない。不変条件は「shadow 由来の値が prompt / response へ
+  //        入らないこと」なので、**呼び出しの実引数そのもの**を検査する形へ変える。
+  //        これは region 検査より強い（間に何行あっても、引数に無ければ渡っていない）。
+  const lastImport = routeCode.lastIndexOf('\nimport ');
   const bodyStart = lastImport >= 0
     ? routeCode.indexOf('\n', routeCode.indexOf(';', lastImport)) + 1
     : 0;
   const body = routeCode.slice(bodyStart);
-  const shadowStart = body.indexOf('isExamSpineShadowEnabled(');
-  const promptStart = Math.max(
-    body.indexOf('= composeTutorPrompt('),
-    body.indexOf('= buildTutorUserPrompt('),
-  );
-  const SHADOW_LEAKS = ['shadowResolvedInput', 'compareTutorShadow', '.context.blocks'];
-  check('shadow gate と prompt 組み立ての両方が route に存在する',
-    shadowStart >= 0 && promptStart >= 0, `shadow=${shadowStart} prompt=${promptStart}`);
-  if (shadowStart >= 0 && promptStart >= 0) {
-    // shadow が prompt より前 → prompt 以降に leak が無いこと
-    // shadow が prompt より後 → prompt 到達前に leak が無いこと（より強い状態）
-    const region = shadowStart < promptStart
-      ? body.slice(promptStart)
-      : body.slice(0, promptStart);
-    const label = shadowStart < promptStart ? 'prompt 以降' : 'prompt 到達前';
+
+  /** `name(` の実引数テキストを括弧の対応で切り出す。 */
+  const callArgs = (source: string, name: string): string | null => {
+    const at = source.indexOf(`${name}(`);
+    if (at < 0) return null;
+    let depth = 0;
+    for (let i = at + name.length; i < source.length; i += 1) {
+      const ch = source[i];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) return source.slice(at + name.length + 1, i);
+      }
+    }
+    return null;
+  };
+
+  const SHADOW_LEAKS = ['shadowResolvedInput', 'compareTutorShadow', 'comparison', '.context.blocks'];
+  const PROMPT_CALLS = ['composeTutorPrompt', 'buildTutorUserPrompt'];
+  let promptCallsFound = 0;
+  for (const name of PROMPT_CALLS) {
+    const argText = callArgs(body, name);
+    if (argText === null) continue;
+    promptCallsFound += 1;
     for (const leaked of SHADOW_LEAKS) {
-      check(`${label}に ${leaked} が現れない`, !region.includes(leaked));
+      check(`${name}() の実引数に ${leaked} が現れない`, !argText.includes(leaked),
+        `args=${argText.slice(0, 200)}`);
     }
   }
+  check('prompt 組み立ての呼び出しが route に存在する', promptCallsFound > 0);
+
+  //      canonical assembly は default-deny gate の内側だけで走る。
+  //      （Packet 3 で gate は shadow 単独から「shadow OR slot 切替」の連言集合になった。
+  //        どちらも allowlist 方式の default deny なので、無指定 user では 1 本も読まない。）
+  const buildIdx = body.indexOf('buildCanonicalExamContext(');
+  check('canonical assembly が route に存在する', buildIdx >= 0);
+  if (buildIdx >= 0) {
+    const before = body.slice(0, buildIdx);
+    const gates = ['isExamSpineShadowEnabled', 'isExamSpineSlotSwitchEnabled'];
+    const present = gates.filter((g) => before.includes(g));
+    check('canonical assembly は canary gate の内側にある', present.length > 0,
+      `検出 gate=${present.join(',')}`);
+    // gate 変数が同じ if 条件に現れること（gate を読むだけで使っていない事故を防ぐ）。
+    const guard = /if\s*\(([^)]*(?:Enabled|enabled)[^)]*)\)\s*\{[\s\S]{0,2000}?buildCanonicalExamContext\(/.exec(body);
+    check('canonical assembly は gate 変数を条件に使っている', guard !== null,
+      guard ? guard[1] : '(条件が見つからない)');
+  }
+
   //      観測へ出る値は enum（string）と件数（number）に限る。
   check('shadow の観測値は enum（string）として宣言されている',
     /\bshadowOverall\s*:\s*string \| undefined/.test(routeCode));
   check('shadow の観測値は件数（number）として宣言されている',
     /\bshadowMismatchCount\s*:\s*number \| undefined/.test(routeCode));
 
-  //   2. shadow は default deny gate の内側だけで動く。
-  check('shadow 組み立ては canary gate の内側にある',
-    /isExamSpineShadowEnabled\(/.test(routeSrc) && /if \(shadowEnabled\)/.test(routeSrc));
+  //   2. shadow **比較** は shadow canary の内側だけで動く。
+  //      ★ S5-P3 で literal `if (shadowEnabled)` 依存をやめた ★
+  //        canonical assembly の guard は slot 切替との連言（`slotSwitchEnabled || shadowEnabled`）
+  //        になったため、条件式の字面を pin すると正当な変更で落ちる。
+  //        assembly 側の gate は上で検査済みなので、ここは
+  //        「compareTutorShadow を含む block の guard に shadowEnabled があること」だけを見る
+  //        = shadow 比較が shadow canary 単独で守られていること。
+  check('shadow gate が route に存在する', /isExamSpineShadowEnabled\(/.test(routeSrc));
+  const cmpGuard =
+    /if\s*\(([^)]*shadowEnabled[^)]*)\)\s*\{[\s\S]{0,3000}?compareTutorShadow\(/.exec(routeCode);
+  check('shadow 比較は shadow canary の内側にある', cmpGuard !== null,
+    cmpGuard ? cmpGuard[1] : '(compareTutorShadow を守る shadowEnabled 条件が無い)');
 
   //   3. Spine 由来の値が prompt / response の組み立てに現れない。
   const promptLines = routeSrc

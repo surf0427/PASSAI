@@ -58,6 +58,8 @@ import {
 } from '@/lib/examSpine/sync/claim/parse';
 import { sourcesForPurpose } from '@/lib/examSpine/purpose';
 import { isExamSpineShadowEnabled } from '@/lib/examSpine/context/shadowGate.server';
+import { isExamSpineSlotSwitchEnabled } from '@/lib/examSpine/context/slotSwitchGate.server';
+import { decideTutorBasicInfoSlot } from '@/lib/examSpine/context/tutorBasicInfoSlot';
 import { buildCanonicalExamContext } from '@/lib/examSpine/context/assemble.server';
 import { compareTutorShadow } from '@/lib/examSpine/context/shadow/compareTutor';
 import type { BasicInfo } from '@/types/basicInfo';
@@ -404,34 +406,22 @@ export async function POST(req: Request): Promise<Response> {
   // 以降の prompt build〜Claude 呼び出しの所要時間計測の起点。
   const tBuild = lat.now();
 
-  // ── prompt 合成（lib/tutor/composeTutorPrompt.ts）──
-  // 合成そのものは純関数へ抽出済み。route は「何を渡すか」と「失敗をどう log するか」だけを持つ。
-  // canary ON では body 由来の人物情報が systemBlocks / userPrompt のどちらにも載らない。
-  const composed = composeTutorPrompt({
-    spineOnlyContext,
-    body,
-    intent,
-    preferredProfileField,
-    spineContext: contextResult.context,
-    userMessage: message,
-    onBuildError: (stage, error) => {
-      // raw error を user に返さない。message 本文・受験生情報も log に出さない。
-      console.error('tutor prompt build error', {
-        route: ROUTE,
-        stage,
-        name: error instanceof Error ? error.name : 'UnknownError',
-      });
-    },
-  });
-  const systemBlocks = composed.systemBlocks;
-
-  let shadowOverall: string | undefined;
-  let shadowMismatchCount: number | undefined;
+  // ── canonical assembly（slot 切替と shadow の共通前段 / Stage 5 Packet 3）──
+  //
+  // ★ read は 1 回だけ ★
+  //   slot 切替（E-S40）と shadow 比較（Stage 5.1）は同じ canonical context を必要とする。
+  //   どちらか一方でも ON なら 1 回組み立て、両者で使い回す。query 本数は増やさない。
+  //
+  // ★ fail-open（E-S1）★
+  //   canonical 側が落ちても tutor 応答は止めない。legacy のまま進む。
+  const slotSwitchEnabled = isExamSpineSlotSwitchEnabled('tutor.basic_info', userId);
   const shadowEnabled = isExamSpineShadowEnabled('tutor', userId);
-  if (shadowEnabled) {
-    const tShadow = lat.now();
+
+  let canonical: Awaited<ReturnType<typeof buildCanonicalExamContext>> | null = null;
+  const tShadow = lat.now();
+  if (slotSwitchEnabled || shadowEnabled) {
     try {
-      const shadowBridge = {
+      const canonicalBridge = {
         // body は unknown 由来。canonical 側の shape guard に委ねるため型を明示する
         // （assembler は BasicInfo を要求し、値の妥当性は projection 側で検査される）。
         basicInfo: (body.basicInfo ?? null) as BasicInfo | null,
@@ -447,45 +437,93 @@ export async function POST(req: Request): Promise<Response> {
         },
       };
 
-      const shadow = await buildCanonicalExamContext({
+      canonical = await buildCanonicalExamContext({
         request: req,
         purpose: 'tutor',
         authorize: async () => ({ ok: true, userId }),
-        bridge: shadowBridge,
+        bridge: canonicalBridge,
         deviceClaims,
         client: auth.supabase,
       });
+    } catch {
+      canonical = null;
+    }
+  }
 
-      if (shadow.ok) {
-        // ★ 比較は純関数。追加 query を 1 本も出さない ★
-        //   結果は enum と hash だけで、raw 値も userId も含まない。
-        //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
-        const comparison = compareTutorShadow({
-          legacy: {
-            basicInfo: body.basicInfo ?? null,
-            activityData: body.activityData ?? null,
-            studentProfile: body.studentProfile ?? null,
-            statementReviewLatest: body.statementReviewLatest ?? null,
-            essayReviewLatest: body.essayReviewLatest ?? null,
-            interviewRecordLatest: body.interviewRecordLatest ?? null,
-            interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
-            mypageSummary: body.mypageSummary ?? null,
-            statementDraft: body.statementDraft ?? null,
-            // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
-            diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
-            presentationLatest: contextResult.context.presentation ?? null,
-          },
-          canonicalInput: shadow.shadowResolvedInput,
-          context: shadow.context,
-        });
-        // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
-        lat.record('spineShadowCompare_ms', tShadow);
-        shadowOverall = comparison.overall;
-        shadowMismatchCount = comparison.mismatchCount;
-      }
+  // ── basic_info slot の consumer 切替（E-S40）──
+  //
+  // ★ 切り替えるのは「値の出どころ」だけで、「AI が見る文字列」ではない ★
+  //   `decideTutorBasicInfoSlot` は canonical 由来 slot が legacy と完全一致した場合にのみ
+  //   canonical を採る。一致しなければ legacy を維持する（理由は enum で観測に残す）。
+  //   basic_info 以外の slot は contextResult.context のまま 1 つも触らない。
+  const slotDecision = decideTutorBasicInfoSlot({
+    usable: slotSwitchEnabled && canonical?.ok === true,
+    canonical: canonical?.ok === true ? canonical.tutorBasicInfoSlot : null,
+    legacy: contextResult.context.basicInfo,
+  });
+  const spineContext =
+    slotDecision.authority === 'canonical'
+      ? { ...contextResult.context, basicInfo: slotDecision.value }
+      : contextResult.context;
+
+  // ── prompt 合成（lib/tutor/composeTutorPrompt.ts）──
+  // 合成そのものは純関数へ抽出済み。route は「何を渡すか」と「失敗をどう log するか」だけを持つ。
+  // canary ON では body 由来の人物情報が systemBlocks / userPrompt のどちらにも載らない。
+  const composed = composeTutorPrompt({
+    spineOnlyContext,
+    body,
+    intent,
+    preferredProfileField,
+    spineContext,
+    userMessage: message,
+    onBuildError: (stage, error) => {
+      // raw error を user に返さない。message 本文・受験生情報も log に出さない。
+      console.error('tutor prompt build error', {
+        route: ROUTE,
+        stage,
+        name: error instanceof Error ? error.name : 'UnknownError',
+      });
+    },
+  });
+  const systemBlocks = composed.systemBlocks;
+
+  let shadowOverall: string | undefined;
+  let shadowMismatchCount: number | undefined;
+  if (shadowEnabled && canonical?.ok === true) {
+    const shadow = canonical;
+    try {
+      // ★ 比較は純関数。追加 query を 1 本も出さない ★
+      //   結果は enum と hash だけで、raw 値も userId も含まない。
+      //   ここで得た comparison を prompt / response へ渡してはいけない（Stage 5.1 の最重要不変条件）。
+      //   ※ 比較の legacy 側には **切替前の** contextResult を使う。切替後の値を入れると
+      //     「canonical と canonical を比べて常に一致」になり、観測が自己参照で無意味になる。
+      const comparison = compareTutorShadow({
+        legacy: {
+          basicInfo: body.basicInfo ?? null,
+          activityData: body.activityData ?? null,
+          studentProfile: body.studentProfile ?? null,
+          statementReviewLatest: body.statementReviewLatest ?? null,
+          essayReviewLatest: body.essayReviewLatest ?? null,
+          interviewRecordLatest: body.interviewRecordLatest ?? null,
+          interviewFeedbackLatest: body.interviewFeedbackLatest ?? null,
+          mypageSummary: body.mypageSummary ?? null,
+          statementDraft: body.statementDraft ?? null,
+          // legacy の Supabase 層が prompt に出している値（body 由来ではない）。
+          diagnosisTypeHint: contextResult.context.diagnosis?.typeHint ?? null,
+          presentationLatest: contextResult.context.presentation ?? null,
+        },
+        canonicalInput: shadow.shadowResolvedInput,
+        context: shadow.context,
+      });
+      // 既存の latency log 契約に enum / 数値だけを載せる（新規 telemetry を作らない）。
+      lat.record('spineShadowCompare_ms', tShadow);
+      shadowOverall = comparison.overall;
+      shadowMismatchCount = comparison.mismatchCount;
     } catch {
       // shadow は観測目的。失敗しても本経路を巻き込まない（fail-open / E-S1）。
     }
+  }
+  if (slotSwitchEnabled || shadowEnabled) {
     lat.record('spineShadow_ms', tShadow);
   }
 
@@ -662,6 +700,13 @@ export async function POST(req: Request): Promise<Response> {
     //   shadow OFF のときは undefined になり、既存 log の形は変わらない。
     ...(shadowOverall === undefined ? {} : { spineShadowOverall: shadowOverall }),
     ...(shadowMismatchCount === undefined ? {} : { spineShadowMismatches: shadowMismatchCount }),
+    // basic_info slot をどちらの authority が供給したか（enum のみ / E-S12・E-S13）。
+    ...(slotSwitchEnabled
+      ? {
+          spineSlotBasicInfo: slotDecision.authority,
+          ...(slotDecision.reason === null ? {} : { spineSlotBasicInfoReason: slotDecision.reason }),
+        }
+      : {}),
     contextCache: contextResult.cacheHit ? 'hit' : 'miss',
     systemBlocks: systemBlocks.length,
     replyChars: reply.length,
