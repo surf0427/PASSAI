@@ -385,6 +385,115 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
 };
 
 /**
+ * ★ writer schema contract の版と comparison eligibility（Stage 5.11 / E-S59）★
+ *
+ * `schema_version` は snapshot 3 kind（basic_info / activity / diagnosis）の
+ * mirror row が持つ **writer contract の版**である。次のいずれでもない:
+ *
+ *   × payload の shape 版         v1→v2（diagnosis）は shape を変えずに bump した
+ *   × storage row の版             行の物理形式は DDL が決めており版に依らない
+ *   × device が保持する値          device は保存していない。下の定数を **合成**している
+ *
+ * したがって sync view の `schemaVersion` を device と突き合わせることは、
+ * 「この行を最後に書いた writer は、今の build と同じ contract か」を問うている。
+ * 内容の一致とは **別の問い**である。
+ *
+ * ★ 版が上がると既存 row は comparison ineligible になる ★
+ *   `schemaVersion` は content field なので、writer が bump した瞬間に
+ *   **bump 前に書かれた全 row** が device 側の新しい定数と一致しなくなる。
+ *   これは事故ではなく、「古い contract で書かれた行を verified と呼ばない」という
+ *   fail-closed な設計である。ineligible な行は canonical 経路に乗らず legacy へ倒れる。
+ *
+ * ★ ineligible ≠ 内容が違う ★
+ *   下の `payloadMappingStable` が真の kind では、writer は device canonical を
+ *   **無加工で** payload に載せる。したがって版が違っても payload の意味は同じであり、
+ *   `projectionCompatible` が真なら **AI-visible な射影は版に依らず同一**になる。
+ *   ineligible は「比較の資格が無い」であって「値が壊れている」ではない。
+ *
+ * ★ この表を回避策に使わない（E-S44 / E-S59）★
+ *   ineligible を verified へ格上げしたり、`schemaVersion` を sync view から外して
+ *   一致させたりしてはいけない。DB backfill も本表の役目ではない。
+ *   本表は **宣言**であり、版を上げる packet がその影響を明示するための場所である。
+ */
+export type ExamWriterSchemaContract = {
+  /** 現行 writer が書く版（`EXAM_DEVICE_SCHEMA_VERSIONS` と一致しなければならない）。 */
+  readonly current: string;
+  /** 過去に書かれ、mirror に残り得る版（新しい順）。 */
+  readonly superseded: readonly string[];
+  /** writer が device canonical を無加工で payload に載せるか。 */
+  readonly payloadMappingStable: boolean;
+  /**
+   * superseded な版の row でも、canonical 射影が現行版と同じ AI-visible 値になるか。
+   * ★ 真でも comparison eligibility は開かない ★（射影の互換性と比較の資格は別軸）
+   */
+  readonly projectionCompatible: boolean;
+  readonly note: string;
+};
+
+export type ExamSchemaVersionedKind = 'basic_info' | 'activity' | 'diagnosis';
+
+export const EXAM_SCHEMA_VERSIONED_KINDS = [
+  'basic_info',
+  'activity',
+  'diagnosis',
+] as const satisfies readonly ExamSchemaVersionedKind[];
+
+export const EXAM_WRITER_SCHEMA_CONTRACTS: Readonly<
+  Record<ExamSchemaVersionedKind, ExamWriterSchemaContract>
+> = {
+  basic_info: {
+    current: '1',
+    superseded: [],
+    // `stripName()` が氏名を落とすため無加工ではない（E-P8）。
+    payloadMappingStable: false,
+    projectionCompatible: true,
+    note:
+      'lib/supabase/basicInfoLogs.ts の SCHEMA_VERSION は "1" で bump 実績が無い。'
+      + 'DDL DEFAULT も "1" なので既存行と現行 writer の版は一致する（divergence なし）。',
+  },
+  activity: {
+    current: '1',
+    superseded: [],
+    payloadMappingStable: true,
+    projectionCompatible: true,
+    note:
+      'lib/supabase/activityLogs.ts の SCHEMA_VERSION は "1" で bump 実績が無い。'
+      + 'DDL DEFAULT も "1" なので既存行と現行 writer の版は一致する（divergence なし）。',
+  },
+  diagnosis: {
+    current: '3',
+    // ★ "1" だけではない ★ writer 定数は 1 → 2 → 3 と 2 度 bump しており、
+    //   各時期に書かれた行がそのまま残る。DDL DEFAULT の "1" も同じ値域に入る。
+    superseded: ['2', '1'],
+    // `upsertDiagnosisLogToSupabase` は `payload: input.diagnosis` を無加工で書く。
+    payloadMappingStable: true,
+    // resolveDiagnosisTypeHint が number(1-4) と ExamType(9種) の両系統を扱うため、
+    // v1 / v2 の row でも hint 1 文は現行と同じ規則で解決できる（E-S44 / E-S59）。
+    projectionCompatible: true,
+    note:
+      'lib/supabase/diagnosisLogs.ts の SCHEMA_VERSION は "3"。'
+      + 'v1→v2 は calcDiagnosisResultType の判定変更（payload shape 不変）、'
+      + 'v2→v3 は resultType の値域拡張（number(1-4) に string(ExamType 9種) を追加）で、'
+      + 'いずれも DiagnosisResult → payload の写像は変えていない。'
+      + 'DDL DEFAULT は "1" のままだが、全 write path が schema_version を明示送信するため'
+      + 'default に落ちる経路は存在しない（Stage 5.11 で repo 全走査を QA 化した）。',
+  },
+};
+
+/**
+ * その版の mirror row を device と比較してよいか（純関数）。
+ *
+ * ★ 現行版だけが eligible ★ superseded / unknown / null はすべて false へ倒す
+ *   （fail-closed。「たぶん同じ contract だろう」で verified を作らない）。
+ */
+export function isComparableSchemaVersion(
+  kind: ExamSchemaVersionedKind,
+  version: string | null | undefined,
+): boolean {
+  return typeof version === 'string' && version === EXAM_WRITER_SCHEMA_CONTRACTS[kind].current;
+}
+
+/**
  * ★ 「adapter はあるが runtime で有効化してはいけない」kind の宣言（Wave 3）★
  *
  * capability（contract が確定しているか）とは **別の軸**である。
