@@ -898,14 +898,35 @@ function essayEnableInvariant(): void {
   check('essay: R5 を再検証できる read-only SQL が保持されている', r5Reproducible);
   check('essay: E-H1 が RESOLVED である', /^## E-H1[\s\S]{0,200}RESOLVED/m.test(decisions));
 
-  // ★ drift guard: evidence が揃っている **から** block を外せている
-  const essayBlocked = typeof EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay === 'string';
-  check('★ essay: R5 evidence が揃っているなら runtime block は外れている',
-    !(r5Recorded && r5Reproducible) || !essayBlocked);
+  // ★ drift guard（Stage 5.8 / S5-P10 で 2 軸に分離）★
+  //
+  //   旧実装は「R5 evidence が揃っている ⇔ block が外れている」という
+  //   **双条件**を張っていた。これは「blocker は R5 しかない」という暗黙の前提に
+  //   依存しており、Stage 5.8 で R5 とは別の blocker（E-S52 read window）が
+  //   見つかった時点で誤りになる（実際この guard が最初に落ちた）。
+  //
+  //   正しい不変条件は 2 つに分かれる:
+  //     (1) R5 evidence が欠けているなら block は必須（従来どおり）
+  //     (2) block が存在するなら、その理由は **現に有効な blocker** を名指しし、
+  //         解消済みの理由（R5 / E-S27）だけを引用したまま放置しない
+  //   「block が 0 件であること」自体は不変条件ではない。
+  const essayBlockedReason = EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay;
+  const essayBlocked = typeof essayBlockedReason === 'string';
   check('★ essay: R5 evidence が欠けているなら runtime block が必要',
     (r5Recorded && r5Reproducible) || essayBlocked);
-  eq('runtime block は現在 0 kind（機構は残す）',
-    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), []);
+  if (essayBlocked) {
+    const reason = essayBlockedReason ?? '';
+    // 現 blocker（E-S52 read window）を名指ししている
+    check('★ essay: 禁止理由が現 blocker（E-S52 read window）を引用する',
+      reason.includes('E-S52') && reason.includes('read window'));
+    // 解消済みの理由だけを引用し続けない（R5 / E-S27 に触れるなら CLOSED と明示）
+    check('★ essay: R5 / E-S27 に触れる場合は解消済みであることを明示する',
+      !(reason.includes('E-S27') || reason.includes('R5'))
+        || reason.includes('CLOSED') || reason.includes('解消'));
+  }
+  //   禁止 kind の集合は pin する（essay 以外が黙って増えないこと）。
+  eq('runtime block は essay のみ（機構は残す）',
+    Object.keys(EXAM_SYNC_RUNTIME_ENABLE_BLOCKED).sort(), ['essay']);
 
   // ★ 宣言を読んでよいのは「宣言元」と「pure な decision layer」だけ ★
   //   Wave 3 時点では consumer 0 本を要求していたが、Wave 4 で pure decision layer

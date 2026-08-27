@@ -539,7 +539,7 @@ export async function POST(req: Request): Promise<Response> {
     legacy: contextResult.context.basicInfo,
   });
 
-  // ── activity slot の consumer 切替（E-S55）──
+  // ── activity slot の consumer 切替（E-S57）──
   //
   // ★ basic_info と独立に判定する ★
   //   slot ごとに env gate / Source-Sync usability / 同値 veto を持つ。

@@ -1,6 +1,6 @@
 // Exam Spine — Stage 5 Packet S5-P10 / tutor `activity` slot 単独切替の検証。
 //
-// E-S55: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
+// E-S57: Stage 5 の 2 番目の consumer 切替は **tutor purpose の activity slot だけ**。
 //
 // ★ 本 packet が証明したいこと ★
 //   「activity を legacy serverRead から canonical（Source-Sync verified）へ切り替えても

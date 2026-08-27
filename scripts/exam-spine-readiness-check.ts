@@ -110,7 +110,7 @@ function r1Register(): void {
     headerBound.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     headerBound.join(', '),
   );
-  // ★ E-S52（human ruling / E-S39 を一部 supersede）★
+  // ★ E-S54（human ruling / E-S39 を一部 supersede）★
   //   「header に束縛されていない」だけでは足りない。header を持たない **wire codec** が
   //   もう 1 本あるだけで、旧 client の hex を新 schema として誤解釈する経路が開く。
   //   したがって「active な device-claim wire codec は sync/claim/** だけ」を検査する。
@@ -125,7 +125,7 @@ function r1Register(): void {
     .map((f) => relative(ROOT, f))
     .sort();
   check(
-    'active な device-claim wire codec は sync/claim/** だけ（E-S52）',
+    'active な device-claim wire codec は sync/claim/** だけ（E-S54）',
     wireCodecs.every((f) => f.startsWith('lib/examSpine/sync/claim/')),
     wireCodecs.join(', '),
   );
@@ -149,7 +149,7 @@ function r1Register(): void {
     /EXAM_DEVICE_CLAIM_TOKEN_PATTERN\s*=\s*\/\^efp1:\[0-9a-f\]\{64\}\$\//.test(claimTypes),
   );
 
-  // ★ 退役した wire format が active code に残っていないこと（E-S52）★
+  // ★ 退役した wire format が active code に残っていないこと（E-S54）★
   //   docs の歴史記述は許す。active code に残ることは許さない。
   const retiredWire: string[] = [];
   for (const dir of ['app', 'lib']) {
@@ -166,7 +166,7 @@ function r1Register(): void {
     })(base);
   }
   check(
-    'active code に退役 wire format（esy1）が 0 箇所（E-S52）',
+    'active code に退役 wire format（esy1）が 0 箇所（E-S54）',
     retiredWire.length === 0,
     retiredWire.join(', '),
   );
@@ -227,6 +227,61 @@ function r1Register(): void {
   const referenced = new Set([...text.matchAll(/\bE-[LSPH]\d+\b/g)].map((m) => m[0]));
   const undefinedRefs = [...referenced].filter((r) => !seen.has(r));
   check('R1 未定義 Decision への参照が無い', undefinedRefs.length === 0, undefinedRefs.join(', '));
+
+  // ★ S5-P11 追加: 参照の走査を **code / QA script** まで広げる ★
+  //   従来は Register 本文だけを見ていたため、実装コメントや QA anchor に残った
+  //   stale ID（再採番後の付け替え漏れ）を検出できなかった（負例で実測）。
+  //   controlled consumer lineage は canonical の前進に合わせて 3 度再採番しており、
+  //   付け替え漏れは「decision 参照が解決しない」という Register の前提を壊す。
+  const codeRoots = ['lib/examSpine', 'lib/contextBuilders', 'lib/tutor', 'app/api/tutor', 'scripts'];
+  const codeFiles: string[] = [];
+  const walkTs = (dir: string): void => {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(join(ROOT, dir));
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const rel = `${dir}/${e}`;
+      const full = join(ROOT, rel);
+      if (statSync(full).isDirectory()) walkTs(rel);
+      else if (/\.tsx?$/.test(e)) codeFiles.push(rel);
+    }
+  };
+  for (const r of codeRoots) walkTs(r);
+  check('R1 走査対象の code file がある（空回り検査でない）', codeFiles.length > 20, `${codeFiles.length} file`);
+  const staleInCode: string[] = [];
+  for (const rel of codeFiles) {
+    const src = readFileSync(join(ROOT, rel), 'utf8');
+    for (const m of src.matchAll(/\bE-[LSPH]\d+\b/g)) {
+      if (!seen.has(m[0])) staleInCode.push(`${rel}: ${m[0]}`);
+    }
+  }
+  check('R1 code / QA script に未定義 Decision 参照が無い',
+    staleInCode.length === 0, [...new Set(staleInCode)].slice(0, 10).join(' / '));
+
+  // ★ S5-P11 追加: promotion 語彙の一貫性 ★
+  //   「convergence branch へ統合した」と「canonical branch へ昇格した」を
+  //   STATE が取り違えると、後続 packet が誤った前提で動く（実際に 1 度起きた）。
+  //   controlled-switch lineage の行は CONVERGED_ON_LINEAGE を使い、
+  //   canonical 昇格を断定する文字列を置かない。
+  const stateSrc = readFileSync(join(ROOT, 'docs/principles/exam_spine/EXAM_SPINE_STATE.md'), 'utf8');
+  for (const branchRow of [
+    'exam-spine-s5p2-lineage-convergence',
+    'exam-spine-s5p3-basic-info-switch',
+    'exam-spine-w1-packet-e',
+  ]) {
+    const line = stateSrc.split('\n').find((l) => l.includes(branchRow) && l.startsWith('|')) ?? '';
+    check(`R1 STATE: ${branchRow} の行がある`, line !== '');
+    if (line !== '') {
+      check(`R1 STATE: ${branchRow} は CONVERGED_ON_LINEAGE`,
+        line.includes('CONVERGED_ON_LINEAGE'), line.slice(0, 120));
+    }
+  }
+  check('R1 STATE が canonical 昇格を断定していない',
+    !/CANONICAL_PROMOTED\s*=\s*YES/.test(stateSrc),
+    'controlled-switch lineage は canonical branch tree にまだ存在しない');
 
   // Wave 2 で登録した decision が実在すること。
   for (const id of ['E-S23', 'E-S24', 'E-S25', 'E-S26', 'E-S27', 'E-S28', 'E-P9']) {

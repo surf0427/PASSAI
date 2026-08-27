@@ -1560,7 +1560,7 @@ Exam-specific differences / Rollback implications
 
 ## E-S50 — device history window の tie-break は kind ごとに保証度が異なる
 
-- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で canonical へ昇格。**S5-P9 で interview_record を追加**）
+- **Status:** `LOCKED`（Stage 5.6 で監査。S5-P8 で昇格。**S5-P9 で interview_record / S5-P10 で essay を追加**）
 - **ID 由来（S5-P8 promotion）:** source branch では branch-local `E-S45` として
   採番されていたが、canonical の `E-S45`（activity の canonical 表現はカテゴリ別件数）は
   **別 Decision** である。**E-S50** へ再採番した。
@@ -1589,6 +1589,17 @@ Exam-specific differences / Rollback implications
                     → statement_review と同じ保証度。選ばれた集合が同じなら
                       fingerprint は必ず一致し、残余は cap 境界の同一 created_at のみ
                     → **Level B**
+
+  essay             server: updated_at DESC, created_at DESC, id DESC    ★ S5-P10 で追加
+                    ただし `updated_at` は DB の `DEFAULT now()` が決める
+                    **mirror 書込時刻**であり device の値ではない
+                    device: localStorage は `workspace.updatedAt` DESC（applyLruCap / 最大 10）
+                    ★ backfill 経路で **完全反転**する
+                      （`backfillEssayWorkspacesOnce` が updatedAt DESC 順に逐次 upsert
+                        するため、device で最も新しい workspace が最小の updated_at を得る）
+                    → device は **揃えるべき順序キーそのものを持っていない**。
+                      selectDeviceSyncWindow を掛けても解決しない（近似で verified を作らない）
+                    → **Level C**（tie の揺らぎではなく選択規則そのものの不一致）
   ```
 
 ## Level 分類（S5-P9 で明文化）
@@ -1604,9 +1615,10 @@ Level B  selected-set parity only
          → self_analysis / statement_review / interview_record
 
 Level C  no structural guarantee
-         共有 stable id が無く、同一 timestamp 境界での一致保証が無い。
-         → window 未適用 kind（self_pr / essay / presentation）は
-           claim 配線時にここから評価を始めること。
+         共有 stable id / 共有 ordering key が無く、選択集合の一致自体を構造的に
+         保証できない。→ **essay**（S5-P10 で実測）。
+         `self_pr` / `presentation` は window 未適用かつ未 audit で、
+         claim 配線時にここから評価を始めること。
 ```
 
 ★ 「実運用ではほぼ起きない」を理由に Level A へ格上げしない ★
@@ -1721,18 +1733,132 @@ Level C  no structural guarantee
   `unclaimed` に戻るだけで legacy 挙動は不変。production prompt は本 Decision の
   前後で **byte 一致**（S5-P9 で 14 fixture 実測）。
 
+## E-S52 — `essay` の read window は device から再現できない（claim 配線の blocker）
+
+- **Status:** `LOCKED`（Stage 5.8 で実測 + QA 済み。S5-P10 で canonical へ昇格）
+- **ID 由来（S5-P10 promotion）:** source branch では branch-local `E-S47` として
+  採番されていたが、canonical の `E-S47`（device の history window は server の read
+  window と一致させる）は **別 Decision** である。**E-S52** へ再採番した。
+- **Decision:** `essay` の device claim を **配線しない**。
+  `EXAM_SYNC_RUNTIME_ENABLE_BLOCKED.essay` を維持する。
+  理由は E-S27 の projection ではなく **read window の選択規則**である。
+- **★ canonical では blocker が一度消えていた（S5-P10 の重要な発見）★**
+  ```text
+  S5-P2   R5 evidence（E-S41 / E-H1）で E-S27 が CLOSED になり essay を宣言から撤去
+  S5-P10  canonical の実コードで **別の blocker** が実在することを確認し、再投入
+  ```
+  E-S41 は「機構（空の map）は残す。contract は確定しているが production evidence が
+  未取得という状態は今後も起こり得るため、宣言 1 行で veto できる口を保つ」と定めており、
+  本 Decision はその口を**想定どおりに使い直した**ものである。**R5 は CLOSED のまま**で、
+  E-S27 の結論は覆っていない。
+- **観測（canonical 実コードで再検証）:**
+  ```text
+  server : essayQuery は ORDER BY updated_at DESC, created_at DESC, id DESC / LIMIT cap+1
+           essay_workspaces.updated_at は `timestamptz NOT NULL DEFAULT now()`
+           essayWorkspaceRepository は updated_at を明示的に書かない
+           = **mirror 書込時刻**であって device の値ではない
+  device : localStorage `essayWorkspaces` は applyLruCap により
+           `workspace.updatedAt` DESC で並ぶ（最大 10 件 / MAX_ESSAY_WORKSPACES）
+           deviceEssayRow は updated_at に workspace.updatedAt を置く
+  ```
+  この 2 つは別物であり、しかも **backfill 経路では逆順になる**。
+  `backfillEssayWorkspacesOnce` は `loadEssayWorkspaces()`（updatedAt DESC）の順に
+  逐次 `await` で upsert するため、device で最も新しい workspace が最も小さい
+  `updated_at` を得る。結果、`ORDER BY updated_at DESC` の上位 cap 件は
+  **device の「最も古い cap 件」と一致する**（完全反転。tie-break の揺らぎではない）。
+- **影響範囲:** workspace 件数が `EXAM_READ_CAPS.essay`（=5）以下なら
+  両者の window は必ず全件一致するため fingerprint も一致する。
+  **6〜10 件の user でのみ**、内容が完全に同期していても永久 mismatch になる。
+  これは E-S38 / Stage 5.4 と同種の「runtime では mismatch としか見えない」故障である。
+- **★ device window を足しても解決しない（tie-break Level C）★**
+  `deviceEssayView` は `selectDeviceSyncWindow` を **掛けていない**。
+  Stage 5.4 の window primitive 導入時に「essay は claim 未配線なので触らない」と
+  明記されたまま残っている。ここに window を足しても、
+  **揃えるべき順序キー（DB の `updated_at`）を device が持っていない**ため解決しない。
+  近似で verified を作らないため、essay の device view は意図的に window 未適用のまま
+  据え置く。tie-break 保証度は **Level C**（E-S50 に追記）。
+- **解除条件（いずれか。どれも本 Stage の範囲を超える）:**
+  ```text
+  1. essayQuery の ORDER BY を created_at DESC, id DESC に変える。
+     created_at は writer が workspace.createdAt を原値で書くため device が再現できる。
+     ただし「AI に見せる 5 件」が *直近に編集した順* から *作成が新しい順* に変わる
+     = **product semantic の変更**であり人間判断が要る。
+  2. essay_workspaces に device 由来の recency 列（例 workspace_updated_at）を持たせる。
+     DB migration を伴う。
+  3. EXAM_READ_CAPS.essay を MAX_ESSAY_WORKSPACES（10）以上にし window 選択自体を消す。
+     token 予算と Canon §56 への影響を評価する必要がある。
+  ```
+  1 つでも未検証なら blocker は維持する。
+- **★ これは宣言であって gate ではない ★**
+  `EXAM_SYNC_RUNTIME_ENABLE_BLOCKED` は `examSyncUsability` の 4 段 veto のうち
+  2 段目にすぎず、3 段目の canary は既定 deny。production code からの参照は **0 本**で、
+  読むのは宣言元（`registry.ts`）と pure decision layer（`sync/enable.ts`）だけ。
+  したがって本 Decision は runtime 挙動を変えない（usable kinds が 8 → 7 になるのは
+  `examSyncUsability` の判定結果であって production の経路ではない）。
+- **Alternatives rejected:**
+  - *`workspace.updatedAt` で device window を掛けて「だいたい合う」ことにする* —
+    backfill 経路で **確実に反転する**ことを実測済み。近似で verified を作らない。
+  - *cap を超える user を無視する* — LRU は 10 件なので 6〜10 件は実在しうる帯域である。
+  - *mismatch を握り潰して fail-open にする* — Source-Sync の目的（stale な server 値を
+    canonical として採用しない）を壊す。
+  - *R5 が CLOSED だから blocker を空のままにする* — blocker の軸が 1 本だと誤認する。
+    S5-P10 の drift guard 分離（syncDevice）はこの誤りを機械的に落とす。
+- **QA:** `scripts/exam-spine-stage5-8-check.ts` §3（W1 完全反転 / W2 window 未適用の pin /
+  W3 cap 以下は一致・cap+1 で割れる / W4 配列順は fingerprint に影響しない）＋
+  §5（blocker 実値 / decision layer veto / claim 未配線 / 宣言 consumer 0）。
+
+## E-S53 — legacy Tutor の小論文材料は canonical `essay` とは別 store であり、専用 block を作らない
+
+- **Status:** `LOCKED`（Stage 5.8 で実測 + QA 済み。S5-P10 で canonical へ昇格）
+- **ID 由来（S5-P10 promotion）:** source branch では branch-local `E-S48` として
+  採番されていたが、canonical の `E-S48`（canonical read cap は比較 window であり
+  overflow は unreadable ではない）は **別 Decision** である。**E-S53** へ再採番した。
+- **semantic classification:** **C — DIFFERENT_SEMANTICS**
+- **Decision:** `essay` の canonical Tutor block を **作らない**。shadow の
+  `essay.reviewLatest` は `canonical: null` / `omitted: 'no_canonical_block'` のまま据え置く。
+- **★ 実 runtime path から確定した legacy の材料 ★**
+  ```text
+  app/tutor/page.tsx        const review = loadReviewResult()
+  lib/essayPracticeStorage  REVIEW_KEY = 'essayPracticeReview'（SavedReview 単数）
+    → body.essayReviewLatest = { weakPoints }
+  app/api/tutor/route.ts    → buildTutorStudentContext
+  tutorStudentContext       buildEssayWeaknessLine = weakPoints[0] を 60 字 truncate
+    → prompt 行 label = '小論文添削の直近の課題'
+  ```
+  一方 canonical `essay` kind が読むのは
+  `essay_workspaces` ← localStorage **`essayWorkspaces`**（`EssayWorkspace[]`）である。
+- **★ 2 つは別 store であり、独立に進む ★**
+  ```text
+                     legacy                        canonical
+  LS key             essayPracticeReview           essayWorkspaces
+  record model       単数・上書き                  複数（LRU 10）× reviews append-only（最大 20）
+  Supabase mirror    **存在しない**                essay_workspaces
+  書き手             /essay-practice のみ          /essay-practice（dual-write）＋ /essay/structure
+  ```
+  `essayPracticeReview` に mirror は 1 つも無いため、server は legacy の材料を
+  **原理的に読めない**。Phase 2 経路は workspaces にだけ書くため canonical が進んでも
+  legacy は stale のまま。LS の eviction / delete も DB へ伝播しない。
+- **Reason（E-S49 の失敗を繰り返さない）:** shape が違うものを無理に突き合わせると
+  常に VALUE_MISMATCH になり「移行できない」という誤った結論になる。
+  正しい結論は「**同じ意味の値が canonical 側に存在しない**」であって、
+  canonical を legacy に寄せて捏造することではない。
+- **product 判断として残すもの（人間判断 / 本 Stage では決めない）:**
+  Tutor が見るべき「直近の添削」を legacy 単数 store と canonical workspaces の
+  どちらに置くか。これが決まるまで essay の consumer semantics は DEFERRED。
+- **Rollback implications:** block を作っていないので rollback 対象が無い。
+
 ---
 
 # 5. Policy / persistence decisions
 
-## E-S52 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
+## E-S54 — active な device claim wire format は `edc1` 1 本とし、`signal.ts` の runtime codec を廃止する
 
 - **Status:** `LOCKED`（2026-08-26。**人間の裁定**による。`E-S39` Decision 2 を supersede する）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S45` → `E-S46` として採番していたが、canonical はその後 `E-S46` を Stage 5.4
   （self_analysis 比較元）へ割り当てた（S5-P6）。canonical の番号は動かさず、
   後発である本 Decision を再採番した。canonical はその後さらに `E-S48` を
-  Stage 5.5 read-window contract に割り当てたため、S5-P10 で **E-S52** へ再々採番した
+  Stage 5.5 read-window contract に割り当てたため、S5-P11 で **E-S54** へ再々採番した
   （E-S38-3 の手順。canonical の番号は 1 つも動かしていない）。内容は無変更。
 - **HUMAN RULING（本 decision の権威）:**
   ```text
@@ -1783,14 +1909,14 @@ Level C  no structural guarantee
 - **Rollback implications:** `verdict.ts` の入力型を戻せば復帰できるが、`esy1` codec を復活させる
   意味は無い（production importer 0 のまま廃止された）。
 
-## E-S53 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
+## E-S55 — tutor `basic_info` の consumer 切替は「AI-visible 出力の同値」を採用条件とする
 
 - **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet 3。`E-S40` が開けた最初の consumer 切替の実装判断）
 - **ID 由来（S5-P7 promotion）:** source branch は本 Decision を branch-local に
   `E-S47` として採番していたが、canonical はその後 `E-S47` を Stage 5.5 の
-  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S53** へ
+  window parity へ割り当てた（S5-P6）。後発である本 Decision を **E-S55** へ
   再採番した（E-S38-3 の手順）。内容は無変更。参照していた `E-S48`（transport）は
-  再採番後の `E-S52` を指す。
+  再採番後の `E-S54` を指す。
 - **決定:**
   ```text
   切替対象   tutor purpose の basic_info slot のみ（E-S40）
@@ -1825,10 +1951,10 @@ Level C  no structural guarantee
 - **query 本数:** slot 切替と shadow は同じ canonical context を 1 回だけ組み立てて共用する。
   どちらも OFF の user では canonical assembly を 1 本も発行しない。
 
-## E-S54 — read layer は生 `preferences` slot を事実として報告し、consumer 互換 projection をそこから作る
+## E-S56 — read layer は生 `preferences` slot を事実として報告し、consumer 互換 projection をそこから作る
 
-- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P8。`E-S50` が bounded fallback として
-  残した projection 差の解消。`E-S50` の採用条件（AI-visible 同値）自体は変更しない）
+- **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P8。`E-S55` が bounded fallback として
+  残した projection 差の解消。`E-S55` の採用条件（AI-visible 同値）自体は変更しない）
 - **解決した差:**
   ```text
   legacy      preferences を **生配列のまま 3 件へ切ってから** 非 record を捨てる。
@@ -1897,9 +2023,9 @@ Level C  no structural guarantee
   → would_reduce_context / canonical_absent として legacy 維持。
     「canonical が値を持っていない」ケースであり、fail-closed が正しい。
   ```
-- **equivalence veto は外さない:** 差が 0 になっても `E-S50` の採用条件は残す。
+- **equivalence veto は外さない:** 差が 0 になっても `E-S55` の採用条件は残す。
   将来 mapper や legacy を触ったときに黙って AI-visible 出力が変わらないための安全網である。
-- **legacy serverRead は削除しない:** 同値検査の相手であり fallback でもある（`E-S50`）。
+- **legacy serverRead は削除しない:** 同値検査の相手であり fallback でもある（`E-S55`）。
 - **Alternatives rejected:**
   - *legacy を filter-before-cap へ揃える* — AI-visible 出力が変わる。characterization
     golden（T5）を書き換えることになり、本 packet の制約に反する。
@@ -1914,7 +2040,7 @@ Level C  no structural guarantee
 - **Rollback implications:** `rawPreferences` を読まなくすれば Packet 3 時点の
   fail-closed 挙動へ戻るだけで、AI-visible 出力は不変。DB / wire / deploy への影響なし。
 
-## E-S55 — tutor `activity` を 2 番目の controlled consumer 切替とし、集計正本の共有だけでは同値証明にしない
+## E-S57 — tutor `activity` を 2 番目の controlled consumer 切替とし、集計正本の共有だけでは同値証明にしない
 
 - **Status:** `LOCKED`（2026-08-27 / Stage 5 Packet S5-P10。`E-S40` が定めた「最初は basic_info 単独」の次段）
 - **決定:**
@@ -1980,8 +2106,8 @@ Level C  no structural guarantee
 - **slot 独立:** gate / usability / veto は slot ごとに独立に評価する。
   `tutor.basic_info` を許可しても `tutor.activity` は ON にならない（E-S11 の連言を slot 単位で維持）。
 - **保持したもの:** legacy serverRead は削除しない（同値検査の相手であり fallback）/
-  transport は `edc1` 1 本のまま（`E-S52`）/ shadow は observer のまま（`E-S42` / `E-S43`）/
-  canary は default deny の連言（`E-S11`）/ basic_info の `rawPreferences` 互換 projection（`E-S54`）は不変 /
+  transport は `edc1` 1 本のまま（`E-S54`）/ shadow は observer のまま（`E-S42` / `E-S43`）/
+  canary は default deny の連言（`E-S11`）/ basic_info の `rawPreferences` 互換 projection（`E-S56`）は不変 /
   narrative は canonical block にも slot にも載せない（`E-S45`）。
 - **★ shadow observation は prompt 経路へ流さない ★**
   `shadowOverall` / `shadowMismatchCount` は宣言 / shadow block 内の代入 / telemetry 以外に

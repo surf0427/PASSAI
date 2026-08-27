@@ -599,7 +599,7 @@ function resolveContextInput(args: {
       next.activityCategoryCounts = formatActivityCategoryCounts(summary);
       origins.activity = 'server';
     }
-    // ★ E-S55: tutor の activity slot を別途 project する ★
+    // ★ E-S57: tutor の activity slot を別途 project する ★
     //   block（activityCategoryCounts）が持つのは行の「値」部分だけで、legacy の
     //   section 行は `計N件` も要る。slot は totalCount + categoryCounts の pair を返す。
     //   同じ row / 同じ集計関数を使うので追加 query は 1 本も出ない。

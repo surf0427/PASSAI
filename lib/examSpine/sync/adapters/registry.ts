@@ -391,24 +391,50 @@ export const EXAM_SYNC_ADAPTER_CONTRACTS: Readonly<
  *   capability = possible : sync view の contract が確定し、device / mirror の両 mapper がある
  *   runtime enable        : その kind の claim を実際の request に載せてよいか
  *
- * essay は前者を満たすが後者を満たさない。E-S27 の `reviews:workspace->reviews` は
- * PostgREST が jsonb の sub-path を検証しない（存在しない path も 200）ため、
- * かつては essay がここに載っていた。**本番 SQL Editor での jsonb 型集計により
- * R5 は CLOSED**（E-H1「Post-Wave 4.5 に本番 SQL Editor で確定した部分」）:
- *   total_rows 10 / rows_reviews_is_array 10 / wrong_type 0 / bogus_path 0
- * したがって essay の宣言は撤去した。stale な blocker を残すこと自体が drift になる。
+ * essay は前者を満たすが後者を満たさない。
  *
- * ★ 機構は残す ★
- *   「contract は確定しているが production evidence が未取得」という状態は今後も起こり得る。
- *   その kind をここへ載せれば `enable.ts` が構造的に veto する。空であることは
- *   「今その状態の kind が無い」という意味であって、機構が不要という意味ではない。
+ * ★ blocker は「消えた」のではなく Stage 5.8 で **入れ替わった**（E-S52）★
+ *
+ *   旧（R5 / E-S27）: `reviews:workspace->reviews` は PostgREST が jsonb の sub-path を
+ *     検証しない（存在しない path も 200）ため live schema check で証明できなかった。
+ *     → **CLOSED**。本番 SQL Editor の jsonb 型集計で解消済み
+ *       （E-H1「Post-Wave 4.5 に本番 SQL Editor で確定した部分」/ E-S41）。
+ *       数値の正本は E-H1 本文だけに置き、ここへ複製しない。
+ *
+ *   新（E-S52）: **server の read window を device が再現できない。**
+ *     `essayQuery` は `ORDER BY updated_at DESC, created_at DESC, id DESC` で上位 cap 件を
+ *     選ぶが、`essay_workspaces.updated_at` は `NOT NULL DEFAULT now()` が決める
+ *     **mirror 書込時刻**であって device の `workspace.updatedAt` ではない。
+ *     さらに `backfillEssayWorkspacesOnce` は `loadEssayWorkspaces()`（updatedAt DESC）の
+ *     順に逐次 upsert するため、device で最も新しい workspace が最も小さい `updated_at` を
+ *     得る＝ **完全反転** する。workspace が cap（5）以下なら全件一致するが、
+ *     6〜10 件（LRU 上限 10）の user は内容が同期していても永久 mismatch になる。
+ *
+ *   ★ device window を足しても解決しない ★
+ *     `deviceEssayView` に `selectDeviceSyncWindow` を掛けても、**揃えるべき順序キー
+ *     （DB の `updated_at`）を device が持っていない**。近似で verified を作らないため、
+ *     essay の device view は意図的に window 未適用のまま据え置く（E-S52）。
+ *
+ * ★ E-S41 と矛盾しない ★
+ *   E-S41 は「機構（空の map）は残す。contract は確定しているが production evidence が
+ *   未取得という状態は今後も起こり得るため、宣言 1 行で veto できる口を保つ」と定めた。
+ *   本 blocker はまさにその口を **想定どおりに使い直した**ものであり、R5 の結論を
+ *   覆すものではない（R5 は CLOSED のまま）。
  *
  * ★ これは宣言であって gate ではない ★
  *   feature flag も canary も env もここでは持たない。判定は enable.ts が行う。
+ *   `examSyncUsability` の 4 段 veto のうち 2 段目にすぎず、3 段目の canary は既定 deny。
  */
 export const EXAM_SYNC_RUNTIME_ENABLE_BLOCKED: Readonly<
   Partial<Record<ExamSourceKind, string>>
-> = {};
+> = {
+  essay:
+    'E-S52 read window: E-S27「live 検証の限界」（reviews:workspace->reviews）は R5 / E-S41 で '
+    + 'CLOSED だが、server の updated_at DESC window を device が再現できない'
+    + '（updated_at は mirror 書込時刻で、backfill 経路では device の recency と完全反転する）ため、'
+    + 'runtime claim / enable / canary を引き続き禁止する。'
+    + 'pure な device ↔ mirror parity は成立済み（qa:examSpine:syncDevice / qa:examSpine:stage5_8）',
+};
 
 /**
  * adapter を実装した kind（capability === 'possible'）。
